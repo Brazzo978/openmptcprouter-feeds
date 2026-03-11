@@ -1071,6 +1071,55 @@ _set_client2client() {
 	uci -q commit network
 }
 
+_is_ray_proxy() {
+	case "$1" in
+		v2ray|v2ray-vmess|v2ray-trojan|v2ray-socks|xray|xray-vmess|xray-trojan|xray-shadowsocks|xray-socks|xray-vless-reality)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+_check_force_xray_pf_section() {
+	local section src enabled use_ray force_xray_pf
+	[ "$FORCE_XRAY_PF_NEEDED" = "1" ] && return
+	section="$1"
+	config_get src "$section" src
+	config_get enabled "$section" enabled "1"
+	config_get use_ray "$section" v2ray "0"
+	config_get force_xray_pf "$section" force_xray_pf "0"
+	[ "$src" = "vpn" ] && [ "$enabled" != "0" ] && [ "$use_ray" = "1" ] && [ "$force_xray_pf" = "1" ] && FORCE_XRAY_PF_NEEDED=1
+}
+
+_has_forced_xray_pf() {
+	FORCE_XRAY_PF_NEEDED=0
+	config_load firewall
+	config_foreach _check_force_xray_pf_section redirect
+	[ "$FORCE_XRAY_PF_NEEDED" = "0" ] && config_foreach _check_force_xray_pf_section rule
+	[ "$FORCE_XRAY_PF_NEEDED" = "1" ]
+}
+
+_apply_forced_xray_pf_mode() {
+	local current_proxy="$1"
+	_has_forced_xray_pf || return
+	_is_ray_proxy "$current_proxy" && return
+	if [ "$(uci -q get xray.main.enabled)" != "1" ]; then
+		logger -t "OMR-VPS" "Enable XRay backend for forced port forwarding rules"
+		uci -q batch <<-EOF >/dev/null
+			set xray.main.enabled=1
+			commit xray
+		EOF
+	fi
+}
+
+_apply_forced_xray_pf_rules_down() {
+	local current_proxy="$1"
+	_has_forced_xray_pf || return
+	_is_ray_proxy "$current_proxy" && return
+	[ -f /etc/init.d/xray ] || return
+	/etc/init.d/xray rules_down >/dev/null 2>&1
+}
+
 _vps_firewall_redirect_port() {
 	local src proto src_dport section
 	section=$1
@@ -1084,6 +1133,7 @@ _vps_firewall_redirect_port() {
 	config_get dest_port $1 dest_port
 	config_get src_ip $1 src_ip
 	config_get v2ray $1 v2ray "0"
+	config_get force_xray_pf $1 force_xray_pf "0"
 	config_get name $1 name
 	config_get dmz $1 dmz "0"
 	config_get target $1 target "REDIRECT"
@@ -1107,8 +1157,18 @@ _vps_firewall_redirect_port() {
 		#return
 	fi
 	xray="$v2ray"
+	force_xray_pf_selected="0"
+	if [ "$v2ray" = "1" ] && [ "$force_xray_pf" = "1" ] && [ "$(uci -q get xray.main.enabled)" = "1" ]; then
+		v2ray="0"
+		xray="1"
+		force_xray_pf_selected="1"
+	fi
 	([ "$(uci -q get v2ray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.v2ray)" = "down" ]) && v2ray="0"
-	([ "$(uci -q get xray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.xray)" = "down" ]) && xray="0"
+	if [ "$force_xray_pf_selected" = "1" ]; then
+		([ "$(uci -q get xray.main.enabled)" != "1" ]) && xray="0"
+	else
+		([ "$(uci -q get xray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.xray)" = "down" ]) && xray="0"
+	fi
 	[ "$proto" = "all" ] && proto="tcp udp"
 	[ "$proto" = "" ] && proto="tcp udp"
 	[ "$src" = "vpn" ] && [ -n "$proto" ] && [ -n "$src_dport" ] && [ "$enabled" != "0" ] && [ "$name" != "Allow-DHCP-Request-VPN" ] && {
@@ -1351,6 +1411,9 @@ _vps_firewall_close_port() {
 }
 
 _set_vps_firewall() {
+	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	_apply_forced_xray_pf_mode "$current_proxy"
+	_apply_forced_xray_pf_rules_down "$current_proxy"
 	fw3 -q print | grep 'vpn.* -d' |
 	while IFS=$"\n" read -r c; do
 		eval $(echo $c | sed 's/iptables/iptables -w/' | sed 's/-A/-D/') 2>&1 >/dev/null
@@ -1547,8 +1610,21 @@ _set_config_from_vps() {
 
 	# Set current Proxy
 	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	# VLESS Reality is intentionally disabled on client builds.
+	if [ "$current_proxy" = "xray-vless-reality" ]; then
+		current_proxy="xray"
+		uci -q batch <<-EOF >/dev/null
+			set openmptcprouter.settings.proxy=xray
+			set xray.omrout.protocol=vless
+			commit openmptcprouter
+			commit xray
+		EOF
+	fi
 	if [ -z "$current_proxy" ] || ([ -n "$vps_lastchange" ] && [ "$vps_lastchange" -gt "$lastchange" ]) || [ "$user_permission" = "ro" ]; then
 		current_proxy="$(echo "$vps_config" | jsonfilter -q -e '@.proxy.current')"
+		if [ "$current_proxy" = "xray-vless-reality" ]; then
+			current_proxy="xray"
+		fi
 		if [ -n "$current_proxy" ]; then
 			uci -q batch <<-EOF >/dev/null
 			set openmptcprouter.settings.proxy=${current_proxy}
@@ -1622,6 +1698,9 @@ _set_config_from_vps() {
 			fi
 		fi
 	fi
+	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	_apply_forced_xray_pf_mode "$current_proxy"
+	_apply_forced_xray_pf_rules_down "$current_proxy"
 
 	# Shadowsocks settings
 	#shadowsocks_disabled="$(uci -q get openmptcprouter.settings.shadowsocks_disable)"
@@ -2094,6 +2173,9 @@ _set_config_from_vps() {
 			EOF
 		fi
 		current_proxy="$(echo "$vps_config" | jsonfilter -q -e '@.proxy.current')"
+		if [ "$current_proxy" = "xray-vless-reality" ]; then
+			current_proxy="xray"
+		fi
 		if [ -n "$current_proxy" ]; then
 			uci -q batch <<-EOF >/dev/null
 				set openmptcprouter.${servername}.available_proxy=${current_proxy}
@@ -2110,15 +2192,19 @@ _set_config_from_vps() {
 		fi
 		if [ -n "$available_proxy" ]; then
 			for proxy in $available_proxy; do
+				proxy="$(echo "$proxy" | tr -d '"')"
+				[ "$proxy" = "xray-vless-reality" ] && continue
 				uci -q batch <<-EOF >/dev/null
 					add_list openmptcprouter.${servername}.available_proxy=$proxy
 				EOF
 			done
 		fi
-	fi
-	if [ "$noerror" = "1" ]; then
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.get_config=0
+		fi
+		current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+		_apply_forced_xray_pf_rules_down "$current_proxy"
+		if [ "$noerror" = "1" ]; then
+			uci -q batch <<-EOF >/dev/null
+				set openmptcprouter.${servername}.get_config=0
 			commit openmptcprouter
 		EOF
 	fi
@@ -2466,6 +2552,15 @@ _fix_server() {
 start_service() {
 	serversnb=0
 	wanips=""
+	# VLESS Reality is disabled: force any legacy value back to plain XRay.
+	if [ "$(uci -q get openmptcprouter.settings.proxy)" = "xray-vless-reality" ]; then
+		uci -q batch <<-EOF >/dev/null
+			set openmptcprouter.settings.proxy=xray
+			set xray.omrout.protocol=vless
+			commit openmptcprouter
+			commit xray
+		EOF
+	fi
 	serial=$(cat /proc/cpuinfo | grep Serial | awk '{print $3}')
 	[ -z "$serial" ] && [ -f "/usr/sbin/dmidecode" ] && serial=$(/usr/sbin/dmidecode -t 1 | egrep 'Serial' | awk '{print $3}')
 	uci -q set openmptcprouter.settings.serial=${serial}
@@ -2483,9 +2578,12 @@ start_service() {
 	fi
 }
 
+reload_service() {
+	start_service
+}
+
 service_triggers() {
-	#procd_add_reload_trigger openmptcprouter network shadowsocks-libev v2ray glorytun glorytun-udp mlvpn openvpn dsvpn
-	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn
+	procd_add_reload_trigger openmptcprouter network shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn openvpn dsvpn
 	procd_add_config_trigger "config.change" "firewall" /etc/init.d/openmptcprouter-vps set_vps_firewall
 	#procd_add_config_trigger "config.change" "network" /etc/init.d/openmptcprouter-vps set_gre_tunnel
 	#procd_add_reload_trigger openmptcprouter shadowsocks-libev network upnpd

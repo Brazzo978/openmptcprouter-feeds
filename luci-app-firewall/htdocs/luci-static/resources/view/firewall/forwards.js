@@ -349,6 +349,11 @@ return view.extend({
 			_('Forward a port (not a range) from server using V2Ray/XRay proxy (if enabled) instead of VPN'));
 		o.modalonly = true;
 
+		o = s.taboption('advanced', form.Flag, 'force_xray_pf', _('Force XRay for this port forward'),
+			_('Keep an XRay backend for this rule even when the main proxy is ShadowSocks or disabled.'));
+		o.modalonly = true;
+		o.depends('v2ray', '1');
+
 		if (!L.hasSystemFeature('firewall4')) {
 			o = s.taboption('advanced', form.Value, 'extra', _('Extra arguments'),
 				_('Passes additional arguments to iptables. Use with care!'));

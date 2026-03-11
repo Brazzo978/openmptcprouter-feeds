@@ -77,7 +77,7 @@ return L.view.extend({
 		    return L.resolveDefault(fs.list('/usr/share/bpf/scheduler'), []).then(L.bind(function(entries) {
 			    for (var i = 0; i < entries.length; i++)
 				    if (entries[i].type == 'file' && entries[i].name.match(/\.o$/))
-					this.value(entries[i].name);
+					this.value(entries[i].name.replace(/^mptcp_/, "").replace(/\.o$/, ""));
 			    return this.super('load', [section_id]);
 		    }, this));
 	    };
@@ -100,7 +100,7 @@ return L.view.extend({
 		o.default = 0;
 	}
 
-	o = s.option(form.ListValue, "congestion", _("Congestion Control"),_("Default is cubic"));
+	o = s.option(form.ListValue, "congestion", _("Congestion control"),_("Selects the TCP congestion control used by MPTCP subflows. Default is bbr."));
 	o.load = function(section_id) {
 		return fs.exec_direct('/sbin/sysctl', ['-n', 'net.ipv4.tcp_available_congestion_control']).then(L.bind(function(entries) {
 			var congestioncontrol = entries.toString().split(' ');
@@ -114,20 +114,23 @@ return L.view.extend({
 	if (parseFloat(boardinfo.kernel.substring(0,4)) >= 6) {
 		if (boardinfo.kernel.substring(0,1) == "6") {
 			// Only available since 5.19
-			o = s.option(form.ListValue, "mptcp_pm_type", _("Path Manager type"));
+			o = s.option(form.ListValue, "mptcp_pm_type", _("Path manager mode"), _("Choose whether endpoints and additional subflows are managed by the kernel or by mptcpd in userspace."));
 			o.value(0, _("In-kernel path manager"));
 			o.value(1, _("Userspace path manager"));
 			o.default = 0;
 		}
 
-		o = s.option(form.ListValue, "mptcp_disable_initial_config", _("Initial MPTCP configuration"));
-		o.depends("mptcp_pm_type","1");
+		o = s.option(form.ListValue, "mptcp_disable_initial_config", _("Initial endpoint setup"), _("Keep the initial addresses advertised automatically when a connection starts."));
 		o.value("0", _("enable"));
 		o.value("1", _("disable"));
 		o.default = "0";
 
-		o = s.option(form.ListValue, "mptcp_force_multipath", _("Force Multipath configuration"));
-		o.depends("mptcp_pm_type","1");
+		o = s.option(form.ListValue, "mptcp_force_multipath", _("Force multipath mode"), _("Keep creating extra subflows whenever possible instead of staying on a single path."));
+		o.value("1", _("enable"));
+		o.value("0", _("disable"));
+		o.default = "1";
+
+		o = s.option(form.ListValue, "mptcp_allow_join_initial_addr_port", _("Allow joins on initial address"), _("Allow extra subflows to join using the initial address and port pair advertised by the first subflow."));
 		o.value("1", _("enable"));
 		o.value("0", _("disable"));
 		o.default = "1";
@@ -160,7 +163,7 @@ return L.view.extend({
 		};
 		o.depends("mptcp_pm_type","1");
 
-		o = s.option(form.DynamicList, "mptcpd_addr_flags", _("MPTCPd Address annoucement flags"));
+		o = s.option(form.DynamicList, "mptcpd_addr_flags", _("MPTCPd address flags"), _("Flags applied to announced endpoints. Use fullmesh+subflow to aggressively open additional paths."));
 		o.value("subflow","subflow");
 		o.value("signal","signal");
 		o.value("backup","backup");
@@ -173,22 +176,22 @@ return L.view.extend({
 		o.value("skip_loopback","skip_loopback");
 		o.depends("mptcp_pm_type","1");
 
-		o = s.option(form.Value, "mptcp_subflows", _("Max subflows"),_("specifies the maximum number of additional subflows allowed for each MPTCP connection"));
+		o = s.option(form.Value, "mptcp_subflows", _("Max additional subflows"),_("Maximum number of extra subflows allowed for each MPTCP connection. Raise this when a single flow is rate-limited."));
 		o.datatype = "uinteger";
 		o.rmempty = false;
-		o.default = 3;
+		o.default = 8;
 
 		o = s.option(form.Value, "mptcp_stale_loss_cnt", _("Retranmission intervals"),_("The number of MPTCP-level retransmission intervals with no traffic and pending outstanding data on a given subflow required to declare it stale. A low stale_loss_cnt value allows for fast active-backup switch-over, an high value maximize links utilization on edge scenarios e.g. lossy link with high BER or peer pausing the data processing."));
 		o.datatype = "uinteger";
 		o.rmempty = false;
 		o.default = 4;
 
-		o = s.option(form.Value, "mptcp_add_addr_accepted", _("Max add address"),_("specifies the maximum number of ADD_ADDR (add address) suboptions accepted for each MPTCP connection"));
+		o = s.option(form.Value, "mptcp_add_addr_accepted", _("Max accepted peer addresses"),_("Maximum number of peer ADD_ADDR announcements accepted for each MPTCP connection."));
 		o.datatype = "uinteger";
 		o.rmempty = false;
-		o.default = 1;
+		o.default = 8;
 
-		o = s.option(form.Value, "mptcp_add_addr_timeout", _("Control message timeout"),_("Set the timeout after which an ADD_ADDR (add address) control message will be resent to an MPTCP peer that has not acknowledged a previous ADD_ADDR message."));
+		o = s.option(form.Value, "mptcp_add_addr_timeout", _("ADD_ADDR retry timeout"),_("Seconds to wait before resending an ADD_ADDR control message that was not acknowledged by the peer."));
 		o.datatype = "uinteger";
 		o.rmempty = false;
 		o.default = 120;

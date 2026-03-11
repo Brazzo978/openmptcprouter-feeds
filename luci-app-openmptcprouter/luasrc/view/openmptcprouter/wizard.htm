@@ -101,25 +101,12 @@
 	    </div>
 	    <h3><%=servername%></h3>
 	    <div class="cbi-section-node" id="cbi-omr-wizard-<%=servername%>">
-		<div class="cbi-value" id="<%=servername%>.server_ip" data-depends="[{&#34;enableipv6&#34;:&#34;1&#34;}]" data-index="1">
+		<div class="cbi-value" id="<%=servername%>.server_ip" data-index="1">
 		    <label class="cbi-value-title" for="server_ip.1"><%:Server IP%></label>
 		    <div class="cbi-value-field">
 			    <input name="<%=servername%>.serverip.ip1" id="<%=servername%>.server_ip.1" placeholder="<%:Server IP%>" class="cbi-input-text" value="<%=uci:get_list("openmptcprouter",servername,"ip")[1]%>" data-optional="false">
 			<div class="cbi-value-description">
-			    <%:Server IP will be set for proxy and VPN%>
-			</div>
-		    </div>
-		</div>
-		<div class="cbi-value" id="<%=servername%>.server_ipv6" data-depends="[{&#34;enableipv6&#34;:&#34;0&#34;}]" data-index="1">
-		    <label class="cbi-value-title" for="server_ip.1"><%:Server IP%></label>
-		    <div class="cbi-value-field">
-			    <input name="<%=servername%>.serverip.ip1" id="<%=servername%>.server_ip.1" placeholder="<%:Primary server IP%>" class="cbi-input-text" value="<%=uci:get_list("openmptcprouter",servername,"ip")[1]%>" data-optional="false">
-			    <input name="<%=servername%>.serverip.ip2" id="<%=servername%>.server_ip.2" placeholder="<%:Secondary server IP%>" class="cbi-input-text" value="<%=uci:get_list("openmptcprouter",servername,"ip")[2]%>" data-optional="false">
-			<div class="cbi-value-description">
-			    <%:Server IP will be set for proxy and VPN%>
-			</div>
-			<div class="cbi-value-description">
-			    <%:A second server's IP can be set for dual IPv4/IPv6 server if WAN IPv6 are set%>
+			    <%:Server IP will be set for proxy and VPN.%>
 			</div>
 		    </div>
 		</div>
@@ -202,42 +189,7 @@
 		</div>
 	    </div>
 	</fieldset>
-	<fieldset class="cbi-section" id="ipv6">
-	    <legend><%:IPv6 settings%></legend>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:Enable IPv6%></label>
-		<div class="cbi-value-field">
-		    <select class="cbi-input-select" name="enableipv6" id="enableipv6" data-update="change" size="1">
-			<option value="1" <% if uci:get("openmptcprouter","settings","disable_ipv6") ~= "0" then %>selected="selected"<% end %>><%:Disabled%></option>
-			<option value="0" <% if uci:get("openmptcprouter","settings","disable_ipv6") == "0" then %>selected="selected"<% end %>><%:Enabled%></option>
-		    </select>
-		    <br />
-		    <div class="cbi-value-description">
-		        <%:You should disable IPv6 here if server doesn't provide IPv6.%>
-		    </div>
-		</div>
-	    </div>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:IPv6 Prefix%></label>
-		<div class="cbi-value-field">
-		    <input type="text" name="ula" class="cbi-input-text" value="<%=uci:get("network","globals","ula_prefix")%>" />
-		    <br />
-		    <div class="cbi-value-description">
-		        <%:You can use a public IPv6 prefix only if you set only one server.%>
-		    </div>
-		</div>
-	    </div>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:Enable DNS64%></label>
-		<div class="cbi-value-field">
-		    <input class="cbi-input-checkbox" type="checkbox" name="dns64" value="1" <% if uci:get("openmptcprouter","settings","dns64") == "1" then %>checked <% end %>/>
-		    <br />
-		    <div class="cbi-value-description">
-		        <%:If host support NAT64, you can enable DNS64 support.%>
-		    </div>
-		</div>
-	    </div>
-	</fieldset>
+
 	<fieldset class="cbi-section" id="proxy">
 	    <legend><%:Proxy settings%></legend>
 	    <div class="cbi-section-descr"><%:By default proxy is used for any traffic that is TCP (and UDP for V2Ray/XRay).%></div>
@@ -264,8 +216,6 @@
 						<% if nixio.fs.access("/etc/init.d/v2ray") then %><option value="v2ray-socks" <% if uci:get("openmptcprouter","settings","proxy") == "v2ray-socks" then %>selected="selected"<% end %>>V2Ray SOCKS</option><% end %>
 					<% elseif proxy == "xray" then %>
 						<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray" <% if uci:get("openmptcprouter","settings","proxy") == "xray" then %>selected="selected"<% end %>>XRay VLESS</option><% end %>
-					<% elseif proxy == "xray-vless-reality" then %>
-						<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-vless-reality" <% if uci:get("openmptcprouter","settings","proxy") == "xray-vless-reality" then %>selected="selected"<% end %>>XRay VLESS Reality</option><% end %>
 					<% elseif proxy == "xray-vmess" then %>
 						<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-vmess" <% if uci:get("openmptcprouter","settings","proxy") == "xray-vmess" then %>selected="selected"<% end %>>XRay VMESS</option><% end %>
 					<% elseif proxy == "xray-trojan" then %>
@@ -287,7 +237,6 @@
 			<% if nixio.fs.access("/etc/init.d/v2ray") then %><option value="v2ray-trojan" <% if uci:get("openmptcprouter","settings","proxy") == "v2ray-trojan" then %>selected="selected"<% end %>>V2Ray TROJAN</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/v2ray") then %><option value="v2ray-socks" <% if uci:get("openmptcprouter","settings","proxy") == "v2ray-socks" then %>selected="selected"<% end %>>V2Ray SOCKS</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray" <% if uci:get("openmptcprouter","settings","proxy") == "xray" then %>selected="selected"<% end %>>XRay VLESS</option><% end %>
-			<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-vless-reality" <% if uci:get("openmptcprouter","settings","proxy") == "xray-vless-reality" then %>selected="selected"<% end %>>XRay VLESS Reality</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-vmess" <% if uci:get("openmptcprouter","settings","proxy") == "xray-vmess" then %>selected="selected"<% end %>>XRay VMESS</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-trojan" <% if uci:get("openmptcprouter","settings","proxy") == "xray-trojan" then %>selected="selected"<% end %>>XRay Trojan</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/xray") then %><option value="xray-socks" <% if uci:get("openmptcprouter","settings","proxy") == "xray-socks" then %>selected="selected"<% end %>>XRay Socks</option><% end %>
@@ -298,13 +247,14 @@
 			%>
 			<option value="none" <% if uci:get("openmptcprouter","settings","proxy") == "none" then %>selected="selected"<% end %>>None</option>
 		    </select>
-		    <br />
-		    <div class="cbi-value-description">
-		        <%:Set the default Proxy used for TCP when ShadowSocks is enabled, for TCP and UDP when V2Ray/XRay VLESS, VMESS or Trojan is enabled.%>
-		        <%:Only ShadowSocks is supported with server multiple IPs for now.%>
+			    <br />
+			    <div class="cbi-value-description">
+			        <%:Choose the default proxy profile. Shadowsocks is usually the best raw performance and compatibility choice for TCP-only traffic.%>
+			        <%:XRay/V2Ray VLESS is the recommended balanced choice for TCP+UDP. VMESS/Trojan modes focus more on camouflage/obfuscation.%>
+			        <%:Only Shadowsocks currently supports VPS setups with multiple server IPs.%>
+			    </div>
+			</div>
 		    </div>
-		</div>
-	    </div>
 	    <% if nixio.fs.access("/etc/init.d/shadowsocks-libev") then %>
 	    <div class="cbi-value">
 		<label class="cbi-value-title"><%:ShadowSocks key%></label>
@@ -509,30 +459,12 @@
 		<label class="cbi-value-title"><%:MPTCP over VPN%></label>
 		<div class="cbi-value-field">
 		    <select class="cbi-input-select" name="mptcpovervpn_vpn" size="1">
-			<% if nixio.fs.access("/etc/init.d/openvpn") then %><option value="openvpn" <% if uci:get("openmptcprouter","settings","mptcpovervpn") == "openvpn" then %>selected="selected"<% end %>>OpenVPN</option><% end %>
-			<% if nixio.fs.access("/usr/bin/wg") then %><option value="wireguard" <% if uci:get("openmptcprouter","settings","mptcpovervpn") == "wireguard" or uci:get("openmptcprouter","settings","mptcpovervpn") == nil then %>selected="selected"<% end %>>WireGuard</option><% end %>
+			<% if nixio.fs.access("/etc/init.d/openvpn") then %><option value="openvpn" <% if uci:get("openmptcprouter","settings","mptcpovervpn") == "openvpn" or uci:get("openmptcprouter","settings","mptcpovervpn") == nil then %>selected="selected"<% end %>>OpenVPN</option><% end %>
+			<% if nixio.fs.access("/usr/bin/wg") then %><option value="wireguard" <% if uci:get("openmptcprouter","settings","mptcpovervpn") == "wireguard" then %>selected="selected"<% end %>>WireGuard</option><% end %>
 		    </select>
 		    <br />
 		    <div class="cbi-value-description">
 		        <%:Set VPN to use for MPTCP over VPN.%>
-		    </div>
-		</div>
-	    </div>
-	</fieldset>
-	<fieldset class="cbi-section" id="country">
-	    <legend><%:Country settings%></legend>
-	    <div class="cbi-section-descr"><%:Set configuration for countries with some specificities.%></div>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:Country%></label>
-		<div class="cbi-value-field">
-		    <select class="cbi-input-select" name="country" size="1">
-			<option value="" <% if uci:get("openmptcprouter","settings","country") == nil then %>selected="selected"<% end %>><%:None%></option>
-			<option value="world" <% if uci:get("openmptcprouter","settings","country") == "world" then %>selected="selected"<% end %>><%:World%></option>
-			<option value="china" <% if uci:get("openmptcprouter","settings","country") == "china" then %>selected="selected"<% end %>><%:China%></option>
-		    </select>
-		    <br />
-		    <div class="cbi-value-description">
-		        <%:For China, set an accessible DNS and disable DNSSEC.%>
 		    </div>
 		</div>
 	    </div>
@@ -569,7 +501,7 @@
 			<select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.proto" name="cbid.network.<%=ifname%>.proto" size="1">
 			    <option id="cbid.network.<%=ifname%>.proto-static" value="static"<% if uci:get("network",ifname,"proto") == "static" or uci:get("network",ifname,"proto") == "" then findproto = 1 %> selected="selected"<% end %>><%:Static address%></option>
 			    <option id="cbid.network.<%=ifname%>.proto-dhcp" value="dhcp"<% if uci:get("network",ifname,"proto") == "dhcp" then findproto = 1  %> selected="selected"<% end %>><%:DHCP%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-other" value="other"<% if uci:get("network",ifname,"proto") ~= nil and findproto ~= 1 then %> selected="selected"<% end %>><%:Other%></option>
+			    
 			</select>
 			<br />
 			<div class="cbi-value-description">
@@ -623,13 +555,13 @@
 		<%
 			end
 		%>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-address" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;other&#34;},{&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="5">
+		<div class="cbi-value" id="cbi-network-<%=ifname%>-address" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="5">
 		    <label class="cbi-value-title"><%:IPv4 address%></label>
 		    <div class="cbi-value-field">
 			<input type="text" id="cbid.network.<%=ifname%>.ipaddr" name="cbid.network.<%=ifname%>.ipaddr" class="cbi-input-text" value="<%=uci:get("network",ifname,"ipaddr")%>" data-type="ip4addr">
 		    </div>
 		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-netmask" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;other&#34;},{&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="6">
+		<div class="cbi-value" id="cbi-network-<%=ifname%>-netmask" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="6">
 		    <label class="cbi-value-title"><%:IPv4 netmask%></label>
 		    <div class="cbi-value-field">
 			<input type="text" id="cbid.network.<%=ifname%>.netmask" name="cbid.network.<%=ifname%>.netmask" class="cbi-input-text" value="<%=uci:get("network",ifname,"netmask") or "255.255.255.0"%>" data-type="ip4addr">
@@ -715,20 +647,15 @@
 			<select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.proto" name="cbid.network.<%=ifname%>.proto" size="1">
 			    <option id="cbid.network.<%=ifname%>.proto-static" value="static"<% if uci:get("network",ifname,"proto") == "static" or uci:get("network",ifname,"proto") == nil then findproto = 1 %> selected="selected"<% end %>><%:Static address%></option>
 			    <option id="cbid.network.<%=ifname%>.proto-dhcp" value="dhcp"<% if uci:get("network",ifname,"proto") == "dhcp" then findproto = 1  %> selected="selected"<% end %>><%:DHCP%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-dhcpv6" value="dhcpv6"<% if uci:get("network",ifname,"proto") == "dhcpv6" then findproto = 1  %> selected="selected"<% end %>><%:DHCPv6%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-modemmanager" value="modemmanager"<% if uci:get("network",ifname,"proto") == "modemmanager" then findproto = 1  %> selected="selected"<% end %>><%:ModemManager%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-ncm" value="ncm"<% if uci:get("network",ifname,"proto") == "ncm" then findproto = 1  %> selected="selected"<% end %>><%:NCM%></option>
 			    <option id="cbid.network.<%=ifname%>.proto-pppoe" value="pppoe"<% if uci:get("network",ifname,"proto") == "pppoe" then findproto = 1  %> selected="selected"<% end %>><%:PPPoE%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-qmi" value="qmi"<% if uci:get("network",ifname,"proto") == "qmi" then findproto = 1  %> selected="selected"<% end %>><%:QMI%></option>
-			    <option id="cbid.network.<%=ifname%>.proto-other" value="other"<% if uci:get("network",ifname,"proto") ~= nil and findproto ~= 1 then %> selected="selected"<% end %>><%:Other%></option>
 			</select>
 			<br />
 			<div class="cbi-value-description">
-			    <%:You can use DHCP if you have multiple real ethernet ports. Select other if you want to use another protocol available in Network Interfaces page.%>
+			    <%:Use DHCP for plain ethernet links and PPPoE when the ISP requires it.%>
 			</div>
 		    </div>
 		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-intf" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;dhcp&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;dhcpv6&#34;}]" data-index="4">
+		<div class="cbi-value" id="cbi-network-<%=ifname%>-intf" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;dhcp&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;pppoe&#34;}]" data-index="4">
 		    <label class="cbi-value-title"><%:Physical interface%></label>
 		    <div class="cbi-value-field">
 			    <select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.intf" name="cbid.network.<%=ifname%>.intf" size="1">
@@ -791,188 +718,6 @@
 			<div class="cbi-value-description">
 			    <%:Set here IP of the modem%>
 			</div>
-		    </div>
-		</div>
-		<%
-		    ipv6list = uci:get_list("network",ifname,"ip6addr")
-		    for key, value in pairs(ipv6list) do
-		%>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-ipv6address" data-index="8">
-		    <label class="cbi-value-title"><%:IPv6 address%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.ip6addr" name="cbid.network.<%=ifname%>.ip6addr" class="cbi-input-text" value="<%=value%>" data-type="ip6addr" data-optional="true">
-			<br />
-			<div class="cbi-value-description">
-			    <%:Set an IP in the same network as the modem%>
-			</div>
-		    </div>
-		</div>
-		<%
-		    end
-		    if table.getn(ipv6list) ~= 0 then
-		%>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-ip6gw" data-index="9">
-		    <label class="cbi-value-title"><%:IPv6 gateway%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.ip6gw" name="cbid.network.<%=ifname%>.ip6gw" class="cbi-input-text" value="<%=uci:get("network",ifname,"ip6gw")%>" data-type="ip6addr"  data-optional="true">
-			<br />
-			<div class="cbi-value-description">
-			    <%:Set here IP of the modem%>
-			</div>
-		    </div>
-		</div>
-		<%
-		    else
-		%>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-ipv6address" data-depends="[{&#34;enableipv6&#34;:&#34;0&#34;,&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;enableipv6&#34;:&#34;0&#34;,&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="8">
-		    <label class="cbi-value-title"><%:IPv6 address%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.ip6addr" name="cbid.network.<%=ifname%>.ip6addr" class="cbi-input-text" value="" data-type="ip6addr">
-			<br />
-			<div class="cbi-value-description">
-			    <%:Set an IP in the same network as the modem%>
-			</div>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-ip6gw" data-depends="[{&#34;enableipv6&#34;:&#34;0&#34;,&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;},{&#34;enableipv6&#34;:&#34;0&#34;,&#34;cbid.network.<%=ifname%>.type&#34;:&#34;macvlan&#34;}]" data-index="9">
-		    <label class="cbi-value-title"><%:IPv6 gateway%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.ip6gw" name="cbid.network.<%=ifname%>.ip6gw" class="cbi-input-text" value="<%=uci:get("network",ifname,"ip6gw")%>" data-type="ip6addr">
-			<br />
-			<div class="cbi-value-description">
-			    <%:Set here IP of the modem%>
-			</div>
-		    </div>
-		</div>
-		<%
-		    end
-		%>
-		<!--
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-ip6" data-depends="[{&#34;enableipv6&#34;:&#34;0&#34;,&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;static&#34;}]" data-index="10">
-		    <label class="cbi-value-title"><%:Accept IPv6 RA%></label>
-		    <div class="cbi-value-field">
-			<input type="checkbox" id="cbid.network.<%=ifname%>.ipv6" name="cbid.network.<%=ifname%>.ipv6" value="1" <% if uci:get("network",ifname,"ipv6") == "1" then %>checked<% end %> />
-		    </div>
-		</div>
-		-->
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-device-ncm" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;}]" data-index="5">
-		    <label class="cbi-value-title"><%:Device%></label>
-		    <div class="cbi-value-field">
-			    <select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.device.ncm" name="cbid.network.<%=ifname%>.device.ncm" size="1">
-			<%
-			    iffind=0
-			    for tty in ifttyu do
-			%>
-			<option value="<%=tty%>"<% if uci:get("network",ifname,"device") == tty then iffind = 1 %> selected="selected"<% end %>><%=tty%></option>
-			<%
-			    end
-			    for tty in ifttyc do
-			%>
-			<option value="<%=tty%>"<% if uci:get("network",ifname,"device") == tty then iffind = 1 %> selected="selected"<% end %>><%=tty%></option>
-			<%
-			    end
-			    if iffind == 0 and uci:get("network",ifname,"device") ~= nil then
-			%>
-				<option value="<%=uci:get("network",ifname,"device")%>" selected="selected"><%=uci:get("network",ifname,"device")%></option>
-			<%
-			    end
-			%>
-			    </select>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-device-qmi" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;}]" data-index="5">
-		    <label class="cbi-value-title"><%:Device%></label>
-		    <div class="cbi-value-field">
-			    <select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.device.qmi" name="cbid.network.<%=ifname%>.device.qmi" size="1">
-			<%
-			    iffind=0
-			    for tty in ifttyc do
-			%>
-			<option value="<%=tty%>"<% if uci:get("network",ifname,"device") == tty then iffind = 1 %> selected="selected"<% end %>><%=tty%></option>
-			<%
-			    end
-			    if iffind == 0 and uci:get("network",ifname,"device") ~= nil then
-			%>
-				<option value="<%=uci:get("network",ifname,"device")%>" selected="selected"><%=uci:get("network",ifname,"device")%></option>
-			<%
-			    end
-			%>
-			    </select>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-device-modemmanager" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;modemmanager&#34;}]" data-index="5">
-		    <label class="cbi-value-title"><%:Device%></label>
-		    <div class="cbi-value-field">
-			    <select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.device.modemmanager" name="cbid.network.<%=ifname%>.device.modemmanager" size="1">
-			<%
-			    iffind=0
-			    for _, tty in ipairs(alltty) do
-			%>
-			<option value="<%=tty%>"<% if uci:get("network",ifname,"device") == tty then iffind = 1 %> selected="selected"<% end %>><%=tty%></option>
-			<%
-			    end
-			    if iffind == 0 and uci:get("network",ifname,"device") ~= nil then
-			%>
-				<option value="<%=uci:get("network",ifname,"device")%>" selected="selected"><%=uci:get("network",ifname,"device")%></option>
-			<%
-			    end
-			%>
-			    </select>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-apn" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;modemmanager&#34;}]" data-index="6">
-		    <label class="cbi-value-title"><%:APN%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.apn" name="cbid.network.<%=ifname%>.apn" class="cbi-input-text" value="<%=uci:get("network",ifname,"apn")%>">
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-pincode" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;modemmanager&#34;}]" data-index="7">
-		    <label class="cbi-value-title"><%:PIN code%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.pincode" name="cbid.network.<%=ifname%>.pincode" class="cbi-input-text" value="<%=uci:get("network",ifname,"pincode")%>">
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-mode" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;}]" data-index="8">
-		    <label class="cbi-value-title"><%:Service Type%></label>
-		    <div class="cbi-value-field">
-		    	<select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.mode" name="cbid.network.<%=ifname%>.mode" size="1">
-			    <option value=""<% if uci:get("network",ifname,"mode") == "" then %> selected="selected"<% end %>><%:Modem default%></option>
-			    <option value="preferlte"<% if uci:get("network",ifname,"auth") == "preferlte" then %> selected="selected"<% end %>><%:Prefer LTE%></option>
-			    <option value="preferumts"<% if uci:get("network",ifname,"auth") == "preferumts" then %> selected="selected"<% end %>><%:Prefer UMTS%></option>
-			    <option value="lte"<% if uci:get("network",ifname,"auth") == "lte" then %> selected="selected"<% end %>><%:LTE%></option>
-			    <option value="umts"<% if uci:get("network",ifname,"auth") == "umts" then %> selected="selected"<% end %>><%:UMTS/GPRS%></option>
-			    <option value="gsm"<% if uci:get("network",ifname,"auth") == "gsm" then %> selected="selected"<% end %>><%:GPRS only%></option>
-			    <option value="auto"<% if uci:get("network",ifname,"auth") == "auto" then %> selected="selected"<% end %>><%:auto%></option>
-		    	</select>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-auth" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;pppoe&#34;}]" data-index="9">
-		    <label class="cbi-value-title"><%:Authentication Type%></label>
-		    <div class="cbi-value-field">
-		    	<select class="cbi-input-select" data-update="change" id="cbid.network.<%=ifname%>.auth" name="cbid.network.<%=ifname%>.auth" size="1">
-			    <option value="none"<% if uci:get("network",ifname,"auth") == "none" then %> selected="selected"<% end %>><%:NONE%></option>
-			    <option value="pap"<% if uci:get("network",ifname,"auth") == "pap" then %> selected="selected"<% end %>><%:PAP%></option>
-			    <option value="chap"<% if uci:get("network",ifname,"auth") == "chap" then %> selected="selected"<% end %>><%:CHAP%></option>
-			    <option value="both"<% if uci:get("network",ifname,"auth") == "both" then %> selected="selected"<% end %>><%:PAP/CHAP%></option>
-		    	</select>
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-username" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;pppoe&#34;}]" data-index="10">
-		    <label class="cbi-value-title"><%:PAP/CHAP username%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.username" name="cbid.network.<%=ifname%>.username" class="cbi-input-text" value="<%=uci:get("network",ifname,"username")%>">
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-password" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;pppoe&#34;}]" data-index="11">
-		    <label class="cbi-value-title"><%:PAP/CHAP password%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.password" name="cbid.network.<%=ifname%>.password" class="cbi-input-text" value="<%=uci:get("network",ifname,"password")%>">
-		    </div>
-		</div>
-		<div class="cbi-value" id="cbi-network-<%=ifname%>-delay" data-depends="[{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;ncm&#34;},{&#34;cbid.network.<%=ifname%>.proto&#34;:&#34;qmi&#34;}]" data-index="12">
-		    <label class="cbi-value-title"><%:Modem init timeout%></label>
-		    <div class="cbi-value-field">
-			<input type="text" id="cbid.network.<%=ifname%>.delay" name="cbid.network.<%=ifname%>.delay" class="cbi-input-text" value="<%=uci:get("network",ifname,"delay")%>">
 		    </div>
 		</div>
 		<%
@@ -1096,24 +841,24 @@
 		<%
 			end
 		%>
-		<div class="cbi-value" data-index="19">
-		    <label class="cbi-value-title"><%:Calculate speed%></label>
-		    <div class="cbi-value-field">
-			<input class="cbi-input-checkbox" type="checkbox" name="cbid.sqm.<%=ifname%>.testspeed" value="1" <% if uci:get("openmptcprouter",ifname,"testspeed") == "1" then %>checked<% end %> />
-			<br />
-			<div class="cbi-value-description">
-			    <%:Run an automatic speedtest to calculate max download & upload speed.%>
+			<div class="cbi-value" data-index="19">
+			    <label class="cbi-value-title"><%:Calculate speed%></label>
+			    <div class="cbi-value-field">
+				<input class="cbi-input-checkbox" type="checkbox" name="cbid.sqm.<%=ifname%>.testspeed" value="1" <% if uci:get("openmptcprouter",ifname,"testspeed") == "1" then %>checked<% end %> />
+				<br />
+				<div class="cbi-value-description">
+				    <%:Runs an automatic per-WAN test to your VPS API (multiple short download/upload checks, best result kept). The result is saved as line speed and then used by SQM/QoS.%>
+				</div>
+			    </div>
 			</div>
-		    </div>
-		</div>
 		<div class="cbi-value" data-index="20">
 		    <label class="cbi-value-title"><%:Download speed (Kb/s)%></label>
 		    <div class="cbi-value-field">
 			<input type="text" name="cbid.sqm.<%=ifname%>.download" class="cbi-input-text" value="<%=download%>" data-type="uinteger">
 			<br />
-			<div class="cbi-value-description">
-			    <%:Used by Glorytun UDP and SQM/QoS if enabled.%>
-			</div>
+				<div class="cbi-value-description">
+				    <%:Line speed reference used by SQM/QoS. If SQM autorate is enabled: max=100%, base=65%, min=25%. If autorate is disabled: SQM/QoS uses 90%.%>
+				</div>
 			<!--
 			<br />
 			<div class="cbi-value-description">
@@ -1127,9 +872,9 @@
 		    <div class="cbi-value-field">
 			<input type="text" name="cbid.sqm.<%=ifname%>.upload" class="cbi-input-text" value="<%=upload%>" data-type="uinteger">
 			<br />
-			<div class="cbi-value-description">
-			    <%:Used by Glorytun UDP and SQM/QoS if enabled.%>
-			</div>
+				<div class="cbi-value-description">
+				    <%:Line speed reference used by SQM/QoS. If SQM autorate is enabled: max=100%, base=65%, min=25%. If autorate is disabled: SQM/QoS uses 90%.%>
+				</div>
 			<!--
 			<br />
 			<div class="cbi-value-description">

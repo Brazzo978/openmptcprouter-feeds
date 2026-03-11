@@ -104,6 +104,8 @@ define shadowsocks-rust/templates
 endef
 $(eval $(call shadowsocks-rust/templates))
 
+Build/Compile=$(call Build/Compile/Cargo,,--locked)
+
 $(eval $(call BuildPackage,shadowsocks-rust-config))
 $(eval $(call BuildPackage,shadowsocks-rust-config-nft))
 $(foreach component,$(SHADOWSOCKS_COMPONENTS), \

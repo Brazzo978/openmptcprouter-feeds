@@ -32,9 +32,9 @@ if [ -n "$OMR_TRACKER_INTERFACE" ] && [ -n "$OMR_TRACKER_DEVICE" ] && [ "$(pgrep
 			if [ "$(uci -q get sqm.${OMR_TRACKER_INTERFACE}.autorate)" = "1" ]; then
 				uci -q set sqm.${OMR_TRACKER_INTERFACE}.download=$((download_speed*65/100))
 				uci -q set sqm.${OMR_TRACKER_INTERFACE}.max_download=${download_speed}
-				uci -q set sqm.${OMR_TRACKER_INTERFACE}.min_download=$((download_speed*10/100))
+				uci -q set sqm.${OMR_TRACKER_INTERFACE}.min_download=$((download_speed*25/100))
 			else
-				uci -q set sqm.${OMR_TRACKER_INTERFACE}.download=$((download_speed*95/100))
+				uci -q set sqm.${OMR_TRACKER_INTERFACE}.download=$((download_speed*90/100))
 			fi
 			_log "Calculated ${OMR_TRACKER_INTERFACE} download speed: ${download_speed}"
 			uci -q set network.${OMR_TRACKER_INTERFACE}.downloadspeed=${download_speed}
@@ -45,9 +45,9 @@ if [ -n "$OMR_TRACKER_INTERFACE" ] && [ -n "$OMR_TRACKER_DEVICE" ] && [ "$(pgrep
 				if [ "$(uci -q get sqm.${OMR_TRACKER_INTERFACE}.autorate)" = "1" ]; then
 					uci -q set sqm.${OMR_TRACKER_INTERFACE}.upload=$((upload_speed*65/100))
 					uci -q set sqm.${OMR_TRACKER_INTERFACE}.max_upload=${upload_speed}
-					uci -q set sqm.${OMR_TRACKER_INTERFACE}.min_upload=$((upload_speed*10/100))
+					uci -q set sqm.${OMR_TRACKER_INTERFACE}.min_upload=$((upload_speed*25/100))
 				else
-					uci -q set sqm.${OMR_TRACKER_INTERFACE}.upload=$((upload_speed*95/100))
+					uci -q set sqm.${OMR_TRACKER_INTERFACE}.upload=$((upload_speed*90/100))
 				fi
 				_log "Calculated ${OMR_TRACKER_INTERFACE} upload speed: ${upload_speed}"
 				uci -q set network.${OMR_TRACKER_INTERFACE}.uploadspeed=${upload_speed}

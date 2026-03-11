@@ -131,9 +131,11 @@ fi
 # Set the default VPN
 if [ "$(uci -q get openmptcprouter.settings.vpn)" = "" ]; then
 	uci -q batch <<-EOF >/dev/null
-		set openmptcprouter.settings.vpn='openvpn'
+		set openmptcprouter.settings.vpn='glorytun_tcp'
 		set glorytun.vpn.enable='1'
+		set glorytun-udp.vpn.enable='0'
 		commit glorytun
+		commit glorytun-udp
 		commit openmptcprouter
 	EOF
 fi

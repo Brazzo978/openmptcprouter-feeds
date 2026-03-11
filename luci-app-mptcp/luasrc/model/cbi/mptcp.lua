@@ -33,7 +33,7 @@ if uname.release:sub(1,4) ~= "5.15" and uname.release:sub(1,1) ~= "6" then
 	o:value("netlink", translate("Netlink"))
     end
 end
-o = s:option(ListValue, "mptcp_scheduler", translate("Multipath TCP scheduler"))
+o = s:option(ListValue, "mptcp_scheduler", translate("Packet scheduler"), translate("Selects how MPTCP chooses a subflow to send data. BPF schedulers require the shipped scheduler objects to be present."))
 o:value("default", translate("default"))
 -- if tonumber(uname.release:sub(1,4)) <= 5.15 then
 if uname.release:sub(1,4) ~= "5.15" and uname.release:sub(1,1) ~= "6" then
@@ -67,7 +67,7 @@ if uname.release:sub(1,4) ~= "5.15" and uname.release:sub(1,1) ~= "6" then
     o:value(1, translate("1"))
     o.default = 0
 end
-o = s:option(ListValue, "congestion", translate("Congestion Control"),translate("Default is bbr"))
+o = s:option(ListValue, "congestion", translate("Congestion control"),translate("Selects the TCP congestion control used by MPTCP subflows. Default is bbr."))
 local availablecong = sys.exec("sysctl -n net.ipv4.tcp_available_congestion_control | xargs -n1 | sort | xargs")
 for cong in string.gmatch(availablecong, "[^%s]+") do
 	if cong == "bbr" and string.match(availablecong, "bbr1") then
@@ -81,20 +81,23 @@ end
 if uname.release:sub(1,4) == "5.15" or uname.release:sub(1,1) == "6" then
     if uname.release:sub(1,1) == "6" then
 	-- Only available since 5.19
-        o = s:option(ListValue, "mptcp_pm_type", translate("Path Manager type"))
+        o = s:option(ListValue, "mptcp_pm_type", translate("Path manager mode"), translate("Choose whether endpoints and additional subflows are managed by the kernel or by mptcpd in userspace."))
         o:value(0, translate("In-kernel path manager"))
         o:value(1, translate("Userspace path manager"))
         o.default = 0
     end
 
-    o = s:option(ListValue, "mptcp_disable_initial_config", translate("Initial MPTCP configuration"))
-    o:depends("mptcp_pm_type",1)
+    o = s:option(ListValue, "mptcp_disable_initial_config", translate("Initial endpoint setup"), translate("Keep the initial addresses advertised automatically when a connection starts."))
     o:value("0", translate("enable"))
     o:value("1", translate("disable"))
     o.default = "0"
 
-    o = s:option(ListValue, "mptcp_force_multipath", translate("Force Multipath configuration"))
-    o:depends("mptcp_pm_type",1)
+    o = s:option(ListValue, "mptcp_force_multipath", translate("Force multipath mode"), translate("Keep creating extra subflows whenever possible instead of staying on a single path."))
+    o:value("1", translate("enable"))
+    o:value("0", translate("disable"))
+    o.default = "1"
+
+    o = s:option(ListValue, "mptcp_allow_join_initial_addr_port", translate("Allow joins on initial address"), translate("Allow extra subflows to join using the initial address and port pair advertised by the first subflow."))
     o:value("1", translate("enable"))
     o:value("0", translate("disable"))
     o.default = "1"
@@ -117,7 +120,7 @@ if uname.release:sub(1,4) == "5.15" or uname.release:sub(1,1) == "6" then
     end
     o:depends("mptcp_pm_type",1)
 
-    o = s:option(DynamicList, "mptcpd_addr_flags", translate("MPTCPd Address annoucement flags"))
+    o = s:option(DynamicList, "mptcpd_addr_flags", translate("MPTCPd address flags"), translate("Flags applied to announced endpoints. Use fullmesh+subflow to aggressively open additional paths."))
     o:value("subflow","subflow")
     o:value("signal","signal")
     o:value("backup","backup")
@@ -130,22 +133,22 @@ if uname.release:sub(1,4) == "5.15" or uname.release:sub(1,1) == "6" then
     o:value("skip_loopback","skip_loopback")
     o:depends("mptcp_pm_type",1)
 
-    o = s:option(Value, "mptcp_subflows", translate("Max subflows"),translate("specifies the maximum number of additional subflows allowed for each MPTCP connection"))
+    o = s:option(Value, "mptcp_subflows", translate("Max additional subflows"),translate("Maximum number of extra subflows allowed for each MPTCP connection. Raise this when a single flow is rate-limited."))
     o.datatype = "uinteger"
     o.rmempty = false
-    o.default = 3
+    o.default = 8
 
     o = s:option(Value, "mptcp_stale_loss_cnt", translate("Retranmission intervals"),translate("The number of MPTCP-level retransmission intervals with no traffic and pending outstanding data on a given subflow required to declare it stale. A low stale_loss_cnt value allows for fast active-backup switch-over, an high value maximize links utilization on edge scenarios e.g. lossy link with high BER or peer pausing the data processing."))
     o.datatype = "uinteger"
     o.rmempty = false
     o.default = 4
 
-    o = s:option(Value, "mptcp_add_addr_accepted", translate("Max add address"),translate("specifies the maximum number of ADD_ADDR (add address) suboptions accepted for each MPTCP connection"))
+    o = s:option(Value, "mptcp_add_addr_accepted", translate("Max accepted peer addresses"),translate("Maximum number of peer ADD_ADDR announcements accepted for each MPTCP connection."))
     o.datatype = "uinteger"
     o.rmempty = false
-    o.default = 1
+    o.default = 8
 
-    o = s:option(Value, "mptcp_add_addr_timeout", translate("Control message timeout"),translate("Set the timeout after which an ADD_ADDR (add address) control message will be resent to an MPTCP peer that has not acknowledged a previous ADD_ADDR message."))
+    o = s:option(Value, "mptcp_add_addr_timeout", translate("ADD_ADDR retry timeout"),translate("Seconds to wait before resending an ADD_ADDR control message that was not acknowledged by the peer."))
     o.datatype = "uinteger"
     o.rmempty = false
     o.default = 120

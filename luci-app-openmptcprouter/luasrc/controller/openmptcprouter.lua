@@ -258,38 +258,31 @@ function wizard_add()
 		end
 	end
 
-	-- Enable/disable IPv6
-	local disableipv6 = luci.http.formvalue("enableipv6") or "1"
+	-- IPv6 is intentionally disabled in this build
+	local disableipv6 = "1"
 	ucic:set("openmptcprouter","settings","disable_ipv6",disableipv6)
 
 
 	-- Set interfaces settings
 	local downloadmax = 0
 	local uploadmax = 0
-	local interfaces = luci.http.formvaluetable("intf")
+	local interfaces = luci.http.formvaluetable("intf") or {}
 	for intf, _ in pairs(interfaces) do
 		local label = luci.http.formvalue("cbid.network.%s.label" % intf) or ""
 		local proto = luci.http.formvalue("cbid.network.%s.proto" % intf) or "static"
+		if proto == "dhcpv6" or proto == "ncm" or proto == "qmi" or proto == "modemmanager" or proto == "mbim" or proto == "ecm" or proto == "other" then
+			proto = "dhcp"
+		end
 		local typeintf = luci.http.formvalue("cbid.network.%s.type" % intf) or ""
 		local masterintf = luci.http.formvalue("cbid.network.%s.masterintf" % intf) or ""
 		local ifname = luci.http.formvalue("cbid.network.%s.intf" % intf) or ""
 		local vlan = luci.http.formvalue("cbid.network.%s.vlan" % intf) or ""
-		local device_ncm = luci.http.formvalue("cbid.network.%s.device.ncm" % intf) or ""
-		local device_qmi = luci.http.formvalue("cbid.network.%s.device.qmi" % intf) or ""
-		local device_modemmanager = luci.http.formvalue("cbid.network.%s.device.modemmanager" % intf) or ""
 		local ipaddr = luci.http.formvalue("cbid.network.%s.ipaddr" % intf) or ""
-		local ip6addr = luci.http.formvalue("cbid.network.%s.ip6addr" % intf) or ""
 		local netmask = luci.http.formvalue("cbid.network.%s.netmask" % intf) or ""
 		local gateway = luci.http.formvalue("cbid.network.%s.gateway" % intf) or ""
-		local ip6gw = luci.http.formvalue("cbid.network.%s.ip6gw" % intf) or ""
-		local ipv6 = luci.http.formvalue("cbid.network.%s.ipv6" % intf) or "0"
-		local apn = luci.http.formvalue("cbid.network.%s.apn" % intf) or ""
-		local pincode = luci.http.formvalue("cbid.network.%s.pincode" % intf) or ""
-		local delay = luci.http.formvalue("cbid.network.%s.delay" % intf) or ""
 		local username = luci.http.formvalue("cbid.network.%s.username" % intf) or ""
 		local password = luci.http.formvalue("cbid.network.%s.password" % intf) or ""
 		local auth = luci.http.formvalue("cbid.network.%s.auth" % intf) or ""
-		local mode = luci.http.formvalue("cbid.network.%s.mode" % intf) or ""
 		local sqmenabled = luci.http.formvalue("cbid.sqm.%s.enabled" % intf) or "0"
 		local sqmautorate = luci.http.formvalue("cbid.sqm.%s.autorate" % intf) or "0"
 		local qosenabled = luci.http.formvalue("cbid.qos.%s.enabled" % intf) or "0"
@@ -314,29 +307,11 @@ function wizard_add()
 			ucic:set("network",intf .. "_dev","name",intf)
 			ucic:set("network",intf,"device",intf)
 			ucic:set("network",intf,"masterintf",masterintf)
-		elseif typeintf == "" and ifname ~= "" and (proto == "static" or proto == "dhcp" or proto == "dhcpv6") then
+		elseif typeintf == "" and ifname ~= "" and (proto == "static" or proto == "dhcp" or proto == "pppoe") then
 			ucic:set("network",intf,"device",ifname)
 			if uci_device_from_interface(intf) == "" then
 				ucic:set("network",intf .. "_dev","device")
 				ucic:set("network",intf .. "_dev","name",ifname)
-			end
-		elseif typeintf == "" and device ~= "" and proto == "ncm" then
-			ucic:set("network",intf,"device",device_ncm)
-			if uci_device_from_interface(intf) == "" then
-				ucic:set("network",intf .. "_dev","device")
-				ucic:set("network",intf .. "_dev","name",device_ncm)
-			end
-		elseif typeintf == "" and device ~= "" and proto == "qmi" then
-			ucic:set("network",intf,"device",device_qmi)
-			if uci_device_from_interface(intf) == "" then
-				ucic:set("network",intf .. "_dev","device")
-				ucic:set("network",intf .. "_dev","name",device_qmi)
-			end
-		elseif typeintf == "" and device ~= "" and proto == "modemmanager" then
-			ucic:set("network",intf,"device",device_manager)
-			if uci_device_from_interface(intf) == "" then
-				ucic:set("network",intf .. "_dev","device")
-				ucic:set("network",intf .. "_dev","name",device_manager)
 			end
 		elseif typeintf == "" and ifname ~= "" and proto == "static" then
 			ucic:set("network",intf,"device",ifname)
@@ -368,15 +343,11 @@ function wizard_add()
 		end
 		ucic:set("network",uci_device,"ttl",ttl)
 
-		ucic:set("network",intf,"apn",apn)
-		ucic:set("network",intf,"pincode",pincode)
-		ucic:set("network",intf,"delay",delay)
 		ucic:set("network",intf,"username",username)
 		ucic:set("network",intf,"password",password)
 		ucic:set("network",intf,"auth",auth)
-		ucic:set("network",intf,"mode",mode)
 		ucic:set("network",intf,"label",label)
-		ucic:set("network",intf,"ipv6",ipv6)
+		ucic:set("network",intf,"ipv6","0")
 		if lan == "1" then
 			ucic:set("network",intf,"multipath","off")
 		else
@@ -395,28 +366,14 @@ function wizard_add()
 			ucic:set("network",intf,"netmask","")
 			ucic:set("network",intf,"gateway","")
 		end
-		if ip6addr ~= "" then
-			ucic:set("network",intf,"ip6addr",ip6addr:gsub("%s+", ""))
-			ucic:set("network",intf,"ip6gw",ip6gw:gsub("%s+", ""))
-			ucic:set("network",intf,"ipv6","1")
-		elseif proto ~= "static" and proto ~= "dhcp" and disableipv6 ~= "1" then
-			ucic:set("network",intf,"ip6addr","")
-			ucic:set("network",intf,"ip6gw","")
-			ucic:set("network",intf,"ipv6","1")
-		else
-			ucic:set("network",intf,"ip6addr","")
-			ucic:set("network",intf,"ip6gw","")
-			ucic:set("network",intf,"ipv6","0")
-		end
-		
-		if proto == "dhcpv6" then
-			ucic:set("network",intf,"reqaddress","try")
-			ucic:set("network",intf,"reqprefix","no")
-			ucic:set("network",intf,"iface_map","0")
-			ucic:set("network",intf,"iface_dslite","0")
-			ucic:set("network",intf,"iface_464xlate","0")
-			ucic:set("network",intf,"ipv6","1")
-		end
+		ucic:set("network",intf,"ip6addr","")
+		ucic:set("network",intf,"ip6gw","")
+		ucic:set("network",intf,"ipv6","0")
+		ucic:delete("network",intf,"reqaddress")
+		ucic:delete("network",intf,"reqprefix")
+		ucic:delete("network",intf,"iface_map")
+		ucic:delete("network",intf,"iface_dslite")
+		ucic:delete("network",intf,"iface_464xlate")
 
 		ucic:delete("openmptcprouter",intf,"lc")
 		ucic:save("openmptcprouter")
@@ -476,13 +433,13 @@ function wizard_add()
 		if downloadspeed ~= "0" and downloadspeed ~= "" then
 			if sqmautorate == "1" and (ucic:get("network",intf,"downloadspeed") ~= downloadspeed or ucic:get("sqm",intf,"max_download") == "" or ucic:get("sqm",intf,"download") == "0") then
 				ucic:set("sqm",intf,"download",math.ceil(downloadspeed*65/100))
-				ucic:set("sqm",intf,"min_download",math.ceil(downloadspeed*10/100))
+				ucic:set("sqm",intf,"min_download",math.ceil(downloadspeed*25/100))
 				ucic:set("sqm",intf,"max_download",downloadspeed)
 			elseif sqmautorate ~= "1" then
-				ucic:set("sqm",intf,"download",math.ceil(downloadspeed*95/100))
+				ucic:set("sqm",intf,"download",math.ceil(downloadspeed*90/100))
 			end
 			ucic:set("network",intf,"downloadspeed",downloadspeed)
-			ucic:set("qos",intf,"download",math.ceil(downloadspeed*95/100))
+			ucic:set("qos",intf,"download",math.ceil(downloadspeed*90/100))
 			downloadmax = downloadmax + tonumber(downloadspeed)
 		else
 			ucic:delete("network",intf,"downloadspeed")
@@ -492,13 +449,13 @@ function wizard_add()
 		if uploadspeed ~= "0" and uploadspeed ~= "" then
 			if sqmautorate == "1" and (ucic:get("network",intf,"uploadspeed") ~= uploadspeed or ucic:get("sqm",intf,"max_upload") == "" or ucic:get("sqm",intf,"upload") == "0") then
 				ucic:set("sqm",intf,"upload",math.ceil(uploadspeed*65/100))
-				ucic:set("sqm",intf,"min_upload",math.ceil(uploadspeed*10/100))
+				ucic:set("sqm",intf,"min_upload",math.ceil(uploadspeed*25/100))
 				ucic:set("sqm",intf,"max_upload",uploadspeed)
 			elseif sqmautorate ~= "1" then
-				ucic:set("sqm",intf,"upload",math.ceil(uploadspeed*95/100))
+				ucic:set("sqm",intf,"upload",math.ceil(uploadspeed*90/100))
 			end
 			ucic:set("network",intf,"uploadspeed",uploadspeed)
-			ucic:set("qos",intf,"upload",math.ceil(uploadspeed*95/100))
+			ucic:set("qos",intf,"upload",math.ceil(uploadspeed*90/100))
 			uploadmax = uploadmax + tonumber(uploadspeed)
 		else
 			ucic:delete("network",intf,"uploadspeed")
@@ -657,12 +614,12 @@ function wizard_add()
 	end
 
 	-- Get VPN used for MPTCP over VPN
-	local mptcpovervpn_vpn = luci.http.formvalue("mptcpovervpn_vpn") or "wireguard"
+	local mptcpovervpn_vpn = luci.http.formvalue("mptcpovervpn_vpn") or "openvpn"
 	ucic:set("openmptcprouter","settings","mptcpovervpn",mptcpovervpn_vpn)
 	ucic:save("openmptcprouter")
 
-	-- Get Country
-	local country = luci.http.formvalue("country") or "world"
+	-- Country-specific presets are disabled in this build
+	local country = ""
 	ucic:set("openmptcprouter","settings","country",country)
 	ucic:save("openmptcprouter")
 
@@ -682,6 +639,10 @@ function wizard_add()
 
 	-- Get Proxy set by default
 	local default_proxy = luci.http.formvalue("default_proxy") or "shadowsocks-rust"
+	-- VLESS Reality is intentionally disabled in this build.
+	if default_proxy == "xray-vless-reality" then
+		default_proxy = "xray"
+	end
 	if default_proxy == "shadowsocks" and serversnb > 0 and serversnb > disablednb then
 		--ucic:set("shadowsocks-libev","sss0","disabled","0")
 		ucic:set("v2ray","main","enabled","0")
@@ -731,14 +692,12 @@ function wizard_add()
 			local sectionname = s[".name"]
 			ucic:set("shadowsocks-rust",sectionname,"disabled","1")
 		end)
-	elseif (default_proxy == "xray" or default_proxy == "xray-vless-reality" or default_proxy == "xray-vmess" or default_proxy == "xray-trojan" or default_proxy == "xray-shadowsocks" or default_proxy == "xray-socks") and serversnb > 0 and serversnb > disablednb then
+	elseif (default_proxy == "xray" or default_proxy == "xray-vmess" or default_proxy == "xray-trojan" or default_proxy == "xray-shadowsocks" or default_proxy == "xray-socks") and serversnb > 0 and serversnb > disablednb then
 		--ucic:set("shadowsocks-libev","sss0","disabled","1")
 		ucic:set("v2ray","main","enabled","0")
 		ucic:set("xray","main","enabled","1")
 		if default_proxy == "xray" then
 			ucic:set("xray","omrout","protocol","vless")
-		elseif default_proxy == "xray-vless-reality" then
-			ucic:set("xray","omrout","protocol","vless-reality")
 		elseif default_proxy == "xray-vmess" then
 			ucic:set("xray","omrout","protocol","vmess")
 		elseif default_proxy == "xray-trojan" then
@@ -1405,16 +1364,16 @@ function settings_add()
 	ucic:set("openmptcprouter", "settings","disable_fastopen", disablefastopen)
 	
 	-- Disable IPv6
-	local disable_ipv6 = luci.http.formvalue("enableipv6") or "1"
+	local disable_ipv6 = "1"
 	ucic:set("openmptcprouter","settings","disable_ipv6",disable_ipv6)
 	--local dump = require("luci.util").ubus("openmptcprouter", "disableipv6", { disable_ipv6 = tonumber(disable_ipv6)})
 
 	-- Disable 6in4
-	local disable_6in4 = luci.http.formvalue("enable6in4") or "0"
+	local disable_6in4 = "1"
 	ucic:set("openmptcprouter","settings","disable_6in4",disable_6in4)
 
 	-- Disable ModemManager
-	local disable_modemmanager = luci.http.formvalue("disablemodemmanager") or "0"
+	local disable_modemmanager = "1"
 	ucic:set("openmptcprouter","settings","disable_modemmanager",disable_modemmanager)
 	if disable_modemmanager == "1" then
 		luci.sys.exec("/etc/init.d/modemmanager stop")
@@ -1487,8 +1446,8 @@ function settings_add()
 	local tracebox = luci.http.formvalue("disabletracebox") or "1"
 	ucic:set("openmptcprouter","settings","tracebox",tracebox)
 
-	-- Enable/disable ModemManager
-	local modemmanager = luci.http.formvalue("disablemodemmanager") or "1"
+	-- ModemManager is disabled in this build
+	local modemmanager = "0"
 	ucic:set("openmptcprouter","settings","modemmanager",modemmanager)
 
 	-- Enable/disable server ping
@@ -1555,8 +1514,8 @@ function settings_add()
 	ucic:save("shadowsocks-libev")
 	ucic:commit("shadowsocks-libev")
 
-	-- Set master to dynamic or static
-	local master_type = luci.http.formvalue("master_type") or "static"
+	-- Set master selection mode
+	local master_type = luci.http.formvalue("master_type") or ucic:get("openmptcprouter","settings","master") or "balancing"
 	ucic:set("openmptcprouter","settings","master",master_type)
 
 	-- Set CPU scaling minimum frequency

@@ -30,7 +30,7 @@ if [ -z "$(uci -q get xray.main)" ]; then
 		set xray.main_transparent_proxy.proxy_mode='default'
 		set xray.main_transparent_proxy.apnic_delegated_mirror='apnic'
 		set xray.main_transparent_proxy.gfwlist_mirror='github'
-		set xray.main_transparent_proxy.redirect_udp='0'
+		set xray.main_transparent_proxy.redirect_udp='1'
 		set xray.main_transparent_proxy.redirect_port='1897'
 		set xray.omrout=outbound
 		set xray.omrout.tag='omrout_tunnel'

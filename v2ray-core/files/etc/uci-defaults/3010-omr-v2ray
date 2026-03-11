@@ -30,7 +30,7 @@ if [ -z "$(uci -q get v2ray.main)" ]; then
 		set v2ray.main_transparent_proxy.proxy_mode='default'
 		set v2ray.main_transparent_proxy.apnic_delegated_mirror='apnic'
 		set v2ray.main_transparent_proxy.gfwlist_mirror='github'
-		set v2ray.main_transparent_proxy.redirect_udp='0'
+		set v2ray.main_transparent_proxy.redirect_udp='1'
 		set v2ray.main_transparent_proxy.redirect_port='1897'
 		set v2ray.omrout=outbound
 		set v2ray.omrout.tag='omrout_tunnel'

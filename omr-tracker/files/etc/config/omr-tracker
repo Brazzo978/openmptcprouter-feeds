@@ -59,7 +59,7 @@ config proxy 'proxy'
 	option interval '10'
 	option mail_alert '0'
 	option initial_state 'online'
-	option family 'ipv4ipv6'
+	option family 'ipv4'
 
 config server 'server'
 	option enabled '1'
