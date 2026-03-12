@@ -450,6 +450,7 @@ add_xray_redirect_rules() {
 	local ext_args="$1"
 	local lan_devices="$2"
 	local lan_ipaddrs="$3"
+	local udp_only_mode commandline
 
 	local port="$TRANSPARENT_PROXY_PORT"
 	local addition="$TRANSPARENT_PROXY_ADDITION"
@@ -460,15 +461,34 @@ add_xray_redirect_rules() {
 
 	# This part need a rewrite
 	xray-rules -f
-	#logger -t "xray" "xray-rules -l ${port} -L ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
-	commandline="-l ${port} -s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
+	# Keep TCP on the default proxy when only UDP must be forced to XRay.
+	udp_only_mode="0"
+	if [ "$(uci -q get openmptcprouter.settings.traffic_udp_path)" = "xray" ]; then
+		case "$(uci -q get openmptcprouter.settings.proxy)" in
+			shadowsocks|shadowsocks-rust|none)
+				udp_only_mode="1"
+				;;
+		esac
+	fi
+
+	commandline="-s $OUTBOUND_SERVERS_V4 --rule-name def --src-default forward --dst-default forward --local-default forward"
+	if [ "$udp_only_mode" != "1" ]; then
+		commandline="$commandline -l ${port}"
+	fi
 	[ "$(uci -q get xray.main_transparent_proxy.redirect_udp)" = "1" ] && [ "$(uci -q get xray.omrout.protocol)" != "socks" ] && commandline="$commandline -L ${port}"
-	xray-rules $commandline
+	case " $commandline " in
+		*" -l "*|*" -L "*) xray-rules $commandline ;;
+	esac
 	[ "$(uci -q get xray.main.inbounds | grep omr6)" != "" ] && [ -n "$OUTBOUND_SERVERS_V6" ] && {
 		xray-rules6 -f
-		commandline="-l $((port+1)) -L $((port+1)) -s $OUTBOUND_SERVERS_V6 --rule-name def --src-default forward --dst-default forward --local-default forward"
-		[ "$(uci -q get xray.main_transparent_proxy.redirect_udp)" = "1" ] && ([ "$(uci -q get xray.omrout.protocol)" = "vless-reality" ] || [ "$(uci -q get xray.omrout.protocol)" = "vless" ] || [ "$(uci -q get xray.omrout.protocol)" = "vmess" ]) && commandline="$commandline -L ${port+1}"
-		xray-rules6 $commandline
+		commandline="-s $OUTBOUND_SERVERS_V6 --rule-name def --src-default forward --dst-default forward --local-default forward"
+		if [ "$udp_only_mode" != "1" ]; then
+			commandline="$commandline -l $((port+1))"
+		fi
+		[ "$(uci -q get xray.main_transparent_proxy.redirect_udp)" = "1" ] && ([ "$(uci -q get xray.omrout.protocol)" = "vless-reality" ] || [ "$(uci -q get xray.omrout.protocol)" = "vless" ] || [ "$(uci -q get xray.omrout.protocol)" = "vmess" ]) && commandline="$commandline -L $((port+1))"
+		case " $commandline " in
+			*" -l "*|*" -L "*) xray-rules6 $commandline ;;
+		esac
 	}
 	[ -f /etc/init.d/omr-bypass ] && [ -z "$(pgrep -f omr-bypass)" ] && {
 		logger -t "xray" "Reload omr-bypass rules"

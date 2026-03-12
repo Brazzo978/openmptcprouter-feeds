@@ -348,35 +348,12 @@
 		</div>
 	    </div>
 	    <%
-		local traffic_tcp_path = uci:get("openmptcprouter","settings","traffic_tcp_path") or "auto"
 		local traffic_udp_path = uci:get("openmptcprouter","settings","traffic_udp_path") or "auto"
-		local traffic_icmp_path = uci:get("openmptcprouter","settings","traffic_icmp_path") or "auto"
-
-		if traffic_tcp_path == "default" then traffic_tcp_path = "auto" end
 		if traffic_udp_path == "default" then traffic_udp_path = "auto" end
-		if traffic_icmp_path == "default" then traffic_icmp_path = "auto" end
-
-		if traffic_tcp_path ~= "auto" and traffic_tcp_path ~= "proxy" and traffic_tcp_path ~= "vpn" and traffic_tcp_path ~= "none" then
-			traffic_tcp_path = "auto"
-		end
 		if traffic_udp_path ~= "auto" and traffic_udp_path ~= "xray" and traffic_udp_path ~= "shadowsocks" and traffic_udp_path ~= "vpn" and traffic_udp_path ~= "none" then
 			traffic_udp_path = "auto"
 		end
-		if traffic_icmp_path ~= "auto" and traffic_icmp_path ~= "vpn" and traffic_icmp_path ~= "none" then
-			traffic_icmp_path = "auto"
-		end
 	    %>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:TCP traffic path%></label>
-		<div class="cbi-value-field">
-		    <select class="cbi-input-select" name="traffic_tcp_path" size="1">
-			<option value="auto" <% if traffic_tcp_path == "auto" then %>selected="selected"<% end %>><%:Auto (current behavior)%></option>
-			<option value="proxy" <% if traffic_tcp_path == "proxy" then %>selected="selected"<% end %>><%:Use default proxy%></option>
-			<option value="vpn" <% if traffic_tcp_path == "vpn" then %>selected="selected"<% end %>><%:Force VPN tunnel%></option>
-			<option value="none" <% if traffic_tcp_path == "none" then %>selected="selected"<% end %>><%:No proxy/tunnel override%></option>
-		    </select>
-		</div>
-	    </div>
 	    <div class="cbi-value">
 		<label class="cbi-value-title"><%:UDP traffic path%></label>
 		<div class="cbi-value-field">
@@ -387,23 +364,13 @@
 			<option value="vpn" <% if traffic_udp_path == "vpn" then %>selected="selected"<% end %>><%:Force VPN tunnel%></option>
 			<option value="none" <% if traffic_udp_path == "none" then %>selected="selected"<% end %>><%:No proxy/tunnel override%></option>
 		    </select>
-		</div>
-	    </div>
-	    <div class="cbi-value">
-		<label class="cbi-value-title"><%:ICMP traffic path%></label>
-		<div class="cbi-value-field">
-		    <select class="cbi-input-select" name="traffic_icmp_path" size="1">
-			<option value="auto" <% if traffic_icmp_path == "auto" then %>selected="selected"<% end %>><%:Auto (current behavior)%></option>
-			<option value="vpn" <% if traffic_icmp_path == "vpn" then %>selected="selected"<% end %>><%:Force VPN tunnel%></option>
-			<option value="none" <% if traffic_icmp_path == "none" then %>selected="selected"<% end %>><%:No tunnel (use master route)%></option>
-		    </select>
 		    <br />
 		    <div class="cbi-value-description">
-			<%:Experimental UI only for now: these selectors are saved but do not change traffic routing yet.%>
-			<br />
-			<%:Advanced parameters: changing them may break connectivity, routing and failover behavior.%>
+			<%:Advanced parameter: changing this may break connectivity, routing and failover behavior.%>
 			<br />
 			<%:Use only for controlled testing and keep Auto unless you explicitly need an override.%>
+			<br />
+			<%:Use "Force XRay" to route UDP via XRay even when the default proxy is Shadowsocks.%>
 		    </div>
 		</div>
 	    </div>

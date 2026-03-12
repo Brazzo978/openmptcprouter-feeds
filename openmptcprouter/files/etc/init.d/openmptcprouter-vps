@@ -1080,6 +1080,81 @@ _is_ray_proxy() {
 	return 1
 }
 
+_is_shadow_proxy() {
+	case "$1" in
+		shadowsocks|shadowsocks-rust)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+_is_udp_force_xray_mode() {
+	local current_proxy="$1"
+	local traffic_udp_path
+	traffic_udp_path="$(uci -q get openmptcprouter.settings.traffic_udp_path)"
+	[ "$traffic_udp_path" = "xray" ] || return 1
+	_is_ray_proxy "$current_proxy" && return 1
+	return 0
+}
+
+_apply_udp_force_xray_mode() {
+	local current_proxy="$1"
+	local xray_tracker_port ss_rules_reload
+
+	[ -n "$(uci -q get xray.main)" ] || return 0
+
+	if _is_udp_force_xray_mode "$current_proxy"; then
+		# Force UDP through XRay without changing the default TCP proxy.
+		uci -q set xray.main.enabled='1'
+		uci -q set xray.main_transparent_proxy.redirect_udp='1'
+
+		# Keep local tracker socks port conflict-free when Shadowsocks and XRay
+		# run at the same time.
+		if _is_shadow_proxy "$current_proxy"; then
+			xray_tracker_port="12111"
+		else
+			xray_tracker_port="1111"
+		fi
+		uci -q set xray.omrtest.port="$xray_tracker_port"
+
+		# Avoid dual UDP interception while force-xray mode is active.
+		ss_rules_reload=0
+		if [ -n "$(uci -q get shadowsocks-libev.ss_rules.redir_udp)" ]; then
+			uci -q delete shadowsocks-libev.ss_rules.redir_udp
+			uci -q commit shadowsocks-libev
+			ss_rules_reload=1
+		fi
+		if [ -n "$(uci -q get shadowsocks-rust.ss_rules.redir_udp)" ]; then
+			uci -q delete shadowsocks-rust.ss_rules.redir_udp
+			uci -q commit shadowsocks-rust
+			ss_rules_reload=1
+		fi
+		if [ "$ss_rules_reload" = "1" ]; then
+			/etc/init.d/shadowsocks-libev rules_down >/dev/null 2>&1
+			/etc/init.d/shadowsocks-libev rules_up >/dev/null 2>&1
+			/etc/init.d/shadowsocks-rust rules_down >/dev/null 2>&1
+			/etc/init.d/shadowsocks-rust rules_up >/dev/null 2>&1
+		fi
+	else
+		# Outside force mode, keep legacy behaviour for non-ray proxies.
+		_is_ray_proxy "$current_proxy" || {
+			uci -q set xray.omrtest.port='1111'
+			[ "$(uci -q get xray.main.enabled)" = "1" ] && uci -q set xray.main.enabled='0'
+		}
+	fi
+
+	if [ -n "$(uci -q changes xray)" ]; then
+		uci -q commit xray
+		if [ "$(uci -q get xray.main.enabled)" = "1" ]; then
+			/etc/init.d/xray restart >/dev/null 2>&1
+		else
+			/etc/init.d/xray rules_down >/dev/null 2>&1
+			/etc/init.d/xray stop >/dev/null 2>&1
+		fi
+	fi
+}
+
 _check_force_xray_pf_section() {
 	local section src enabled use_ray force_xray_pf
 	[ "$FORCE_XRAY_PF_NEEDED" = "1" ] && return
@@ -1112,6 +1187,7 @@ _apply_forced_xray_pf_rules_down() {
 	local current_proxy="$1"
 	_has_forced_xray_pf || return
 	_is_ray_proxy "$current_proxy" && return
+	_is_udp_force_xray_mode "$current_proxy" && return
 	[ -f /etc/init.d/xray ] || return
 	/etc/init.d/xray rules_down >/dev/null 2>&1
 }
@@ -1695,6 +1771,7 @@ _set_config_from_vps() {
 		fi
 	fi
 	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	_apply_udp_force_xray_mode "$current_proxy"
 	_apply_forced_xray_pf_mode "$current_proxy"
 	_apply_forced_xray_pf_rules_down "$current_proxy"
 
@@ -2421,6 +2498,8 @@ _config_service() {
 		_get_gre_tunnel
 		_get_vps_config
 	}
+	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	_apply_udp_force_xray_mode "$current_proxy"
 
 #	([ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]) && {
 #		_get_vps_config

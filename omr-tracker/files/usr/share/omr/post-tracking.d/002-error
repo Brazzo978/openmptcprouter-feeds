@@ -250,7 +250,7 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		else
 			_log "Default gateway disabled, no default gateway set"
 		fi
-		if [ "$(uci -q get openmptcprouter.settings.shadowsocksudp)" = "1" ] && [ "$(uci -q get shadowsocks-libev.sss0.disabled)" != "1" ] && [ "$(uci -q get openmptcprouter.omr.shadowsocks)" = "up" ] && [ "$(uci -q get shadowsocks-libev.ss_rules.redir_udp)" = "" ] && [ "$(uci -q get shadowsocks-libev.hi1.mode)" = "tcp_and_udp" ] && [ "$(uci -q get shadowsocks-libev.sss0.obfs)" != "1" ]; then
+		if [ "$(uci -q get openmptcprouter.settings.traffic_udp_path)" != "xray" ] && [ "$(uci -q get openmptcprouter.settings.shadowsocksudp)" = "1" ] && [ "$(uci -q get shadowsocks-libev.sss0.disabled)" != "1" ] && [ "$(uci -q get openmptcprouter.omr.shadowsocks)" = "up" ] && [ "$(uci -q get shadowsocks-libev.ss_rules.redir_udp)" = "" ] && [ "$(uci -q get shadowsocks-libev.hi1.mode)" = "tcp_and_udp" ] && [ "$(uci -q get shadowsocks-libev.sss0.obfs)" != "1" ]; then
 			_log "Tunnel down use ShadowSocks for UDP"
 			uci -q set shadowsocks-libev.ss_rules.redir_udp='hi1'
 			if /etc/init.d/shadowsocks-libev rules_exist ; then
