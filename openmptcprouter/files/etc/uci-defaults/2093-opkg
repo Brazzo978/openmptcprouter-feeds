@@ -1,37 +1,54 @@
 #!/bin/sh
 source /etc/os-release
+
+_normalize_feed_version() {
+	local v="$1"
+	local base kmajmin
+
+	base="$(echo "$v" | sed -nE 's/^([vV][0-9]+\.[0-9]+).*/\1/p')"
+	kmajmin="$(echo "$v" | sed -nE 's/.*-([0-9]+\.[0-9]+)$/\1/p')"
+	if [ -n "$base" ] && [ -n "$kmajmin" ]; then
+		# Custom builds like v0.62.2-3KTEST-6.6 should reuse stock feed
+		# layout v0.62-6.6 to keep package feeds reachable.
+		echo "${base}-${kmajmin}" | tr 'A-Z' 'a-z'
+	else
+		echo "$v" | tr 'A-Z' 'a-z'
+	fi
+}
+
 if [ "$ID" = "openmptcprouter" ]; then
+	FEED_VERSION="$(_normalize_feed_version "${VERSION_ID}")"
 	if [ -f /etc/opkg/customfeeds.conf ]; then
 		cat > "/etc/opkg/customfeeds.conf" <<-EOF
-		    src/gz openwrt_luci https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/luci
-		    src/gz openwrt_packages https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/packages
-		    src/gz openwrt_base https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/base
-		    src/gz openwrt_routing https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/routing
-		    src/gz openwrt_telephony https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/telephony
+		    src/gz openwrt_luci https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/luci
+		    src/gz openwrt_packages https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/packages
+		    src/gz openwrt_base https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/base
+		    src/gz openwrt_routing https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/routing
+		    src/gz openwrt_telephony https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/telephony
 		EOF
 		TARGET="$(cat /etc/banner | awk '/TARGET/ {print $2}')"
 		cat > "/etc/opkg/distfeeds.conf" <<-EOF
-		    src/gz openmptcprouter_core https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/targets/${OPENWRT_BOARD}/packages
-		    src/gz openmptcprouter_base https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/base
-		    src/gz openmptcprouter_luci https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/luci
-		    src/gz openmptcprouter_openmptcprouter https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/openmptcprouter
-		    src/gz openmptcprouter_packages https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/packages
+		    src/gz openmptcprouter_core https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/targets/${OPENWRT_BOARD}/packages
+		    src/gz openmptcprouter_base https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/base
+		    src/gz openmptcprouter_luci https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/luci
+		    src/gz openmptcprouter_openmptcprouter https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/openmptcprouter
+		    src/gz openmptcprouter_packages https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/packages
 		EOF
 	elif [ -f /etc/apk/repositories.d/distfeeds.list ]; then
 		cat > "/etc/apk/repositories.d/customfeeds.list" <<-EOF
-		    https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/luci/packages.adb
-		    https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/packages/packages.adb
-		    https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/base/packages.adb
-		    https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/routing/packages.adb
-		    https://packages.openmptcprouter.com/${VERSION_ID}/${OPENWRT_ARCH}/telephony/packages.adb
+		    https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/luci/packages.adb
+		    https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/packages/packages.adb
+		    https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/base/packages.adb
+		    https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/routing/packages.adb
+		    https://packages.openmptcprouter.com/${FEED_VERSION}/${OPENWRT_ARCH}/telephony/packages.adb
 		EOF
 		TARGET="$(cat /etc/banner | awk '/TARGET/ {print $2}')"
 		cat > "/etc/apk/repositories.d/distfeeds.list" <<-EOF
-		    https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/targets/${OPENWRT_BOARD}/packages/packages.adb
-		    https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/base/packages.adb
-		    https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/luci/packages.adb
-		    https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/openmptcprouter/packages.adb
-		    https://download.openmptcprouter.com/release/${VERSION_ID}/${TARGET}/packages/${OPENWRT_ARCH}/packages/packages.adb
+		    https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/targets/${OPENWRT_BOARD}/packages/packages.adb
+		    https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/base/packages.adb
+		    https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/luci/packages.adb
+		    https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/openmptcprouter/packages.adb
+		    https://download.openmptcprouter.com/release/${FEED_VERSION}/${TARGET}/packages/${OPENWRT_ARCH}/packages/packages.adb
 		EOF
 	fi
 fi

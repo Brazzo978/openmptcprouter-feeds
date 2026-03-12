@@ -1100,9 +1100,12 @@ _is_udp_force_xray_mode() {
 
 _apply_udp_force_xray_mode() {
 	local current_proxy="$1"
-	local xray_tracker_port ss_rules_reload
+	local xray_tracker_port ss_rules_reload force_xray_pf_needed
 
 	[ -n "$(uci -q get xray.main)" ] || return 0
+
+	force_xray_pf_needed=0
+	_has_forced_xray_pf && force_xray_pf_needed=1
 
 	if _is_udp_force_xray_mode "$current_proxy"; then
 		# Force UDP through XRay without changing the default TCP proxy.
@@ -1135,6 +1138,15 @@ _apply_udp_force_xray_mode() {
 			/etc/init.d/shadowsocks-libev rules_up >/dev/null 2>&1
 			/etc/init.d/shadowsocks-rust rules_down >/dev/null 2>&1
 			/etc/init.d/shadowsocks-rust rules_up >/dev/null 2>&1
+		fi
+	elif [ "$force_xray_pf_needed" = "1" ] && ! _is_ray_proxy "$current_proxy"; then
+		# Keep local xray up when PF is forced through xray on VPS:
+		# reverse bridge still needs local xray, even if UDP force is disabled.
+		uci -q set xray.main.enabled='1'
+		if _is_shadow_proxy "$current_proxy"; then
+			uci -q set xray.omrtest.port='12111'
+		else
+			uci -q set xray.omrtest.port='1111'
 		fi
 	else
 		# Outside force mode, keep legacy behaviour for non-ray proxies.
