@@ -1266,18 +1266,22 @@ function wizard_add()
 	--ucic:set("openmptcprouter","vps","username","openmptcprouter")
 	--ucic:set("openmptcprouter","vps","password",openmptcprouter_vps_key)
 	--ucic:set("openmptcprouter","vps","get_config","1")
-	local traffic_tcp_path = luci.http.formvalue("traffic_tcp_path") or "default"
-	local traffic_udp_path = luci.http.formvalue("traffic_udp_path") or "default"
-	local traffic_icmp_path = luci.http.formvalue("traffic_icmp_path") or "default"
+	local traffic_tcp_path = luci.http.formvalue("traffic_tcp_path") or "auto"
+	local traffic_udp_path = luci.http.formvalue("traffic_udp_path") or "auto"
+	local traffic_icmp_path = luci.http.formvalue("traffic_icmp_path") or "auto"
 
-	if traffic_tcp_path ~= "default" and traffic_tcp_path ~= "proxy" and traffic_tcp_path ~= "xray" and traffic_tcp_path ~= "shadowsocks" and traffic_tcp_path ~= "vpn" and traffic_tcp_path ~= "none" then
-		traffic_tcp_path = "default"
+	if traffic_tcp_path == "default" then traffic_tcp_path = "auto" end
+	if traffic_udp_path == "default" then traffic_udp_path = "auto" end
+	if traffic_icmp_path == "default" then traffic_icmp_path = "auto" end
+
+	if traffic_tcp_path ~= "auto" and traffic_tcp_path ~= "proxy" and traffic_tcp_path ~= "vpn" and traffic_tcp_path ~= "none" then
+		traffic_tcp_path = "auto"
 	end
-	if traffic_udp_path ~= "default" and traffic_udp_path ~= "proxy" and traffic_udp_path ~= "xray" and traffic_udp_path ~= "shadowsocks" and traffic_udp_path ~= "vpn" and traffic_udp_path ~= "none" then
-		traffic_udp_path = "default"
+	if traffic_udp_path ~= "auto" and traffic_udp_path ~= "xray" and traffic_udp_path ~= "shadowsocks" and traffic_udp_path ~= "vpn" and traffic_udp_path ~= "none" then
+		traffic_udp_path = "auto"
 	end
-	if traffic_icmp_path ~= "default" and traffic_icmp_path ~= "proxy" and traffic_icmp_path ~= "xray" and traffic_icmp_path ~= "vpn" and traffic_icmp_path ~= "none" then
-		traffic_icmp_path = "default"
+	if traffic_icmp_path ~= "auto" and traffic_icmp_path ~= "vpn" and traffic_icmp_path ~= "none" then
+		traffic_icmp_path = "auto"
 	end
 
 	ucic:set("openmptcprouter","settings","shadowsocks_disable",shadowsocks_disable)
