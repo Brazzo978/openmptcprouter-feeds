@@ -1103,13 +1103,9 @@ _apply_forced_xray_pf_mode() {
 	local current_proxy="$1"
 	_has_forced_xray_pf || return
 	_is_ray_proxy "$current_proxy" && return
-	if [ "$(uci -q get xray.main.enabled)" != "1" ]; then
-		logger -t "OMR-VPS" "Enable XRay backend for forced port forwarding rules"
-		uci -q batch <<-EOF >/dev/null
-			set xray.main.enabled=1
-			commit xray
-		EOF
-	fi
+	# force_xray_pf is a VPS-side forwarding mode only; do not force-enable
+	# the local client xray service to avoid clashes with other local proxy ports.
+	return 0
 }
 
 _apply_forced_xray_pf_rules_down() {
@@ -1158,14 +1154,14 @@ _vps_firewall_redirect_port() {
 	fi
 	xray="$v2ray"
 	force_xray_pf_selected="0"
-	if [ "$v2ray" = "1" ] && [ "$force_xray_pf" = "1" ] && [ "$(uci -q get xray.main.enabled)" = "1" ]; then
+	if [ "$v2ray" = "1" ] && [ "$force_xray_pf" = "1" ]; then
 		v2ray="0"
 		xray="1"
 		force_xray_pf_selected="1"
 	fi
 	([ "$(uci -q get v2ray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.v2ray)" = "down" ]) && v2ray="0"
 	if [ "$force_xray_pf_selected" = "1" ]; then
-		([ "$(uci -q get xray.main.enabled)" != "1" ]) && xray="0"
+		: # forced xray_pf ignores local xray state
 	else
 		([ "$(uci -q get xray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.xray)" = "down" ]) && xray="0"
 	fi
