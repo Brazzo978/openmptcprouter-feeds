@@ -1143,6 +1143,8 @@ _apply_udp_force_xray_mode() {
 		# Keep local xray up when PF is forced through xray on VPS:
 		# reverse bridge still needs local xray, even if UDP force is disabled.
 		uci -q set xray.main.enabled='1'
+		# PF-only force must not keep transparent UDP interception enabled.
+		uci -q set xray.main_transparent_proxy.redirect_udp='0'
 		if _is_shadow_proxy "$current_proxy"; then
 			uci -q set xray.omrtest.port='12111'
 		else
@@ -1152,6 +1154,7 @@ _apply_udp_force_xray_mode() {
 		# Outside force mode, keep legacy behaviour for non-ray proxies.
 		_is_ray_proxy "$current_proxy" || {
 			uci -q set xray.omrtest.port='1111'
+			uci -q set xray.main_transparent_proxy.redirect_udp='0'
 			[ "$(uci -q get xray.main.enabled)" = "1" ] && uci -q set xray.main.enabled='0'
 		}
 	fi
