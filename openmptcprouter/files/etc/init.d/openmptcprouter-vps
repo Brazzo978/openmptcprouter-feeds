@@ -1499,6 +1499,7 @@ _vps_firewall_close_port() {
 
 _set_vps_firewall() {
 	current_proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	_apply_udp_force_xray_mode "$current_proxy"
 	_apply_forced_xray_pf_mode "$current_proxy"
 	_apply_forced_xray_pf_rules_down "$current_proxy"
 	fw3 -q print | grep 'vpn.* -d' |
