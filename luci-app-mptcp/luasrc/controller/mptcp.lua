@@ -29,42 +29,61 @@ function index()
 	entry({"admin", "network", "mptcp", "mptcp_monitor_data"}, post("mptcp_monitor_data")).leaf = true
 end
 
+local function parse_bwc_output(raw)
+	local jsonc = require "luci.jsonc"
+	local rows = {}
+
+	raw = raw or ""
+	raw = raw:gsub("[%r\n]+", "")
+	raw = raw:gsub("%]%s*,?%s*%[", "],[")
+	raw = raw:gsub(",%s*$", "")
+
+	if raw == "" then
+		return rows
+	end
+
+	local candidates = {}
+	if raw:sub(1, 2) == "[[" then
+		candidates[#candidates + 1] = raw
+	end
+	candidates[#candidates + 1] = "[" .. raw .. "]"
+
+	for _, candidate in ipairs(candidates) do
+		local ok, parsed = pcall(jsonc.parse, candidate)
+		if ok and type(parsed) == "table" then
+			for _, row in ipairs(parsed) do
+				if type(row) == "table" and #row >= 5 then
+					local clean = {
+						tonumber(row[1]) or 0,
+						tonumber(row[2]) or 0,
+						tonumber(row[3]) or 0,
+						tonumber(row[4]) or 0,
+						tonumber(row[5]) or 0
+					}
+					if clean[1] > 0 then
+						rows[#rows + 1] = clean
+					end
+				end
+			end
+			table.sort(rows, function(a, b) return a[1] < b[1] end)
+			return rows
+		end
+	end
+
+	return rows
+end
+
 function interface_bandwidth(iface)
 	luci.http.prepare_content("application/json")
-	local bwc = io.popen("luci-bwc -i %q 2>/dev/null" % iface)
-	if bwc then
-		luci.http.write("[")
-		while true do
-			local ln = bwc:read("*l")
-			if not ln then break end
-			luci.http.write(ln)
-		end
-		luci.http.write("]")
-		bwc:close()
-	end
+	local raw = luci.sys.exec("luci-bwc -i %q 2>/dev/null" % iface) or ""
+	luci.http.write_json(parse_bwc_output(raw))
 end
 
-
-function string.split(input, delimiter)
-	input = tostring(input)
-	delimiter = tostring(delimiter)
-	if (delimiter=='') then return false end
-	local pos,arr = 0, {}
-	-- for each divider found
-	for st,sp in function() return string.find(input, delimiter, pos, true) end do
-		table.insert(arr, string.sub(input, pos, st - 1))
-		pos = sp + 1
-	end
-	table.insert(arr, string.sub(input, pos))
-	return arr
-end
 
 function multipath_bandwidth()
-	local result = { };
+	local result = { }
+	local total_by_time = { }
 	local uci = luci.model.uci.cursor()
-	local res={ };
-	local str="";
-	local tmpstr="";
 
 	uci:foreach("network", "interface", function(s)
 		local intname = s[".name"]
@@ -76,6 +95,7 @@ function multipath_bandwidth()
 				dev = get_device(s["ifname"])
 			end
 		end
+
 		local multipath = s["multipath"] or ""
 		if dev ~= "lo" and dev ~= "" then
 			if multipath == "" then
@@ -85,91 +105,40 @@ function multipath_bandwidth()
 				multipath = "off"
 			end
 			if multipath == "on" or multipath == "master" or multipath == "backup" or multipath == "handover" then
-				local bwc = luci.sys.exec("luci-bwc -i %q 2>/dev/null" % dev) or ""
-				if bwc ~= nil then
-					--result[dev] = "[" .. string.gsub(bwc, '[\r\n]', '') .. "]"
-					if label ~= nil then
-						result[intname .. " (" .. label .. ")" ] = "[" .. string.gsub(bwc, '[\r\n]', '') .. "]"
-					else
-						result[intname] = "[" .. string.gsub(bwc, '[\r\n]', '') .. "]"
+				local rows = parse_bwc_output(luci.sys.exec("luci-bwc -i %q 2>/dev/null" % dev) or "")
+				local key = label and (intname .. " (" .. label .. ")") or intname
+				result[key] = rows
+
+				for _, row in ipairs(rows) do
+					local t = row[1]
+					if not total_by_time[t] then
+						total_by_time[t] = { t, 0, 0, 0, 0 }
 					end
-				else
-					if label ~= nil then
-						result[intname .. " (" .. label .. ")" ] = "[]"
-					else
-						result[intname] = "[]"
-					end
+					total_by_time[t][2] = total_by_time[t][2] + row[2]
+					total_by_time[t][3] = total_by_time[t][3] + row[3]
+					total_by_time[t][4] = total_by_time[t][4] + row[4]
+					total_by_time[t][5] = total_by_time[t][5] + row[5]
 				end
 			end
 		end
 	end)
 
-	res["total"]={ };
-	for i=1,60 do
-		res["total"][i]={}
-		for j=1,5 do
-			res["total"][i][j]=0
-		end
+	result["total"] = {}
+	for _, row in pairs(total_by_time) do
+		result["total"][#result["total"] + 1] = row
 	end
-
-	for key,value in pairs(result) do
-		res[key]={}
-		value=(string.gsub(value, "^%[%[", ""))
-		value=(string.gsub(value, "%]%]", ""))
-		local temp1 = string.split(value, "],")
-		if temp1[2] ~= nil then
-			res[key][1]=temp1[1]
-			for i=2,60 do
-				res[key][i]={}
-				if temp1[i] ~= nil then
-					res[key][i]=(string.gsub(temp1[i], "%[", " "))
-				end
-			end
-			for i=1,60 do
-				res[key][i] = string.split(res[key][i], ",")
-				for j=1,5 do
-					res[key][i][j]= tonumber(res[key][i][j])
-					res["total"][i][j]= tonumber(res["total"][i][j])
-					if j ==1 then
-						if res[key][i][j] ~= nil and res[key][i][j] > 0 then
-							res["total"][i][j] = res[key][i][j]
-						else
-							res["total"][i][j] = 0
-						end
-					else
-						if res[key][i][j] ~= nil and res[key][i][j] > 0 then
-							res["total"][i][j] = res["total"][i][j] + res[key][i][j]
-						end
-					end
-				end
-			end
-		end
-	end
-	for i=1,60 do
-		for j=1,5 do
-			if "number"== type(res["total"][i][j]) then
-				res["total"][i][j]= tostring(res["total"][i][j])
-			end
-		end
-	end
-	for i=1,60 do
-		if i == 60 then
-			tmpstr = "["..table.concat(res["total"][i], ",")
-		else
-			tmpstr = "["..table.concat(res["total"][i], ",").."],"
-		end
-		str  = str..tmpstr
-	end
-	str  = "["..str.."]]"
-	result["total"]=str
+	table.sort(result["total"], function(a, b) return a[1] < b[1] end)
 
 	luci.http.prepare_content("application/json")
 	luci.http.write_json(result)
 end
 
 function get_device(interface)
+	if not interface or interface == "" then
+		return ""
+	end
 	local dump = require("luci.util").ubus("network.interface.%s" % interface, "status", {})
-	if dump then
+	if dump and dump['l3_device'] then
 		return dump['l3_device']
 	else
 		return ""
