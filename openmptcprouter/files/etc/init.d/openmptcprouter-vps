@@ -221,6 +221,29 @@ _set_mlvpn_vps() {
 	fi
 }
 
+_set_mqvpn_vps() {
+	local enabled key port scheduler current_key current_port current_scheduler
+	enabled="$(uci -q get mqvpn.vpn.enable)"
+	[ "$enabled" != "1" ] && echo "MQVPN disabled" && return
+	key="$(uci -q get mqvpn.vpn.key)"
+	port="$(uci -q get mqvpn.vpn.port)"
+	scheduler="$(uci -q get mqvpn.vpn.scheduler)"
+	[ -z "$port" ] && port="65411"
+	[ -z "$scheduler" ] && scheduler="wlb"
+	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
+	[ -z "$vps_config" ] && return
+	current_key="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.key')"
+	current_port="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	current_scheduler="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.scheduler')"
+	if [ "$current_key" != "$key" ] || [ "$current_port" != "$port" ] || [ "$current_scheduler" != "$scheduler" ]; then
+		local settings
+		settings='{"key": "'$key'", "port": '$port', "scheduler": "'$scheduler'"}'
+		echo $(_set_json "mqvpn" "$settings")
+	else
+		echo 1
+	fi
+}
+
 _set_wireguard_vps() {
 	local enabled port key
 	ipskey=""
@@ -632,6 +655,16 @@ _get_vps_config() {
 		if [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
 			logger -t "OMR-VPS" "Restart MLVPN..."
 			/etc/init.d/mlvpn restart
+		fi
+	fi
+	if [ -n "$(uci -q get mqvpn.vpn)" ] && [ "$(uci -q get mqvpn.vpn.host)" != "127.0.0.1" ] && [ "$(uci -q get mqvpn.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ] && [ -f /etc/init.d/mqvpn ]; then
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.vpn.host="$vpsip"
+			commit mqvpn
+		EOF
+		if [ "$(uci -q get mqvpn.vpn.enable)" = "1" ]; then
+			logger -t "OMR-VPS" "Restart MQVPN..."
+			/etc/init.d/mqvpn restart
 		fi
 	fi
 	if [ -n "$(uci -q get glorytun.vpn)" ] && [ "$(uci -q get glorytun.vpn.host)" != "127.0.0.1" ] && [ "$(uci -q get glorytun.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
@@ -1116,6 +1149,182 @@ _apply_forced_xray_pf_rules_down() {
 	/etc/init.d/xray rules_down >/dev/null 2>&1
 }
 
+XRAY_RPF_PORT="65443"
+XRAY_RPF_CONFIG="/etc/xray/omr-rpf.json"
+XRAY_RPF_READY=0
+XRAY_RPF_RULES_TMP=""
+XRAY_RPF_RULES_COUNT=0
+
+_xray_rpf_cidr() {
+	case "$1" in
+		*/*) echo "$1" ;;
+		*:*) echo "$1/128" ;;
+		*) echo "$1/32" ;;
+	esac
+}
+
+_xray_rpf_collect_rule() {
+	local section src enabled use_ray force_xray_pf proto src_dport dest_ip dest_port dmz target family protoi dest_cidr
+	section="$1"
+	config_get src "$section" src
+	config_get enabled "$section" enabled "1"
+	config_get use_ray "$section" v2ray "0"
+	config_get force_xray_pf "$section" force_xray_pf "0"
+	config_get proto "$section" proto "tcp udp"
+	config_get src_dport "$section" src_dport
+	config_get dest_ip "$section" dest_ip
+	config_get dest_port "$section" dest_port
+	config_get dmz "$section" dmz "0"
+	config_get target "$section" target "REDIRECT"
+	config_get family "$section" family "ipv4"
+
+	[ "$src" = "vpn" ] || return
+	[ "$enabled" != "0" ] || return
+	[ "$use_ray" = "1" ] || return
+	[ "$force_xray_pf" = "1" ] || return
+	[ "$family" = "ipv4" ] || return
+	[ "$target" = "MARK" ] && return
+	[ "$target" = "DSCP" ] && return
+	[ "$dmz" = "1" ] && return
+	[ -n "$src_dport" ] || src_dport="$dest_port"
+	[ -n "$dest_port" ] || dest_port="$src_dport"
+	[ -n "$src_dport" ] || return
+	[ -n "$dest_ip" ] || return
+	echo "$src_dport" | grep -qE '^[0-9]+$' || return
+	echo "$dest_port" | grep -qE '^[0-9]+$' || return
+	[ "$src_dport" -lt 65000 ] || return
+	case "$dest_ip" in
+		*:*) return ;;
+	esac
+	case "$dest_ip" in
+		*[!0-9a-fA-F:.]*) return ;;
+	esac
+	[ "$proto" = "all" ] && proto="tcp udp"
+	[ -n "$proto" ] || proto="tcp udp"
+
+	for protoi in $proto; do
+		[ "$protoi" = "tcp" ] || continue
+		dest_cidr="$(_xray_rpf_cidr "$dest_ip")"
+		[ "$XRAY_RPF_RULES_COUNT" -gt 0 ] && printf ',\n' >> "$XRAY_RPF_RULES_TMP"
+		printf '          { "action": "allow", "network": "tcp", "ip": ["%s"], "port": "%s" }' "$dest_cidr" "$dest_port" >> "$XRAY_RPF_RULES_TMP"
+		XRAY_RPF_RULES_COUNT=$((XRAY_RPF_RULES_COUNT + 1))
+	done
+}
+
+_xray_rpf_disable_client() {
+	local was_enabled
+	was_enabled="$(uci -q get xray.rpf.enabled)"
+	uci -q delete xray.rpf
+	uci -q commit xray
+	rm -f "$XRAY_RPF_CONFIG"
+	[ "$was_enabled" = "1" ] && [ -x /etc/init.d/xray ] && /etc/init.d/xray restart >/dev/null 2>&1
+}
+
+_xray_rpf_sync_client() {
+	local rpf_uuid rpf_server tmp_config tmp_config_base oldsum newsum
+	XRAY_RPF_READY=0
+	[ -x /usr/bin/xray ] || return
+	[ -x /etc/init.d/xray ] || return
+
+	rpf_uuid="$(uci -q get xray.omrout.s_vless_user_id)"
+	[ -n "$rpf_uuid" ] || rpf_uuid="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
+	rpf_server="$server"
+	[ -n "$rpf_server" ] || rpf_server="$(uci -q get xray.omrout.s_vless_address)"
+	[ -n "$rpf_uuid" ] || return
+	[ -n "$rpf_server" ] || return
+
+	XRAY_RPF_RULES_TMP="$(mktemp /tmp/omr-xray-rpf-rules.XXXXXX)" || return
+	XRAY_RPF_RULES_COUNT=0
+	: > "$XRAY_RPF_RULES_TMP"
+	config_foreach _xray_rpf_collect_rule redirect
+	config_foreach _xray_rpf_collect_rule rule
+
+	if [ "$XRAY_RPF_RULES_COUNT" -eq 0 ]; then
+		rm -f "$XRAY_RPF_RULES_TMP"
+		_xray_rpf_disable_client
+		return
+	fi
+
+	tmp_config_base="$(mktemp /tmp/omr-xray-rpf-config.XXXXXX)" || {
+		rm -f "$XRAY_RPF_RULES_TMP"
+		return
+	}
+	tmp_config="${tmp_config_base}.json"
+	rm -f "$tmp_config_base"
+	mkdir -p /etc/xray
+	cat > "$tmp_config" <<-EOF
+	{
+	  "log": { "loglevel": "warning", "access": "/dev/null", "error": "/dev/null" },
+	  "routing": {
+	    "rules": [
+	      { "type": "field", "inboundTag": ["omr-rpf-reverse-in"], "outboundTag": "omr-rpf-lan-direct" }
+	    ]
+	  },
+	  "outbounds": [
+	    {
+	      "tag": "omr-rpf-lan-direct",
+	      "protocol": "freedom",
+	      "settings": {
+	        "finalRules": [
+	$(cat "$XRAY_RPF_RULES_TMP"),
+	          { "action": "block" }
+	        ]
+	      }
+	    },
+	    {
+	      "tag": "omr-rpf-dialer",
+	      "protocol": "vless",
+	      "settings": {
+	        "vnext": [
+	          {
+	            "address": "$rpf_server",
+	            "port": $XRAY_RPF_PORT,
+	            "users": [
+	              {
+	                "id": "$rpf_uuid",
+	                "encryption": "none",
+	                "reverse": { "tag": "omr-rpf-reverse-in" }
+	              }
+	            ]
+	          }
+	        ]
+	      },
+	      "streamSettings": {
+	        "network": "tcp",
+	        "sockopt": { "tcpMptcp": true, "mark": 0 }
+	      }
+	    }
+	  ]
+	}
+	EOF
+	rm -f "$XRAY_RPF_RULES_TMP"
+
+	if ! /usr/bin/xray run -test -config "$tmp_config" >/tmp/omr-xray-rpf-test.log 2>&1; then
+		logger -t "OMR-VPS" "XRay RPF config validation failed; forced XRay port forwards not applied"
+		rm -f "$tmp_config"
+		return
+	fi
+
+	oldsum="$(md5sum "$XRAY_RPF_CONFIG" 2>/dev/null | awk '{print $1}')"
+	newsum="$(md5sum "$tmp_config" | awk '{print $1}')"
+	if [ "$oldsum" != "$newsum" ] || [ "$(uci -q get xray.rpf.enabled)" != "1" ]; then
+		mv "$tmp_config" "$XRAY_RPF_CONFIG"
+		uci -q batch <<-EOF >/dev/null
+			set xray.rpf='xray'
+			set xray.rpf.enabled='1'
+			set xray.rpf.xray_file='/usr/bin/xray'
+			set xray.rpf.config_file='$XRAY_RPF_CONFIG'
+			set xray.rpf.mem_percentage='0'
+			commit xray
+		EOF
+		/etc/init.d/xray enable >/dev/null 2>&1
+		/etc/init.d/xray restart >/dev/null 2>&1
+	else
+		rm -f "$tmp_config"
+	fi
+	XRAY_RPF_READY=1
+}
+
 _vps_firewall_redirect_port() {
 	local src proto src_dport section
 	section=$1
@@ -1159,6 +1368,23 @@ _vps_firewall_redirect_port() {
 		xray="1"
 		force_xray_pf_selected="1"
 	fi
+	[ "$force_xray_pf_selected" = "1" ] && [ "$family" != "ipv4" ] && return
+	if [ "$force_xray_pf_selected" = "1" ]; then
+		case "$src_dport" in
+			*[!0-9]*)
+				logger -t "OMR-VPS" "Force XRay port forwarding supports only one TCP source port; invalid source port '$src_dport'"
+				return
+				;;
+		esac
+		if [ -n "$dest_port" ]; then
+			case "$dest_port" in
+				*[!0-9]*)
+					logger -t "OMR-VPS" "Force XRay port forwarding supports only one TCP destination port; invalid destination port '$dest_port'"
+					return
+					;;
+			esac
+		fi
+	fi
 	([ "$(uci -q get v2ray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.v2ray)" = "down" ]) && v2ray="0"
 	if [ "$force_xray_pf_selected" = "1" ]; then
 		: # forced xray_pf ignores local xray state
@@ -1166,10 +1392,19 @@ _vps_firewall_redirect_port() {
 		([ "$(uci -q get xray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.xray)" = "down" ]) && xray="0"
 	fi
 	[ "$proto" = "all" ] && proto="tcp udp"
-	[ "$proto" = "" ] && proto="tcp udp"
-	[ "$src" = "vpn" ] && [ -n "$proto" ] && [ -n "$src_dport" ] && [ "$enabled" != "0" ] && [ "$name" != "Allow-DHCP-Request-VPN" ] && {
-		for protoi in $proto; do
-			if [ "$v2ray" = "0" ] && [ "$xray" = "0" ]; then
+		[ "$proto" = "" ] && proto="tcp udp"
+		[ "$src" = "vpn" ] && [ -n "$proto" ] && [ -n "$src_dport" ] && [ "$enabled" != "0" ] && [ "$name" != "Allow-DHCP-Request-VPN" ] && {
+			for protoi in $proto; do
+				proto_force_xray_pf_selected="$force_xray_pf_selected"
+				proto_v2ray="$v2ray"
+				proto_xray="$xray"
+				if [ "$force_xray_pf_selected" = "1" ] && [ "$protoi" != "tcp" ]; then
+					proto_force_xray_pf_selected="0"
+					proto_v2ray="0"
+					proto_xray="0"
+				fi
+				[ "$proto_force_xray_pf_selected" = "1" ] && [ "$XRAY_RPF_READY" != "1" ] && continue
+				if [ "$proto_v2ray" = "0" ] && [ "$proto_xray" = "0" ]; then
 				checkfw=""
 				if [ "$family" = "ipv4" ]; then
 					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
@@ -1217,10 +1452,10 @@ _vps_firewall_redirect_port() {
 						fi
 					fi
 				fi
-				if [ "$checkfw" = "" ]; then
-					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'$protoi'","fwtype" : "'$target'","ipproto" : "'$family'"}'
-					result=$(_set_json "shorewallopen" "$settings")
-				fi
+					if [ "$checkfw" = "" ]; then
+						settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","dest_port" : "'$dest_port'","proto" : "'$protoi'","fwtype" : "'$target'","ipproto" : "'$family'"}'
+						result=$(_set_json "shorewallopen" "$settings")
+					fi
 				if [ "$family" = "ipv4" ]; then
 					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
 						if [ "$target" = "ACCEPT" ]; then
@@ -1264,11 +1499,17 @@ _vps_firewall_redirect_port() {
 					fi
 				fi
 			else
-				checkfw=""
-				if [ "$family" = "ipv4" ]; then
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- XRay to ${dest_ip}:${dest_port}")
+				xray_comment="XRay to ${dest_ip}:${dest_port}"
+				xray_route="xrayredirect"
+					[ "$proto_force_xray_pf_selected" = "1" ] && {
+						xray_comment="XRay RPF to ${dest_ip}:${dest_port}"
+						xray_route="xrayrpfredirect"
+					}
+					checkfw=""
+					if [ "$family" = "ipv4" ]; then
+						if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
+							[ "$proto_v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- V2Ray to ${dest_ip}:${dest_port}")
+							[ "$proto_xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "$src_dport	# OMR $username open router $src_dport port $protoi --- ${xray_comment}")
 					else
 						comment=""
 						[ -n "$src_dip" ] && {
@@ -1288,58 +1529,58 @@ _vps_firewall_redirect_port() {
 							}
 						}
 						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}")
-					fi
-				else
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}")
+							[ "$proto_v2ray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
+							[ "$proto_xray" = "1" ] && checkfw=$(echo "$vpsfwlist" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- ${xray_comment}")
+						fi
 					else
-						comment=""
-						[ -n "$src_dip" ] && comment=" to $src_dip"
-						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
-						[ "$xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}")
+						if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
+							[ "$proto_v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}")
+							[ "$proto_xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "$src_dport	# OMR $username open router $src_dport port ${protoi} --- ${xray_comment}")
+						else
+							comment=""
+							[ -n "$src_dip" ] && comment=" to $src_dip"
+							[ -n "$src_ip" ] && comment=" from $src_ip"
+							[ "$proto_v2ray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}")
+							[ "$proto_xray" = "1" ] && checkfw=$(echo "$vpsfw6list" | grep "# OMR $username open router $src_dport port ${protoi}${comment} --- ${xray_comment}")
+						fi
 					fi
-				fi
-				if [ "$checkfw" = "" ]; then
-					[ "$v2ray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "V2Ray to '${dest_ip}':'${dest_port}'"}'
-					[ "$xray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "XRay to '${dest_ip}':'${dest_port}'"}'
-					result=$(_set_json "shorewallopen" "$settings")
-					[ -z "$dest_port" ] && dest_port="$src_dport"
-					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","destip" : "'$dest_ip'","destport" : "'$dest_port'","proto" : "'${protoi}'"}'
-					[ "$v2ray" = "1" ] && result=$(_set_json "v2rayredirect" "$settings")
-					[ "$xray" = "1" ] && result=$(_set_json "xrayredirect" "$settings")
-				fi
-				if [ "$family" = "ipv4" ]; then
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
+						if [ "$checkfw" = "" ]; then
+							[ "$proto_v2ray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "V2Ray to '${dest_ip}':'${dest_port}'"}'
+							[ "$proto_xray" = "1" ] && settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","source_dip" : "'$src_dip'","source_ip" : "'$src_ip'","proto" : "'${protoi}'","fwtype" : "ACCEPT","ipproto" : "'$family'","comment" : "'$xray_comment'"}'
+							result=$(_set_json "shorewallopen" "$settings")
+							[ -z "$dest_port" ] && dest_port="$src_dport"
+							settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","destip" : "'$dest_ip'","destport" : "'$dest_port'","proto" : "'${protoi}'"}'
+							[ "$proto_v2ray" = "1" ] && result=$(_set_json "v2rayredirect" "$settings")
+							[ "$proto_xray" = "1" ] && result=$(_set_json "$xray_route" "$settings")
+						fi
+					if [ "$family" = "ipv4" ]; then
+						if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
+							[ "$proto_v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- ${xray_comment}$")
+							[ "$proto_v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- ${xray_comment}$")
+						else
+							comment=""
+							[ -n "$src_dip" ] && comment=" to $src_dip"
+							[ -n "$src_ip" ] && comment=" from $src_ip"
+							[ "$proto_v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- ${xray_comment}$")
+							[ "$proto_v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- ${xray_comment}$")
+						fi
 					else
-						comment=""
-						[ -n "$src_dip" ] && comment=" to $src_dip"
-						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfwlist=$(echo "$vpsfwlist" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
-					fi
-				else
-					if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
-						[ "$v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- XRay to ${dest_ip}:${dest_port}$")
-					else
-						[ -n "$src_dip" ] && comment=" to $src_dip"
-						[ -n "$src_ip" ] && comment=" from $src_ip"
-						[ "$v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
-						[ "$v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
-						[ "$xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- XRay to ${dest_ip}:${dest_port}$")
+						if [ "$src_dip" = "" ] && [ "$src_ip" = "" ]; then
+							[ "$proto_v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR $username open router $src_dport port ${protoi} --- ${xray_comment}$")
+							[ "$proto_v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "$src_dport	# OMR open router $src_dport port ${protoi} --- ${xray_comment}$")
+						else
+							[ -n "$src_dip" ] && comment=" to $src_dip"
+							[ -n "$src_ip" ] && comment=" from $src_ip"
+							[ "$proto_v2ray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR $username open router $src_dport port ${protoi}${comment} --- ${xray_comment}$")
+							[ "$proto_v2ray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- V2Ray to ${dest_ip}:${dest_port}$")
+							[ "$proto_xray" = "1" ] && [ "$username" = "openmptcprouter" ] && vpsfw6list=$(echo "$vpsfw6list" | grep -v "# OMR open router $src_dport port ${protoi}${comment} --- ${xray_comment}$")
 					fi
 				fi
 			fi
@@ -1367,13 +1608,15 @@ _vps_firewall_close_port() {
 					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","fwtype" : "DNAT","comment" : "'$comment'"}'
 				fi
 				result=$(_set_json "shorewallclose" "$settings")
-				[ "$type" = "ACCEPT" ] && {
-					destip=$(echo $comment | awk '{print $3}' | awk -F: '{print $1}')
-					destport=$(echo $comment | awk '{print $3}' | awk -F: '{print $2}')
-					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","destip" : "'$destip'","destport": "'$destport'"}'
-					result=$(_set_json "v2rayunredirect" "$settings")
-					result=$(_set_json "xrayunredirect" "$settings")
-				}
+					[ "$type" = "ACCEPT" ] && {
+						destspec=$(echo "$comment" | sed -n 's/^.* to //p')
+						destip=$(echo $destspec | awk -F: '{print $1}')
+						destport=$(echo $destspec | awk -F: '{print $2}')
+						settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","destip" : "'$destip'","destport": "'$destport'"}'
+						result=$(_set_json "v2rayunredirect" "$settings")
+						result=$(_set_json "xrayunredirect" "$settings")
+						result=$(_set_json "xrayrpfunredirect" "$settings")
+					}
 			}
 		done
 	}
@@ -1396,11 +1639,12 @@ _vps_firewall_close_port() {
 					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","fwtype" : "DNAT","ipproto" : "ipv6","comment" : "'$comment'"}'
 				fi
 				result=$(_set_json "shorewallclose" "$settings")
-				[ "$type" = "ACCEPT" ] && {
-					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","comment" : "'$comment'"}'
-					result=$(_set_json "v2rayunredirect" "$settings")
-					result=$(_set_json "xrayunredirect" "$settings")
-				}
+					[ "$type" = "ACCEPT" ] && {
+						settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","comment" : "'$comment'"}'
+						result=$(_set_json "v2rayunredirect" "$settings")
+						result=$(_set_json "xrayunredirect" "$settings")
+						result=$(_set_json "xrayrpfunredirect" "$settings")
+					}
 			}
 		done
 	}
@@ -1471,6 +1715,7 @@ _set_vps_firewall() {
 		vpsfw6list="$(echo $fw6_list | jsonfilter -q -e '@.list[*]' | sed '/^[[:space:]]*$/d')"
 	fi
 	config_load firewall
+	_xray_rpf_sync_client
 	config_foreach _vps_firewall_redirect_port redirect
 	config_foreach _vps_firewall_redirect_port rule
 	[ -n "$vpsfwlist" ] || [ -n "$vpsfw6list" ] && {
@@ -2037,6 +2282,39 @@ _set_config_from_vps() {
 		fi
 	fi
 
+	# MQVPN settings
+	mqvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.key')"
+	mqvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.port')"
+	mqvpn_localip="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.client_ip')"
+	mqvpn_remoteip="$(echo "$vps_config" | jsonfilter -q -e '@.mqvpn.host_ip')"
+	[ -z "$mqvpn_port" ] && mqvpn_port="65411"
+	[ -z "$mqvpn_localip" ] && mqvpn_localip="10.255.249.2"
+	[ -z "$mqvpn_remoteip" ] && mqvpn_remoteip="10.255.249.1"
+	if [ -n "$(uci -q get mqvpn.vpn)" ] && [ -n "$mqvpn_key" ] && [ -f /etc/init.d/mqvpn ]; then
+		vpn="$(uci -q get openmptcprouter.settings.vpn)"
+		mqvpn_state=0
+		if [ "$vpn" = "mqvpn" ]; then
+			mqvpn_state=1
+		fi
+		uci -q batch <<-EOF >/dev/null
+			set mqvpn.vpn.key=$mqvpn_key
+			set mqvpn.vpn.port=$mqvpn_port
+			set mqvpn.vpn.localip=$mqvpn_localip
+			set mqvpn.vpn.remoteip=$mqvpn_remoteip
+			set mqvpn.vpn.enable=$mqvpn_state
+			set mqvpn.vpn.manage_routes=0
+			commit mqvpn
+		EOF
+		if [ "$(uci -q get mqvpn.vpn.host)" != "127.0.0.1" ]; then
+			uci -q set mqvpn.vpn.host="$vpsip"
+		fi
+		if [ -n "$(uci -q changes mqvpn)" ]; then
+			uci -q commit mqvpn
+			logger -t "OMR-VPS" "MQVPN restart..."
+			/etc/init.d/mqvpn restart
+		fi
+	fi
+
 	# DSVPN settings
 	dsvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.key')"
 	dsvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.port')"
@@ -2181,6 +2459,8 @@ _set_config_from_vps() {
 	else
 		if [ -n "$available_vpn" ]; then
 			for vpn in $available_vpn; do
+				vpn="$(echo "$vpn" | tr -d '"')"
+				[ -z "$vpn" ] && continue
 				uci -q batch <<-EOF >/dev/null
 					add_list openmptcprouter.${servername}.available_vpn=$vpn
 				EOF
@@ -2469,6 +2749,7 @@ _config_service() {
 		([ -n "$(uci -q get glorytun.vpn)" ] || [ -n "$(uci -q get glorytun-udp.vpn)" ]) && [ -z "$(_set_glorytun_vps)" ] && error=1
 		[ -n "$(uci -q get openvpn.omr)" ] && [ -z "$(_set_openvpn_vps)" ] && error=1
 		[ -n "$(uci -q get mlvpn.general)" ] && [ -z "$(_set_mlvpn_vps)" ] && error=1
+		[ -n "$(uci -q get mqvpn.vpn)" ] && [ -z "$(_set_mqvpn_vps)" ] && error=1
 		_set_vps_firewall
 		[ -n "$(uci -q show network | grep wireguard)" ] && [ -z "$(_set_wireguard_vps)" ] && error=1
 	fi
@@ -2579,7 +2860,7 @@ reload_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger openmptcprouter network shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn openvpn dsvpn
+	procd_add_reload_trigger openmptcprouter network shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn mqvpn openvpn dsvpn
 	procd_add_config_trigger "config.change" "firewall" /etc/init.d/openmptcprouter-vps set_vps_firewall
 	#procd_add_config_trigger "config.change" "network" /etc/init.d/openmptcprouter-vps set_gre_tunnel
 	#procd_add_reload_trigger openmptcprouter shadowsocks-libev network upnpd

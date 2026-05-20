@@ -2185,7 +2185,7 @@ start_instance() {
 			return 1
 		fi
 
-		if ! ( eval "$xray_file test -config \"$config_file\" >/dev/null 2>&1" ) ; then
+		if ! ( eval "$xray_file run -test -config \"$config_file\" >/dev/null 2>&1" ) ; then
 			_err "Validate config file failed: $config_file"
 			return 1
 		fi
@@ -2270,7 +2270,7 @@ start_instance() {
 	
 	PROG="$NAME.$section"
 
-	TRANSPARENT_PROXY_EXPECTED=1
+	[ "$section" = "main" ] && TRANSPARENT_PROXY_EXPECTED=1
 	procd_open_instance "$PROG"
 	procd_set_param command "$xray_file"
 	procd_append_param command run

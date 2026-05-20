@@ -25,6 +25,7 @@ function index()
 	entry({"admin", "network", "mptcp", "mptcp_fullmesh_data"}, post("mptcp_fullmesh_data")).leaf = true
 	entry({"admin", "network", "mptcp", "mptcp_connections"}, template("mptcp/mptcp_connections"), _("Established connections"), 6).leaf = true
 	entry({"admin", "network", "mptcp", "mptcp_connections_data"}, post("mptcp_connections_data")).leaf = true
+	entry({"admin", "network", "mptcp", "mptcp_status_data"}, call("mptcp_status_data")).leaf = true
 	entry({"admin", "network", "mptcp", "mptcp_monitor"}, template("mptcp/mptcp_monitor"), _("MPTCP monitoring"), 6).leaf = true
 	entry({"admin", "network", "mptcp", "mptcp_monitor_data"}, post("mptcp_monitor_data")).leaf = true
 end
@@ -145,6 +146,123 @@ function get_device(interface)
 	end
 end
 
+local function trim(value)
+	return (value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function read_first(paths)
+	for _, path in ipairs(paths) do
+		local fh = io.open(path, "r")
+		if fh then
+			local value = trim(fh:read("*l") or "")
+			fh:close()
+			if value ~= "" then
+				return value
+			end
+		end
+	end
+	return ""
+end
+
+local function parse_endpoint_line(line)
+	local endpoint = { raw = line, flags = {} }
+	local tokens = {}
+
+	for token in line:gmatch("%S+") do
+		tokens[#tokens + 1] = token
+	end
+
+	for i, token in ipairs(tokens) do
+		if i == 1 then
+			endpoint.address = token
+		elseif token == "id" and tokens[i + 1] then
+			endpoint.id = tokens[i + 1]
+		elseif token == "dev" and tokens[i + 1] then
+			endpoint.dev = tokens[i + 1]
+		elseif token == "subflow" or token == "signal" or token == "backup" or token == "fullmesh" then
+			endpoint.flags[#endpoint.flags + 1] = token
+		end
+	end
+
+	return endpoint
+end
+
+local function parse_endpoints(raw)
+	local endpoints = {}
+
+	for line in (raw or ""):gmatch("[^\r\n]+") do
+		line = trim(line)
+		if line ~= "" then
+			endpoints[#endpoints + 1] = parse_endpoint_line(line)
+		end
+	end
+
+	return endpoints
+end
+
+local function parse_ss_value(details, key)
+	local value = details:match(key .. "[:=]([%w%.%-]+)")
+	return value or ""
+end
+
+local function parse_ss_mptcp(raw)
+	local connections = {}
+	local current = nil
+
+	for line in (raw or ""):gmatch("[^\r\n]+") do
+		if line:match("^Netid%s+") then
+			-- Header line.
+		elseif line:match("^%S") then
+			current = { summary = trim(line), details = {} }
+			connections[#connections + 1] = current
+		elseif current then
+			current.details[#current.details + 1] = trim(line)
+		end
+	end
+
+	for _, conn in ipairs(connections) do
+		local details = table.concat(conn.details, " ")
+		conn.token = parse_ss_value(details, "token")
+		conn.subflows = parse_ss_value(details, "subflows")
+		conn.subflows_total = parse_ss_value(details, "subflows_total")
+		conn.bytes_sent = parse_ss_value(details, "bytes_sent")
+		conn.bytes_received = parse_ss_value(details, "bytes_received")
+		conn.bytes_acked = parse_ss_value(details, "bytes_acked")
+		conn.last_data_sent = parse_ss_value(details, "last_data_sent")
+		conn.last_data_recv = parse_ss_value(details, "last_data_recv")
+		conn.last_ack_recv = parse_ss_value(details, "last_ack_recv")
+	end
+
+	return connections
+end
+
+function mptcp_status_data()
+	local endpoint_raw = luci.sys.exec("ip mptcp endpoint show 2>/dev/null") or ""
+	local ss_raw = luci.sys.exec("ss -Mtin 2>/dev/null") or ""
+	local available_schedulers = read_first({"/proc/sys/net/mptcp/available_schedulers"})
+
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({
+		kernel = {
+			enabled = read_first({"/proc/sys/net/mptcp/enabled", "/proc/sys/net/mptcp/mptcp_enabled"}),
+			scheduler = read_first({"/proc/sys/net/mptcp/scheduler", "/proc/sys/net/mptcp/mptcp_scheduler"}),
+			available_schedulers = available_schedulers,
+			pm_type = read_first({"/proc/sys/net/mptcp/pm_type"}),
+			path_manager = read_first({"/proc/sys/net/mptcp/mptcp_path_manager"}),
+			checksum = read_first({"/proc/sys/net/mptcp/checksum_enabled", "/proc/sys/net/mptcp/mptcp_checksum"}),
+			add_addr_timeout = read_first({"/proc/sys/net/mptcp/add_addr_timeout"}),
+			stale_loss_cnt = read_first({"/proc/sys/net/mptcp/stale_loss_cnt"}),
+			congestion = read_first({"/proc/sys/net/ipv4/tcp_congestion_control"})
+		},
+		endpoints = parse_endpoints(endpoint_raw),
+		connections = parse_ss_mptcp(ss_raw),
+		raw = {
+			endpoints = endpoint_raw,
+			ss = ss_raw
+		}
+	})
+end
+
 function mptcp_check_trace(iface)
 	luci.http.prepare_content("text/plain")
 	local tracebox
@@ -164,6 +282,7 @@ function mptcp_check_trace(iface)
 			luci.http.write(ln)
 			luci.http.write("\n")
 		end
+		tracebox:close()
 	end
 	return
 end
@@ -179,6 +298,7 @@ function mptcp_fullmesh_data()
 			luci.http.write(ln)
 			luci.http.write("\n")
 		end
+		fullmesh:close()
 	end
 	return
 end
@@ -187,13 +307,14 @@ function mptcp_monitor_data()
 	luci.http.prepare_content("text/plain")
 	local fullmesh
 	fullmesh = io.popen("multipath -m")
-	if fullmesh:read() ~= nil then
+	if fullmesh then
 		while true do
 			local ln = fullmesh:read("*l")
 			if not ln then break end
 			luci.http.write(ln)
 			luci.http.write("\n")
 		end
+		fullmesh:close()
 	end
 	return
 end
@@ -202,13 +323,14 @@ function mptcp_connections_data()
 	luci.http.prepare_content("text/plain")
 	local connections
 	connections = io.popen("multipath -c")
-	if connections:read() ~= nil then
+	if connections then
 		while true do
 			local ln = connections:read("*l")
 			if not ln then break end
 			luci.http.write(ln)
 			luci.http.write("\n")
 		end
+		connections:close()
 	end
 	return
 end

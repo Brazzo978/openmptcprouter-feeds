@@ -1,0 +1,140 @@
+diff --git a/src/config.c b/src/config.c
+index 6c63f1b..00c8c8b 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -261,6 +261,8 @@ handle_kv(mqvpn_file_config_t *cfg, int section, const char *key, const char *va
+             parse_dns_list(cfg, val);
+         } else if (strcasecmp(key, "KillSwitch") == 0) {
+             cfg->kill_switch = parse_bool(val);
++        } else if (strcasecmp(key, "ManageRoutes") == 0) {
++            cfg->manage_routes = parse_bool(val);
+         } else if (strcasecmp(key, "Reconnect") == 0) {
+             cfg->reconnect = parse_bool(val);
+         } else if (strcasecmp(key, "ReconnectInterval") == 0) {
+@@ -414,6 +416,9 @@ mqvpn_config_load_json_filecfg(mqvpn_file_config_t *cfg, const char *json_text)
+     v = json_find_key(json_text, "kill_switch");
+     if (v && json_read_bool(v, &iv) == 0) cfg->kill_switch = iv;
+ 
++    v = json_find_key(json_text, "manage_routes");
++    if (v && json_read_bool(v, &iv) == 0) cfg->manage_routes = iv;
++
+     v = json_find_key(json_text, "control_listen");
+     if (v && json_read_string(v, s280, sizeof(s280)) == 0)
+         mqvpn_copy_str(cfg->control_listen, sizeof(cfg->control_listen), s280);
+@@ -526,6 +531,7 @@ mqvpn_config_defaults(mqvpn_file_config_t *cfg)
+     cfg->max_clients = 64;
+     cfg->reconnect = 1;
+     cfg->reconnect_interval = 5;
++    cfg->manage_routes = 1;
+ }
+ 
+ int
+diff --git a/src/config.h b/src/config.h
+index 1d9c019..5491816 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -59,6 +59,7 @@ typedef struct mqvpn_file_config_s {
+     int reconnect;          /* 1=auto-reconnect (default), 0=exit on disconnect */
+     int reconnect_interval; /* base interval in seconds (default 5) */
+     int kill_switch;        /* 1=block traffic outside tunnel, 0=off (default) */
++    int manage_routes;      /* 1=install split default routes, 0=leave routing to caller */
+ 
+     /* Inferred mode: 1=server, 0=client */
+     int is_server;
+diff --git a/src/main.c b/src/main.c
+index 9e9bf4f..33d1920 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -52,6 +52,7 @@ usage(const char *prog)
+         "  --dns ADDR                DNS server to use (repeatable, client mode, max 4)\n"
+         "  --no-reconnect            Disable automatic reconnection (client mode)\n"
+         "  --kill-switch             Block traffic outside the VPN tunnel (client mode)\n"
++        "  --no-routes               Do not install split-default routes (client mode)\n"
+         "  --control-port PORT       TCP port for JSON control API (server mode)\n"
+         "  --control-addr ADDR       Bind address for control API (default 127.0.0.1)\n"
+         "                            (also configurable via [Control] Listen in INI / "
+@@ -139,6 +140,7 @@ main(int argc, char *argv[])
+         {"log-level", required_argument, NULL, 'L'},
+         {"no-reconnect", no_argument, NULL, 'R'},
+         {"kill-switch", no_argument, NULL, 'K'},
++        {"no-routes", no_argument, NULL, 'N'},
+         {"control-port", required_argument, NULL, 'X'},
+         {"control-addr", required_argument, NULL, 'x'},
+         {"status", no_argument, NULL, 'T'},
+@@ -171,6 +173,7 @@ main(int argc, char *argv[])
+     int n_dns = 0;
+     int no_reconnect = 0;
+     int kill_switch = -1; /* -1 = not set by CLI */
++    int manage_routes = -1; /* -1 = config/default, 0 = disabled by CLI */
+     int control_port = 0;
+     int control_port_set = 0; /* 1 iff --control-port was passed explicitly */
+     const char *control_addr = NULL;
+@@ -238,6 +241,7 @@ main(int argc, char *argv[])
+         case 'M': max_clients = atoi(optarg); break;
+         case 'R': no_reconnect = 1; break;
+         case 'K': kill_switch = 1; break;
++        case 'N': manage_routes = 0; break;
+         case 'X':
+             control_port = atoi(optarg);
+             control_port_set = 1;
+@@ -436,6 +440,7 @@ main(int argc, char *argv[])
+             .reconnect = eff_reconnect,
+             .reconnect_interval = file_cfg.reconnect_interval,
+             .kill_switch = kill_switch >= 0 ? kill_switch : file_cfg.kill_switch,
++            .manage_routes = manage_routes >= 0 ? manage_routes : file_cfg.manage_routes,
+         };
+         for (int i = 0; i < n_paths; i++) {
+             cfg.path_ifaces[i] = path_ifaces[i];
+diff --git a/src/platform/linux/platform_internal.h b/src/platform/linux/platform_internal.h
+index 9da1d41..e7cf8ea 100644
+--- a/src/platform/linux/platform_internal.h
++++ b/src/platform/linux/platform_internal.h
+@@ -59,6 +59,7 @@ typedef struct {
+     char server_ip_str[INET6_ADDRSTRLEN];
+     int server_port;
+     int has_v6;
++    int manage_routes;
+ 
+     /* DNS */
+     mqvpn_dns_t dns;
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+index 7da5d18..caab0a7 100644
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -123,9 +123,13 @@ cb_tunnel_config_ready(const mqvpn_tunnel_info_t *info, void *user_ctx)
+             info->mtu);
+ 
+     /* Set up routes, killswitch, DNS */
+-    if (setup_routes(p) < 0) {
+-        LOG_ERR("route setup failed, aborting tunnel");
+-        goto fail;
++    if (p->manage_routes) {
++        if (setup_routes(p) < 0) {
++            LOG_ERR("route setup failed, aborting tunnel");
++            goto fail;
++        }
++    } else {
++        LOG_INF("route management disabled by configuration");
+     }
+     if (setup_killswitch(p) < 0) {
+         LOG_ERR("killswitch setup failed, aborting tunnel");
+@@ -969,6 +973,7 @@ linux_platform_run_client(const mqvpn_client_cfg_t *cfg)
+     ctx.nl_fd = -1;
+     ctx.server_port = cfg->server_port;
+     ctx.killswitch_enabled = cfg->kill_switch;
++    ctx.manage_routes = cfg->manage_routes;
+ 
+     /* Pre-set TUN name (save to tun_name_cfg too — survives TUN destroy/recreate) */
+     if (cfg->tun_name) {
+diff --git a/src/vpn_client.h b/src/vpn_client.h
+index 2479013..b120482 100644
+--- a/src/vpn_client.h
++++ b/src/vpn_client.h
+@@ -20,6 +20,7 @@ typedef struct mqvpn_client_cfg_s {
+     int reconnect;              /* 1=auto-reconnect on disconnect (default 1) */
+     int reconnect_interval;     /* base reconnect interval in seconds (default 5) */
+     int kill_switch;            /* 1=block traffic outside tunnel (default 0) */
++    int manage_routes;          /* 1=install split default routes (default), 0=caller managed */
+ } mqvpn_client_cfg_t;
+ 
+ #endif /* MQVPN_VPN_CLIENT_H */

@@ -221,6 +221,43 @@
 	border-radius: 2px;
 	vertical-align: -0.1rem;
 }
+.omr-mptcp-health {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 0.75rem;
+	margin: 0 0 1rem;
+	padding: 1rem;
+	border: 1px solid #e5e7eb;
+	border-radius: 18px;
+	background: linear-gradient(135deg, #f8fafc 0%, #ffffff 48%, #eef6ff 100%);
+	box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+.omr-mptcp-health-card {
+	padding: 0.75rem 0.85rem;
+	border: 1px solid #e5e7eb;
+	border-radius: 14px;
+	background: rgba(255, 255, 255, 0.86);
+}
+.omr-mptcp-health-label {
+	color: #64748b;
+	font-size: 11px;
+	font-weight: 800;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+.omr-mptcp-health-value {
+	margin-top: 0.28rem;
+	color: #0f172a;
+	font-size: 17px;
+	font-weight: 800;
+	line-height: 1.25;
+	word-break: break-word;
+}
+.omr-mptcp-health-sub {
+	margin-top: 0.18rem;
+	color: #64748b;
+	font-size: 12px;
+}
 </style>
 
 <script type="text/javascript" src="<%=resource%>/cbi.js?v=git-20.122.32821-5b14298"></script>
@@ -243,6 +280,8 @@
 	var lastError = null;
 	var pollTimer = null;
 	var pollBusy = false;
+	var statusUrl = '<%=url('admin/network/mptcp/mptcp_status_data')%>';
+	var statusTimer = null;
 
 	function maxPoints() {
 		return Math.ceil(WINDOW_SECONDS / Math.max(1, POLL_INTERVAL)) + 4;
@@ -584,6 +623,49 @@
 		}
 	}
 
+	function setHealthText(id, value) {
+		var node = document.getElementById(id);
+		if (node) node.innerHTML = htmlEscape(value || '-');
+	}
+
+	function yesNo(value) {
+		if (value === '1' || value === 1 || value === true) return '<%:Enabled%>';
+		if (value === '0' || value === 0 || value === false) return '<%:Disabled%>';
+		return value || '-';
+	}
+
+	function renderMptcpHealth(payload) {
+		payload = payload || {};
+		var kernel = payload.kernel || {};
+		var endpoints = payload.endpoints || [];
+		var connections = payload.connections || [];
+		setHealthText('mptcp_health_enabled', yesNo(kernel.enabled));
+		setHealthText('mptcp_health_scheduler', kernel.scheduler || '-');
+		setHealthText('mptcp_health_congestion', kernel.congestion || '-');
+		setHealthText('mptcp_health_paths', String(endpoints.length) + ' <%:endpoint(s)%>');
+		setHealthText('mptcp_health_connections', String(connections.length) + ' <%:active%>');
+		setHealthText('mptcp_health_pm', kernel.pm_type || kernel.path_manager || '-');
+	}
+
+	function pollMptcpHealth() {
+		var panel = document.getElementById('mptcp_health_panel');
+		if (!panel) return;
+		var xhr = new XMLHttpRequest();
+		xhr.open('GET', statusUrl, true);
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState != 4) return;
+			try {
+				if (xhr.status < 200 || xhr.status >= 300)
+					throw new Error('HTTP ' + xhr.status);
+				renderMptcpHealth(JSON.parse(xhr.responseText || '{}'));
+			}
+			catch(e) {
+				setHealthText('mptcp_health_enabled', '<%:Status unavailable%>');
+			}
+		};
+		xhr.send(null);
+	}
+
 	function bindControls() {
 		var refresh = document.getElementById('refresh_interval');
 		var windowSel = document.getElementById('window_duration');
@@ -724,7 +806,12 @@
 	window.addEventListener('load', function() {
 		initCharts();
 		bindControls();
+		pollMptcpHealth();
+		statusTimer = window.setInterval(pollMptcpHealth, 10000);
 		schedulePoll(0);
+	});
+	window.addEventListener('unload', function() {
+		if (statusTimer) window.clearInterval(statusTimer);
 	});
 })();
 //]]></script>
@@ -747,6 +834,29 @@
 <div class="omr-graph-meta">
 	<span id="graph_status" class="omr-graph-status"><%:Starting%></span>
 	<small id="graph_scale">-</small>
+</div>
+
+<div id="mptcp_health_panel" class="omr-mptcp-health">
+	<div class="omr-mptcp-health-card">
+		<div class="omr-mptcp-health-label"><%:MPTCP%></div>
+		<div id="mptcp_health_enabled" class="omr-mptcp-health-value">-</div>
+		<div id="mptcp_health_pm" class="omr-mptcp-health-sub">-</div>
+	</div>
+	<div class="omr-mptcp-health-card">
+		<div class="omr-mptcp-health-label"><%:Scheduler%></div>
+		<div id="mptcp_health_scheduler" class="omr-mptcp-health-value">-</div>
+		<div class="omr-mptcp-health-sub"><%:Active algorithm%></div>
+	</div>
+	<div class="omr-mptcp-health-card">
+		<div class="omr-mptcp-health-label"><%:Congestion%></div>
+		<div id="mptcp_health_congestion" class="omr-mptcp-health-value">-</div>
+		<div class="omr-mptcp-health-sub">TCP CC</div>
+	</div>
+	<div class="omr-mptcp-health-card">
+		<div class="omr-mptcp-health-label"><%:Paths%></div>
+		<div id="mptcp_health_paths" class="omr-mptcp-health-value">-</div>
+		<div id="mptcp_health_connections" class="omr-mptcp-health-sub">-</div>
+	</div>
 </div>
 
 <div class="omr-graph-panel omr-graph-controls">

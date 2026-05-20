@@ -1,0 +1,151 @@
+#!/bin/sh /etc/rc.common
+
+START=88
+USE_PROCD=1
+
+CONFIG_FILE=/tmp/etc/mqvpn.conf
+
+get_interface_device() {
+	local config="$1"
+	local ifname addr
+
+	config_get ifname "$config" device
+	[ -z "$ifname" ] && config_get ifname "$config" ifname
+	[ -z "$ifname" ] && ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["l3_device"]')
+	[ -n "$(echo "$ifname" | grep '@')" ] && ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["device"]')
+	[ -z "$ifname" ] && return 1
+	[ "$ifname" = "lo" ] && return 1
+	[ "$ifname" = "mqvpn0" ] && return 1
+	[ "$ifname" = "mlvpn0" ] && return 1
+	[ "$ifname" = "6in4-omr6in4" ] && return 1
+	echo "$ifname" | grep -Eq '^(ifb|sit|gre|ip6|teql|erspan|tun|bond)' && return 1
+	addr=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["ipv4-address"][0].address')
+	[ -z "$addr" ] && return 1
+	echo "$ifname"
+}
+
+append_auto_path() {
+	local config="$1"
+	local mode ifname
+
+	config_get mode "$config" multipath ""
+	[ -z "$mode" ] && mode="$(uci -q get openmptcprouter.$config.multipath)"
+	[ -z "$mode" ] && return 0
+	[ "$mode" = "off" ] && return 0
+
+	ifname=$(get_interface_device "$config") || return 0
+	grep -qx "Path = $ifname" "$CONFIG_FILE" 2>/dev/null && return 0
+	printf 'Path = %s\n' "$ifname" >> "$CONFIG_FILE"
+}
+
+append_lan_route() {
+	local lan_dev lan_route
+
+	lan_dev="$(ifstatus lan 2>/dev/null | jsonfilter -q -e '@["l3_device"]')"
+	[ -z "$lan_dev" ] && lan_dev="$(uci -q get network.lan.device)"
+	[ -z "$lan_dev" ] && lan_dev="$(uci -q get network.lan.ifname)"
+	[ -z "$lan_dev" ] && return 0
+
+	lan_route="$(ip -4 route show dev "$lan_dev" scope link 2>/dev/null | awk '{print $1; exit}')"
+	echo "$lan_route" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || return 0
+	printf '\n[Routes]\nRoute = %s\n' "$lan_route" >> "$CONFIG_FILE"
+}
+
+start_service() {
+	local enable host port key dev localip remoteip scheduler insecure manage_routes paths_auto reconnect reconnect_interval log_level
+
+	[ "$(uci -q get mqvpn.vpn.enable)" = "1" ] || return 1
+	[ -x /usr/sbin/mqvpn ] || return 1
+
+	host="$(uci -q get mqvpn.vpn.host)"
+	port="$(uci -q get mqvpn.vpn.port)"
+	key="$(uci -q get mqvpn.vpn.key)"
+	dev="$(uci -q get mqvpn.vpn.dev)"
+	localip="$(uci -q get mqvpn.vpn.localip)"
+	remoteip="$(uci -q get mqvpn.vpn.remoteip)"
+	scheduler="$(uci -q get mqvpn.vpn.scheduler)"
+	insecure="$(uci -q get mqvpn.vpn.insecure)"
+	manage_routes="$(uci -q get mqvpn.vpn.manage_routes)"
+	paths_auto="$(uci -q get mqvpn.vpn.paths_auto)"
+	reconnect="$(uci -q get mqvpn.vpn.reconnect)"
+	reconnect_interval="$(uci -q get mqvpn.vpn.reconnect_interval)"
+	log_level="$(uci -q get mqvpn.vpn.log_level)"
+
+	[ -z "$host" ] && return 1
+	[ -z "$port" ] && port="65411"
+	[ -z "$key" ] && return 1
+	[ -z "$dev" ] && dev="mqvpn0"
+	[ -z "$localip" ] && localip="10.255.249.2"
+	[ -z "$remoteip" ] && remoteip="10.255.249.1"
+	[ -z "$scheduler" ] && scheduler="wlb"
+	[ -z "$insecure" ] && insecure="1"
+	[ -z "$manage_routes" ] && manage_routes="0"
+	[ -z "$paths_auto" ] && paths_auto="1"
+	[ -z "$reconnect" ] && reconnect="1"
+	[ -z "$reconnect_interval" ] && reconnect_interval="5"
+	[ -z "$log_level" ] && log_level="info"
+
+		uci -q batch <<-EOF_UCI >/dev/null
+			set network.omrvpn.device='$dev'
+			set network.omrvpn.proto='none'
+			set network.omrvpn.ip4table='vpn'
+		set network.omrvpn.multipath='off'
+		set network.omrvpn.type='tunnel'
+		set network.omrvpn.txqueuelen='100'
+		set network.omr6in4.ipaddr='$localip'
+			set network.omr6in4.peeraddr='$remoteip'
+			commit network
+	EOF_UCI
+
+		uci -q del_list firewall.zone_vpn.device="$dev" >/dev/null 2>&1
+		uci -q add_list firewall.zone_vpn.device="$dev"
+		uci -q del_list firewall.zone_vpn.network="omrvpn" >/dev/null 2>&1
+		uci -q add_list firewall.zone_vpn.network="omrvpn"
+		uci -q commit firewall
+
+	mkdir -p /tmp/etc
+	umask 077
+	{
+		echo '[Server]'
+		echo "Address = $host:$port"
+		[ "$insecure" = "1" ] && echo 'Insecure = true' || echo 'Insecure = false'
+		echo
+		echo '[Auth]'
+		echo "Key = $key"
+		echo
+		echo '[Interface]'
+		echo "TunName = $dev"
+		echo "LogLevel = $log_level"
+		[ "$reconnect" = "1" ] && echo 'Reconnect = true' || echo 'Reconnect = false'
+		echo "ReconnectInterval = $reconnect_interval"
+		[ "$manage_routes" = "1" ] && echo 'ManageRoutes = true' || echo 'ManageRoutes = false'
+		echo 'KillSwitch = false'
+		echo
+		echo '[Multipath]'
+		echo "Scheduler = $scheduler"
+	} > "$CONFIG_FILE"
+
+		if [ "$paths_auto" = "1" ]; then
+			config_load network
+			config_foreach append_auto_path interface
+		fi
+		append_lan_route
+
+		procd_open_instance
+	procd_set_param command /usr/sbin/mqvpn --config "$CONFIG_FILE"
+	procd_set_param respawn 5 5 0
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_close_instance
+
+		/etc/init.d/firewall reload >/dev/null 2>&1 || true
+	}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger mqvpn network openmptcprouter
+}

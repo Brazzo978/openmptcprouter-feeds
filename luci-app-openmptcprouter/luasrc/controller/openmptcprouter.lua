@@ -100,6 +100,7 @@ function wizard_add()
 			ucic:set("glorytun-udp","vpn","host",server_ip)
 			ucic:set("dsvpn","vpn","host",server_ip)
 			ucic:set("mlvpn","general","host",server_ip)
+			ucic:set("mqvpn","vpn","host",server_ip)
 			ucic:set("ubond","general","host",server_ip)
 			luci.sys.call("uci -q del openvpn.omr.remote")
 			luci.sys.call("uci -q add_list openvpn.omr.remote=" .. server_ip)
@@ -508,6 +509,14 @@ function wizard_add()
 		vpn_port = 65201
 		vpn_intf = "mlvpn0"
 		ucic:set("network","omrvpn","proto","dhcp")
+	elseif default_vpn == "mqvpn" then
+		vpn_port = 65411
+		vpn_intf = "mqvpn0"
+		ucic:set("network","omrvpn","proto","none")
+		ucic:set("mqvpn","vpn","localip","10.255.249.2")
+		ucic:set("mqvpn","vpn","remoteip","10.255.249.1")
+		ucic:set("network","omr6in4","ipaddr","10.255.249.2")
+		ucic:set("network","omr6in4","peeraddr","10.255.249.1")
 	elseif default_vpn == "ubond" then
 		vpn_port = 65251
 		vpn_intf = "ubond0"
@@ -778,6 +787,7 @@ function wizard_add()
 					ucic:set("glorytun-udp","vpn","host",server_ip)
 					ucic:set("dsvpn","vpn","host",server_ip)
 					ucic:set("mlvpn","general","host",server_ip)
+					ucic:set("mqvpn","vpn","host",server_ip)
 					ucic:set("ubond","general","host",server_ip)
 					ucic:set("v2ray","omrout","s_vmess_address",server_ip)
 					ucic:set("v2ray","omrout","s_vless_address",server_ip)
@@ -837,6 +847,7 @@ function wizard_add()
 				ucic:set("glorytun-udp","vpn","host",server_ip)
 				ucic:set("dsvpn","vpn","host",server_ip)
 				ucic:set("mlvpn","general","host",server_ip)
+				ucic:set("mqvpn","vpn","host",server_ip)
 				ucic:set("ubond","general","host",server_ip)
 				ucic:set("v2ray","omrout","s_vmess_address",server_ip)
 				ucic:set("v2ray","omrout","s_vless_address",server_ip)
@@ -890,10 +901,12 @@ function wizard_add()
 	ucic:save("openvpn")
 	--ucic:commit("openvpn")
 	ucic:save("mlvpn")
+	ucic:save("mqvpn")
 	ucic:save("ubond")
 	ucic:save("v2ray")
 	ucic:save("xray")
 	--ucic:commit("mlvpn")
+	--ucic:commit("mqvpn")
 	ucic:save("dsvpn")
 	--ucic:commit("dsvpn")
 	ucic:save("glorytun")
@@ -1188,6 +1201,21 @@ function wizard_add()
 		ucic:set("mlvpn","general","enable",0)
 	end
 
+	-- Set MQVPN settings
+	if default_vpn == "mqvpn" and disablednb ~= serversnb  then
+		ucic:set("mqvpn","vpn","enable",1)
+		ucic:set("mqvpn","vpn","port","65411")
+		ucic:set("mqvpn","vpn","dev","mqvpn0")
+		ucic:set("mqvpn","vpn","localip","10.255.249.2")
+		ucic:set("mqvpn","vpn","remoteip","10.255.249.1")
+		ucic:set("mqvpn","vpn","manage_routes","0")
+		ucic:set("network","omr6in4","ipaddr","10.255.249.2")
+		ucic:set("network","omr6in4","peeraddr","10.255.249.1")
+		ucic:set("network","omrvpn","proto","none")
+	else
+		ucic:set("mqvpn","vpn","enable",0)
+	end
+
 	local mlvpn_password = luci.http.formvalue("mlvpn_password")
 	if mlvpn_password ~= "" then
 		ucic:set("mlvpn","general","password",mlvpn_password)
@@ -1199,6 +1227,15 @@ function wizard_add()
 	end
 	ucic:save("mlvpn")
 	ucic:commit("mlvpn")
+
+	local mqvpn_key = luci.http.formvalue("mqvpn_key") or ""
+	if mqvpn_key ~= "" then
+		ucic:set("mqvpn","vpn","key",mqvpn_key)
+	else
+		ucic:set("mqvpn","vpn","key","")
+	end
+	ucic:save("mqvpn")
+	ucic:commit("mqvpn")
 
 	-- Set UBOND settings
 	if default_vpn == "ubond" and disablednb ~= serversnb  then
@@ -1289,6 +1326,7 @@ function wizard_add()
 		luci.sys.call("/etc/init.d/glorytun restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/mlvpn restart >/dev/null 2>/dev/null")
+		luci.sys.call("/etc/init.d/mqvpn restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/ubond restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/mptcpovervpn restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/openvpn restart >/dev/null 2>/dev/null")

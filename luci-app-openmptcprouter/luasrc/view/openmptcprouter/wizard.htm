@@ -387,6 +387,18 @@
 		</div>
 	    </div>
 	    <% end %>
+	    <% if nixio.fs.access("/usr/sbin/mqvpn") then %>
+	    <div class="cbi-value">
+		<label class="cbi-value-title"><%:MQVPN key%></label>
+		<div class="cbi-value-field">
+		    <input type="text" name="mqvpn_key" placeholder="<%:MQVPN key%>" class="cbi-input-text" value="<%=uci:get("mqvpn","vpn","key")%>">
+		    <br />
+		    <div class="cbi-value-description">
+		        <%:Key is retrieved from server API by default.%> <%:MQVPN is a multipath QUIC VPN using MASQUE CONNECT-IP.%>
+		    </div>
+		</div>
+	    </div>
+	    <% end %>
 	    <% if nixio.fs.access("/usr/sbin/ubond") then %>
 	    <div class="cbi-value">
 		<label class="cbi-value-title"><%:UBOND password%></label>
@@ -409,7 +421,9 @@
 			if (type(available_vpns) ~= "table") then
 				available_vpns = {available_vpns}
 			end
+			local has_mqvpn = false
 			for _, vpn in pairs(available_vpns) do
+				if vpn == "mqvpn" then has_mqvpn = true end
 				if vpn == "glorytun_tcp" then
 				%>
 					<% if nixio.fs.access("/usr/sbin/glorytun") then %><option value="glorytun_tcp" <% if uci:get("openmptcprouter","settings","vpn") == "glorytun_tcp" then %>selected="selected"<% end %>>Glorytun TCP</option><% end %>
@@ -419,6 +433,8 @@
 					<% if nixio.fs.access("/usr/sbin/dsvpn") then %><option value="dsvpn" <% if uci:get("openmptcprouter","settings","vpn") == "dsvpn" then %>selected="selected"<% end %>>A Dead Simple VPN</option><% end %>
 				<% elseif vpn == "mlvpn" then %>
 					<% if nixio.fs.access("/usr/sbin/mlvpn") then %><option value="mlvpn" <% if uci:get("openmptcprouter","settings","vpn") == "mlvpn" then %>selected="selected"<% end %>>MLVPN</option><% end %>
+				<% elseif vpn == "mqvpn" then %>
+					<% if nixio.fs.access("/usr/sbin/mqvpn") then %><option value="mqvpn" <% if uci:get("openmptcprouter","settings","vpn") == "mqvpn" then %>selected="selected"<% end %>>MQVPN</option><% end %>
 				<% elseif vpn == "ubond" then %>
 					<% if nixio.fs.access("/usr/sbin/ubond") then %><option value="ubond" <% if uci:get("openmptcprouter","settings","vpn") == "ubond" then %>selected="selected"<% end %>>UBOND</option><% end %>
 				<% elseif vpn == "openvpn" then %>
@@ -427,9 +443,10 @@
 					<% if nixio.fs.access("/etc/init.d/openvpnbonding") then %><option value="openvpn_bonding" <% if uci:get("openmptcprouter","settings","vpn") == "openvpn_bonding" then %>selected="selected"<% end %>>OpenVPN Bonding</option><% end %>
 				<%
 				end
-			end
-			%>
-			<option value="none" <% if uci:get("openmptcprouter","settings","vpn") == "none" then %>selected="selected"<% end %>>None</option>
+				end
+				%>
+				<% if not has_mqvpn and nixio.fs.access("/usr/sbin/mqvpn") then %><option value="mqvpn" <% if uci:get("openmptcprouter","settings","vpn") == "mqvpn" then %>selected="selected"<% end %>>MQVPN</option><% end %>
+				<option value="none" <% if uci:get("openmptcprouter","settings","vpn") == "none" then %>selected="selected"<% end %>>None</option>
 		<%
 		else
 		%>
@@ -437,6 +454,7 @@
 			<% if nixio.fs.access("/usr/sbin/glorytun-udp") then %><option value="glorytun_udp" <% if uci:get("openmptcprouter","settings","vpn") == "glorytun_udp" then %>selected="selected"<% end %>>Glorytun UDP</option><% end %>
 			<% if nixio.fs.access("/usr/sbin/dsvpn") then %><option value="dsvpn" <% if uci:get("openmptcprouter","settings","vpn") == "dsvpn" then %>selected="selected"<% end %>>A Dead Simple VPN</option><% end %>
 			<% if nixio.fs.access("/usr/sbin/mlvpn") then %><option value="mlvpn" <% if uci:get("openmptcprouter","settings","vpn") == "mlvpn" then %>selected="selected"<% end %>>MLVPN</option><% end %>
+			<% if nixio.fs.access("/usr/sbin/mqvpn") then %><option value="mqvpn" <% if uci:get("openmptcprouter","settings","vpn") == "mqvpn" then %>selected="selected"<% end %>>MQVPN</option><% end %>
 			<% if nixio.fs.access("/usr/sbin/ubond") then %><option value="ubond" <% if uci:get("openmptcprouter","settings","vpn") == "ubond" then %>selected="selected"<% end %>>UBOND</option><% end %>
 			<% if nixio.fs.access("/etc/init.d/openvpn") then %><option value="openvpn" <% if uci:get("openmptcprouter","settings","vpn") == "openvpn" then %>selected="selected"<% end %>>OpenVPN TCP</option><% end %>
 			<!-- <% if nixio.fs.access("/etc/init.d/openvpnbonding") then %><option value="openvpn_bonding" <% if uci:get("openmptcprouter","settings","vpn") == "openvpn_bonding" then %>selected="selected"<% end %>>OpenVPN Bonding</option><% end %> -->
@@ -519,7 +537,7 @@
 			<%
 			    iffind=0
 			    for _, ifacea in ipairs(ifaces) do
-				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*") or ifacea:match("^tun.*") or ifacea:match("^bond.*")) and device_notvirtual(ifacea) then
+				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or ifacea == "mqvpn0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*") or ifacea:match("^tun.*") or ifacea:match("^bond.*")) and device_notvirtual(ifacea) then
 				    if uci:get("network",ifname,"proto") ~= "macvlan" then
 			%>
 			<option value="<%=ifacea%>"<% if uci:get("network",ifname,"device") == ifacea then iffind = 1 %> selected="selected"<% end %>><%=ifacea%></option>
@@ -672,7 +690,7 @@
 				end
 			    end
 			    for _, ifacea in ipairs(ifaces) do
-				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*") or ifacea:match("^tun.*") or ifacea:match("^bond.*")) and device_notvirtual(ifacea) then
+				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or ifacea == "mqvpn0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*") or ifacea:match("^tun.*") or ifacea:match("^bond.*")) and device_notvirtual(ifacea) then
 			%>
 				<option value="<%=ifacea%>"<% if realifname == ifacea then iffind = 1 %> selected="selected"<% end %>><%=ifacea%></option>
 			<%
@@ -893,7 +911,7 @@
 		<select class="cbi-section-create-name" name="add_interface_ifname">
 			<%
 			    for _, ifacea in ipairs(ifaces) do
-				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or iface == "bond0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*")) and device_notvirtual(ifacea) then
+				if not (ifacea == "lo" or ifacea == "6in4-omr6in4" or ifacea == "mlvpn0" or ifacea == "mqvpn0" or iface == "bond0" or ifacea:match("^ifb.*") or ifacea:match("^sit.*") or ifacea:match("^gre.*") or ifacea:match("^ip6.*") or ifacea:match("^teql.*") or ifacea:match("^erspan.*")) and device_notvirtual(ifacea) then
 			%>
 			<option value="<%=ifacea%>"><%=ifacea%></option>
 			<%

@@ -350,7 +350,7 @@ return view.extend({
 		o.modalonly = true;
 
 		o = s.taboption('advanced', form.Flag, 'force_xray_pf', _('Force XRay for this port forward'),
-			_('Keep an XRay backend for this rule even when the main proxy is ShadowSocks or disabled.'));
+			_('Keep an XRay backend for this TCP port forward even when the main proxy is ShadowSocks or disabled. Only one source port per rule is supported.'));
 		o.modalonly = true;
 		o.depends('v2ray', '1');
 

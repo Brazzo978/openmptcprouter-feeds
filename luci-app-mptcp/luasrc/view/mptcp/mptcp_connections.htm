@@ -1,49 +1,342 @@
 <%+header%>
 
-<%
-	local uci = require("luci.model.uci").cursor()
-	local sys = require "luci.sys"
-	local ifaces = sys.net:devices()
-	local net = require "luci.model.network".init()
-%>
+<style>
+.omr-mptcp-shell {
+	display: grid;
+	gap: 1rem;
+}
+.omr-mptcp-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+	gap: 0.8rem;
+	margin: 0.7rem 0 0.2rem;
+}
+.omr-mptcp-card,
+.omr-mptcp-panel {
+	border: 1px solid #e5e7eb;
+	border-radius: 18px;
+	background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+	box-shadow: 0 10px 26px rgba(15, 23, 42, 0.07), 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+.omr-mptcp-card {
+	padding: 0.95rem 1rem;
+	min-height: 78px;
+}
+.omr-mptcp-label {
+	color: #64748b;
+	font-size: 11px;
+	font-weight: 800;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+.omr-mptcp-value {
+	margin-top: 0.35rem;
+	color: #0f172a;
+	font-size: 20px;
+	font-weight: 800;
+	line-height: 1.2;
+	word-break: break-word;
+}
+.omr-mptcp-sub {
+	margin-top: 0.2rem;
+	color: #64748b;
+	font-size: 12px;
+}
+.omr-mptcp-panel {
+	padding: 1rem;
+}
+.omr-mptcp-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 0.75rem;
+}
+.omr-mptcp-title {
+	margin: 0;
+	color: #0f172a;
+	font-size: 15px;
+	font-weight: 800;
+}
+.omr-mptcp-muted {
+	color: #64748b;
+	font-size: 12px;
+}
+.omr-mptcp-badge {
+	display: inline-flex;
+	align-items: center;
+	border-radius: 999px;
+	padding: 0.25rem 0.55rem;
+	background: #e2e8f0;
+	color: #334155;
+	font-size: 11px;
+	font-weight: 800;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+.omr-mptcp-badge.ok {
+	background: #dcfce7;
+	color: #166534;
+}
+.omr-mptcp-badge.warn {
+	background: #fef3c7;
+	color: #92400e;
+}
+.omr-mptcp-badge.err {
+	background: #fee2e2;
+	color: #991b1b;
+}
+.omr-mptcp-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	border: 1px solid #e5e7eb;
+	border-radius: 14px;
+	overflow: hidden;
+	background: #fff;
+}
+.omr-mptcp-table th,
+.omr-mptcp-table td {
+	padding: 0.58rem 0.7rem;
+	border-bottom: 1px solid #edf2f7;
+	text-align: left;
+	vertical-align: top;
+}
+.omr-mptcp-table th {
+	background: #f8fafc;
+	color: #475569;
+	font-weight: 800;
+}
+.omr-mptcp-table tr:last-child td {
+	border-bottom: 0;
+}
+.omr-mptcp-raw {
+	margin: 0.75rem 0 0;
+}
+.omr-mptcp-raw summary {
+	cursor: pointer;
+	color: #475569;
+	font-weight: 800;
+}
+.omr-mptcp-raw pre {
+	max-height: 360px;
+	overflow: auto;
+	margin-top: 0.6rem;
+	padding: 0.8rem;
+	border-radius: 12px;
+	background: #0f172a;
+	color: #e2e8f0;
+	font-size: 12px;
+}
+.omr-mptcp-empty {
+	padding: 1rem;
+	border: 1px dashed #cbd5e1;
+	border-radius: 14px;
+	color: #64748b;
+	background: #f8fafc;
+}
+@media (max-width: 760px) {
+	.omr-mptcp-head { align-items: flex-start; flex-direction: column; }
+	.omr-mptcp-table { display: block; overflow-x: auto; }
+}
+</style>
 
-<script type="text/javascript" src="<%=resource%>/cbi.js?v=git-18.193.28471-ee087a1"></script>
 <script type="text/javascript">//<![CDATA[
-    var stxhr = new XHR();
+(function() {
+	var statusUrl = '<%=url('admin/network/mptcp/mptcp_status_data')%>';
+	var pollTimer = null;
+	var busy = false;
 
-    function update_connections()
-    {
-	var ec = document.getElementById('connections');
-
-	if (ec)
-	{
-	    ec.innerHTML =
-		'<img src="<%=resource%>/icons/loading.gif" alt="<%:Loading%>" style="vertical-align:middle" /> ' + '<%:Waiting for command to complete...%>'
-	    ;
-
-	    stxhr.post('<%=url('admin/network/mptcp')%>/mptcp_connections_data/', { token: '<%=token%>' },
-		function(x)
-		{
-		    if (x.responseText)
-		    {
-			ec.innerHTML = String.format('<pre>%s</pre>', x.responseText );
-		    } else {
-			ec.innerHTML = '<pre><%:Error%></pre>';
-		    }
-		}
-	    );
+	function htmlEscape(value) {
+		return String(value == null ? '' : value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
 	}
-    }
-    setInterval(function () {
-	update_connections();
-    }, 10000);
+
+	function setText(id, value) {
+		var node = document.getElementById(id);
+		if (node) node.innerHTML = htmlEscape(value || '-');
+	}
+
+	function setHtml(id, value) {
+		var node = document.getElementById(id);
+		if (node) node.innerHTML = value;
+	}
+
+	function fmtBytes(value) {
+		var n = Number(value);
+		var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		var i = 0;
+		if (!isFinite(n) || n < 0) return '-';
+		while (n >= 1000 && i < units.length - 1) {
+			n = n / 1000;
+			i++;
+		}
+		return n.toFixed(i ? 2 : 0) + ' ' + units[i];
+	}
+
+	function fmtAgeMs(value) {
+		var n = Number(value);
+		if (!isFinite(n) || n < 0) return '-';
+		if (n < 1000) return n.toFixed(0) + ' ms';
+		if (n < 60000) return (n / 1000).toFixed(1) + ' s';
+		return (n / 60000).toFixed(1) + ' min';
+	}
+
+	function yesNo(value) {
+		if (value === '1' || value === 1 || value === true) return '<%:Enabled%>';
+		if (value === '0' || value === 0 || value === false) return '<%:Disabled%>';
+		return value || '-';
+	}
+
+	function renderEndpoints(endpoints) {
+		if (!endpoints || !endpoints.length) {
+			setHtml('mptcp_endpoints', '<div class="omr-mptcp-empty"><%:No MPTCP endpoint reported by the kernel.%></div>');
+			return;
+		}
+		var html = '<table class="omr-mptcp-table"><tr><th>ID</th><th><%:Address%></th><th><%:Device%></th><th><%:Flags%></th></tr>';
+		for (var i = 0; i < endpoints.length; i++) {
+			var ep = endpoints[i];
+			html += '<tr><td>' + htmlEscape(ep.id || '-') + '</td>' +
+				'<td>' + htmlEscape(ep.address || '-') + '</td>' +
+				'<td>' + htmlEscape(ep.dev || '-') + '</td>' +
+				'<td>' + htmlEscape((ep.flags || []).join(', ') || '-') + '</td></tr>';
+		}
+		html += '</table>';
+		setHtml('mptcp_endpoints', html);
+	}
+
+	function renderConnections(connections) {
+		if (!connections || !connections.length) {
+			setHtml('mptcp_connections', '<div class="omr-mptcp-empty"><%:No established MPTCP connection detected right now.%></div>');
+			return;
+		}
+		var html = '<table class="omr-mptcp-table"><tr><th><%:Connection%></th><th><%:Token%></th><th><%:Subflows%></th><th><%:Traffic%></th><th><%:Last activity%></th></tr>';
+		for (var i = 0; i < connections.length; i++) {
+			var c = connections[i];
+			var subflows = c.subflows_total || c.subflows || '-';
+			var traffic = '<%:Sent%>: ' + fmtBytes(c.bytes_sent) + '<br /><%:Received%>: ' + fmtBytes(c.bytes_received) + '<br /><%:Acked%>: ' + fmtBytes(c.bytes_acked);
+			var activity = '<%:Data sent%>: ' + fmtAgeMs(c.last_data_sent) + '<br /><%:Data received%>: ' + fmtAgeMs(c.last_data_recv) + '<br /><%:ACK received%>: ' + fmtAgeMs(c.last_ack_recv);
+			html += '<tr><td>' + htmlEscape(c.summary || '-') + '</td>' +
+				'<td>' + htmlEscape(c.token || '-') + '</td>' +
+				'<td>' + htmlEscape(subflows) + '</td>' +
+				'<td>' + traffic + '</td>' +
+				'<td>' + activity + '</td></tr>';
+		}
+		html += '</table>';
+		setHtml('mptcp_connections', html);
+	}
+
+	function renderRaw(raw) {
+		var text = 'ip mptcp endpoint show\n' + (raw && raw.endpoints ? raw.endpoints : '-') + '\n\nss -Mtin\n' + (raw && raw.ss ? raw.ss : '-');
+		setHtml('mptcp_raw', '<details class="omr-mptcp-raw"><summary><%:Raw kernel output%></summary><pre>' + htmlEscape(text) + '</pre></details>');
+	}
+
+	function render(payload) {
+		var kernel = payload.kernel || {};
+		var endpoints = payload.endpoints || [];
+		var connections = payload.connections || [];
+		var enabled = yesNo(kernel.enabled);
+		var badge = document.getElementById('mptcp_badge');
+
+		setText('mptcp_enabled', enabled);
+		setText('mptcp_scheduler', kernel.scheduler || '-');
+		setText('mptcp_congestion', kernel.congestion || '-');
+		setText('mptcp_endpoint_count', String(endpoints.length));
+		setText('mptcp_connection_count', String(connections.length));
+		setText('mptcp_pm', kernel.pm_type || kernel.path_manager || '-');
+		setText('mptcp_available_schedulers', kernel.available_schedulers || '-');
+		setText('mptcp_checksum', yesNo(kernel.checksum));
+		setText('mptcp_stale', kernel.stale_loss_cnt || '-');
+
+		if (badge) {
+			badge.className = 'omr-mptcp-badge ' + (kernel.enabled == '1' ? 'ok' : 'warn');
+			badge.innerHTML = kernel.enabled == '1' ? '<%:Live%>' : '<%:Check config%>';
+		}
+
+		renderEndpoints(endpoints);
+		renderConnections(connections);
+		renderRaw(payload.raw || {});
+	}
+
+	function showError(message) {
+		var badge = document.getElementById('mptcp_badge');
+		if (badge) {
+			badge.className = 'omr-mptcp-badge err';
+			badge.innerHTML = '<%:Error%>';
+		}
+		setHtml('mptcp_connections', '<div class="omr-mptcp-empty">' + htmlEscape(message) + '</div>');
+	}
+
+	function poll() {
+		if (busy) return;
+		busy = true;
+		var xhr = new XMLHttpRequest();
+		xhr.open('GET', statusUrl, true);
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState != 4) return;
+			busy = false;
+			try {
+				if (xhr.status < 200 || xhr.status >= 300)
+					throw new Error('HTTP ' + xhr.status);
+				render(JSON.parse(xhr.responseText || '{}'));
+			}
+			catch (e) {
+				showError('<%:Unable to read MPTCP status%>: ' + e.message);
+			}
+		};
+		xhr.send(null);
+	}
+
+	window.addEventListener('load', function() {
+		poll();
+		pollTimer = window.setInterval(poll, 5000);
+	});
+	window.addEventListener('unload', function() {
+		if (pollTimer) window.clearInterval(pollTimer);
+	});
+})();
 //]]></script>
 
-<% if stderr and #stderr > 0 then %><pre class="error"><%=pcdata(stderr)%></pre><% end %>
-<div class="cbi-section">
-    <span id="connections"></span>
-    <script type="text/javascript">//<![CDATA[
-	update_connections();
-    //]]></script>
+<h2><a id="content" name="content"><%:MPTCP status%></a></h2>
+
+<div class="omr-mptcp-shell">
+	<div class="omr-mptcp-head">
+		<div>
+			<h3 class="omr-mptcp-title"><%:Kernel telemetry%></h3>
+			<div class="omr-mptcp-muted"><%:Live data from ip mptcp and ss MPTCP diagnostics.%></div>
+		</div>
+		<span id="mptcp_badge" class="omr-mptcp-badge"><%:Loading%></span>
+	</div>
+
+	<div class="omr-mptcp-grid">
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:MPTCP%></div><div id="mptcp_enabled" class="omr-mptcp-value">-</div><div id="mptcp_checksum" class="omr-mptcp-sub">-</div></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Scheduler%></div><div id="mptcp_scheduler" class="omr-mptcp-value">-</div><div id="mptcp_available_schedulers" class="omr-mptcp-sub">-</div></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Congestion%></div><div id="mptcp_congestion" class="omr-mptcp-value">-</div><div class="omr-mptcp-sub">TCP CC</div></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Path manager%></div><div id="mptcp_pm" class="omr-mptcp-value">-</div><div id="mptcp_stale" class="omr-mptcp-sub">-</div></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Endpoints%></div><div id="mptcp_endpoint_count" class="omr-mptcp-value">-</div><div class="omr-mptcp-sub"><%:Configured paths%></div></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Connections%></div><div id="mptcp_connection_count" class="omr-mptcp-value">-</div><div class="omr-mptcp-sub"><%:Active sockets%></div></div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<h3 class="omr-mptcp-title"><%:Endpoints%></h3>
+			<span class="omr-mptcp-muted"><%:Kernel announced/listening MPTCP addresses%></span>
+		</div>
+		<div id="mptcp_endpoints" class="omr-mptcp-empty"><%:Loading%>...</div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<h3 class="omr-mptcp-title"><%:Established connections%></h3>
+			<span class="omr-mptcp-muted"><%:Subflows, bytes and MPTCP_INFO activity timers when exposed by ss.%></span>
+		</div>
+		<div id="mptcp_connections" class="omr-mptcp-empty"><%:Loading%>...</div>
+		<div id="mptcp_raw"></div>
+	</div>
 </div>
+
 <%+footer%>

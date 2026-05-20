@@ -52,6 +52,28 @@ if [ "$(uci -q get dsvpn.vpn)" = "" ]; then
 	EOF
 fi
 
+if [ "$(uci -q get mqvpn.vpn)" = "" ]; then
+	uci -q batch <<-EOF >/dev/null
+		set mqvpn.vpn=mqvpn
+		set mqvpn.vpn.enable=0
+		set mqvpn.vpn.host=128.128.128.128
+		set mqvpn.vpn.port=65411
+		set mqvpn.vpn.key=''
+		set mqvpn.vpn.dev=mqvpn0
+		set mqvpn.vpn.localip=10.255.249.2
+		set mqvpn.vpn.remoteip=10.255.249.1
+		set mqvpn.vpn.mode=client
+		set mqvpn.vpn.scheduler=wlb
+		set mqvpn.vpn.insecure=1
+		set mqvpn.vpn.manage_routes=0
+		set mqvpn.vpn.paths_auto=1
+		set mqvpn.vpn.reconnect=1
+		set mqvpn.vpn.reconnect_interval=5
+		set mqvpn.vpn.log_level=info
+		commit mqvpn
+	EOF
+fi
+
 if [ "$(uci -q get dsvpn.vpn.mode)" = "" ]; then
 	uci -q batch <<-EOF >/dev/null
 		set dsvpn.vpn.mode=client
@@ -88,6 +110,12 @@ fi
 if [ "$(uci -q get ucitrack.@network[-1].affects | grep dsvpn)" = "" ]; then
 	uci -q batch <<-EOF >/dev/null
 		add_list ucitrack.@network[-1].affects="dsvpn"
+		commit ucitrack
+	EOF
+fi
+if [ "$(uci -q get ucitrack.@network[-1].affects | grep mqvpn)" = "" ]; then
+	uci -q batch <<-EOF >/dev/null
+		add_list ucitrack.@network[-1].affects="mqvpn"
 		commit ucitrack
 	EOF
 fi

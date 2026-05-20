@@ -266,6 +266,10 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			_log "MLVPN down, restart it"
 			/etc/init.d/mlvpn restart >/dev/null 2>&1
 		fi
+		if [ "$(uci -q get mqvpn.vpn.enable)" = "1" ]; then
+			_log "MQVPN down, restart it"
+			/etc/init.d/mqvpn restart >/dev/null 2>&1
+		fi
 		if [ "$(uci -q get glorytun.vpn.enable)" = "1" ]; then
 			_log "Glorytun VPN down, restart it"
 			/etc/init.d/glorytun restart >/dev/null 2>&1

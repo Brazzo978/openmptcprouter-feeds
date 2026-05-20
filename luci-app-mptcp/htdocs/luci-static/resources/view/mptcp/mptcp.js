@@ -41,7 +41,7 @@ return L.view.extend({
 	o.value(1, _("enable"));
 	o.value(0, _("disable"));
 
-	if (boardinfo.kernel.substring(1,4) != "5.15" && boardinfo.kernel.substring(1,1) != "6") {
+	if (boardinfo.kernel.substring(0,4) != "5.15" && boardinfo.kernel.substring(0,1) != "6") {
 		o = s.option(form.ListValue, "mptcp_debug", _("Multipath Debug"));
 		o.value(1, _("enable"));
 		o.value(0, _("disable"));

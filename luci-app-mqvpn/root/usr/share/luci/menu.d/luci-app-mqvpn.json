@@ -1,0 +1,13 @@
+{
+	"admin/vpn/mqvpn": {
+		"title": "MQVPN",
+		"order": 31,
+		"action": {
+			"type": "view",
+			"path": "services/mqvpn"
+		},
+		"depends": {
+			"acl": [ "luci-app-mqvpn" ]
+		}
+	}
+}
