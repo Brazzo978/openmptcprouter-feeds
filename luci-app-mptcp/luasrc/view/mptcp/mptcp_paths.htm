@@ -1,0 +1,1524 @@
+<%+header%>
+
+<style>
+.omr-path-live {
+	--ink: #0f172a;
+	--muted: #64748b;
+	--line: #e2e8f0;
+	--surface: #ffffff;
+	--blue: #2563eb;
+	--green: #16a34a;
+	--amber: #b45309;
+	--red: #dc2626;
+	--shadow: 0 16px 38px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.05);
+	display: grid;
+	gap: 1rem;
+	color: var(--ink);
+}
+.omr-live-hero,
+.omr-live-card,
+.omr-live-panel,
+.omr-live-path {
+	border: 1px solid var(--line);
+	border-radius: 22px;
+	background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+	box-shadow: var(--shadow);
+}
+.omr-live-hero {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 1.15rem 1.25rem;
+	background:
+		radial-gradient(circle at 8% 10%, rgba(37, 99, 235, 0.15), transparent 30%),
+		radial-gradient(circle at 92% 0%, rgba(20, 184, 166, 0.12), transparent 28%),
+		linear-gradient(135deg, #ffffff 0%, #eff6ff 55%, #f0fdfa 100%);
+}
+.omr-live-hero h2 {
+	margin: 0;
+	font-size: 24px;
+	font-weight: 900;
+	letter-spacing: -0.03em;
+}
+.omr-live-hero p,
+.omr-live-muted,
+.omr-live-card p,
+.omr-live-path p,
+.omr-live-table small {
+	margin: 0.28rem 0 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+	.omr-live-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		flex-wrap: wrap;
+	}
+	.omr-live-select {
+		height: 30px;
+		border: 1px solid #cbd5e1;
+		border-radius: 999px;
+		background: #fff;
+		color: #0f172a;
+		font-size: 12px;
+		font-weight: 900;
+		padding: 0 0.65rem;
+	}
+.omr-live-btn,
+.omr-live-badge,
+.omr-live-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	border-radius: 999px;
+	padding: 0.32rem 0.68rem;
+	border: 0;
+	background: #e2e8f0;
+	color: #334155;
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+.omr-live-btn {
+	cursor: pointer;
+	background: #0f172a;
+	color: #fff;
+}
+.omr-live-badge.ok,
+.omr-live-chip.ok { background: #dcfce7; color: #15803d; }
+.omr-live-badge.warn,
+.omr-live-chip.warn { background: #fef3c7; color: var(--amber); }
+.omr-live-badge.err,
+.omr-live-chip.err { background: #fee2e2; color: var(--red); }
+.omr-live-badge.info,
+.omr-live-chip.info { background: #dbeafe; color: #1d4ed8; }
+.omr-live-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 0.8rem;
+}
+.omr-live-card {
+	padding: 0.95rem 1rem;
+	min-height: 92px;
+}
+	.omr-live-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		color: var(--muted);
+		font-size: 11px;
+		font-weight: 900;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+}
+.omr-live-value {
+	margin-top: 0.34rem;
+	font-size: 24px;
+	font-weight: 900;
+	letter-spacing: -0.03em;
+	line-height: 1.1;
+	word-break: break-word;
+}
+.omr-live-panel {
+	padding: 1rem;
+}
+.omr-live-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 0.75rem;
+}
+.omr-live-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 900;
+	letter-spacing: -0.01em;
+}
+	.omr-live-chart-shell {
+		position: relative;
+		min-height: 320px;
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		background:
+			linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(255,255,255,0.9)),
+			repeating-linear-gradient(0deg, transparent 0, transparent 39px, rgba(148, 163, 184, 0.15) 40px);
+		overflow: hidden;
+		box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.06);
+	}
+	.omr-live-graph-canvas {
+		display: block;
+		width: 100%;
+		height: 320px;
+	}
+	.omr-live-graph-tooltip {
+		position: absolute;
+		z-index: 10;
+		min-width: 220px;
+		max-width: 380px;
+		padding: 0.7rem 0.85rem;
+		border-radius: 12px;
+		background: rgba(15, 23, 42, 0.94);
+		color: #fff;
+		font-size: 12px;
+		line-height: 1.35;
+		pointer-events: none;
+		display: none;
+		box-shadow: 0 18px 40px rgba(15, 23, 42, 0.32);
+	}
+	.omr-live-legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin: 0.75rem 0 1.25rem;
+		padding-bottom: 1rem;
+		border-bottom: 1px solid #edf2f7;
+	}
+	.omr-live-legend button {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		border: 1px solid #d1d5db;
+		border-radius: 999px;
+		background: #fff;
+		color: #111827;
+		padding: 0.4rem 0.7rem;
+		font-size: 12px;
+		font-weight: 800;
+		cursor: pointer;
+		box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+		transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+	}
+	.omr-live-legend button:hover {
+		border-color: #94a3b8;
+		box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+	}
+	.omr-live-legend button.off {
+		background: #f8fafc;
+		color: #64748b;
+		opacity: 0.62;
+		box-shadow: none;
+	}
+	.omr-live-dot {
+		width: 0.75rem;
+		height: 0.75rem;
+		border-radius: 50%;
+		box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.55);
+	}
+	.omr-live-stats-table {
+		width: 100%;
+		table-layout: fixed;
+		border-collapse: separate;
+		border-spacing: 0;
+		margin-bottom: 0.25rem;
+		border: 1px solid var(--line);
+		border-radius: 14px;
+		overflow: hidden;
+		background: #fff;
+	}
+	.omr-live-stats-table th,
+	.omr-live-stats-table td {
+		padding: 0.55rem 0.7rem;
+		border-bottom: 1px solid #edf2f7;
+		text-align: left;
+		vertical-align: top;
+		font-size: 12px;
+	}
+	.omr-live-stats-table th {
+		background: #f8fafc;
+		color: #475569;
+		font-size: 11px;
+		font-weight: 900;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	.omr-live-stats-table tr:last-child td {
+		border-bottom: 0;
+	}
+.omr-live-paths {
+	display: grid;
+	gap: 0.8rem;
+}
+.omr-live-path {
+	padding: 1rem;
+	box-shadow: none;
+}
+.omr-live-path-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 0.9rem;
+}
+.omr-live-path-name {
+	font-size: 18px;
+	font-weight: 900;
+	letter-spacing: -0.02em;
+}
+.omr-live-path-rate {
+	text-align: right;
+	font-size: 26px;
+	font-weight: 950;
+	letter-spacing: -0.04em;
+}
+.omr-live-bars {
+	display: grid;
+	gap: 0.55rem;
+}
+.omr-live-bar-row {
+	display: grid;
+	grid-template-columns: 140px 1fr 76px;
+	align-items: center;
+	gap: 0.7rem;
+}
+	.omr-live-bar-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		color: var(--muted);
+		font-size: 12px;
+		font-weight: 900;
+	}
+.omr-live-bar-track {
+	height: 13px;
+	border-radius: 999px;
+	background: #e2e8f0;
+	overflow: hidden;
+}
+.omr-live-bar-fill {
+	height: 100%;
+	width: 0;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #2563eb, #0f766e);
+	transition: width 360ms ease, background-color 360ms ease;
+}
+.omr-live-bar-fill.rx { background: linear-gradient(90deg, #0ea5e9, #2563eb); }
+.omr-live-bar-fill.tx { background: linear-gradient(90deg, #16a34a, #0f766e); }
+	.omr-live-bar-fill.peak { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+	.omr-live-bar-fill.mptcp { background: linear-gradient(90deg, #7c3aed, #2563eb); }
+	.omr-live-bar-fill.saturation { background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444); }
+	.omr-live-balance-track {
+		position: relative;
+		height: 13px;
+		border-radius: 999px;
+		background: #e2e8f0;
+		overflow: hidden;
+	}
+	.omr-live-balance-track:before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 50%;
+		width: 2px;
+		background: #64748b;
+		opacity: 0.55;
+	}
+	.omr-live-balance-fill {
+		position: absolute;
+		top: 0;
+		left: 50%;
+		height: 100%;
+		width: 0;
+		border-radius: 999px;
+		background: linear-gradient(90deg, #2563eb, #0f766e);
+		transition: width 360ms ease;
+	}
+	.omr-live-balance-fill.neg {
+		left: auto;
+		right: 50%;
+		background: linear-gradient(90deg, #f59e0b, #ef4444);
+	}
+.omr-live-bar-value {
+	font-size: 12px;
+	font-weight: 900;
+	text-align: right;
+}
+.omr-live-path-meta {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 0.65rem;
+	margin-top: 0.85rem;
+}
+.omr-live-metric {
+	padding: 0.65rem;
+	border: 1px solid #edf2f7;
+	border-radius: 14px;
+	background: #fff;
+}
+.omr-live-metric strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 900;
+}
+.omr-live-table-wrap { overflow-x: auto; }
+.omr-live-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	border: 1px solid var(--line);
+	border-radius: 16px;
+	overflow: hidden;
+	background: #fff;
+}
+.omr-live-table th,
+.omr-live-table td {
+	padding: 0.58rem 0.68rem;
+	border-bottom: 1px solid #edf2f7;
+	text-align: left;
+	vertical-align: top;
+	font-size: 12px;
+}
+.omr-live-table th {
+	background: #f8fafc;
+	color: #475569;
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.omr-live-table tr:last-child td { border-bottom: 0; }
+	.omr-live-kv {
+		display: grid;
+		gap: 0.18rem;
+		min-width: 120px;
+	}
+	.omr-live-kv span {
+		display: block;
+		color: #334155;
+		font-size: 12px;
+		white-space: nowrap;
+	}
+	.omr-live-kv b {
+		color: #0f172a;
+		font-weight: 950;
+	}
+	.omr-live-kv .bad {
+		color: var(--red);
+		font-weight: 900;
+	}
+	.omr-live-kv .ok {
+		color: var(--green);
+		font-weight: 900;
+	}
+	.omr-live-empty {
+		padding: 1rem;
+		border: 1px dashed #cbd5e1;
+		border-radius: 16px;
+		color: var(--muted);
+		background: #f8fafc;
+	}
+	.omr-info {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 16px;
+		height: 16px;
+		border-radius: 999px;
+		background: #dbeafe;
+		color: #1d4ed8;
+		font-size: 11px;
+		font-weight: 950;
+		line-height: 1;
+		text-transform: none;
+		cursor: help;
+	}
+	.omr-info:after {
+		content: attr(data-tip);
+		position: absolute;
+		left: 50%;
+		bottom: calc(100% + 8px);
+		z-index: 50;
+		width: min(260px, 80vw);
+		padding: 0.65rem 0.75rem;
+		border: 1px solid #cbd5e1;
+		border-radius: 12px;
+		background: #0f172a;
+		color: #e2e8f0;
+		box-shadow: 0 12px 32px rgba(15, 23, 42, 0.22);
+		font-size: 12px;
+		font-weight: 700;
+		letter-spacing: normal;
+		line-height: 1.4;
+		text-transform: none;
+		white-space: normal;
+		opacity: 0;
+		pointer-events: none;
+		transform: translate(-50%, 6px);
+		transition: opacity 160ms ease, transform 160ms ease;
+	}
+	.omr-info:hover:after,
+	.omr-info:focus:after {
+		opacity: 1;
+		transform: translate(-50%, 0);
+	}
+	.omr-live-help summary {
+		cursor: pointer;
+		color: #334155;
+		font-weight: 950;
+	}
+	.omr-live-def-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+		gap: 0.7rem;
+		margin-top: 0.8rem;
+	}
+	.omr-live-def {
+		padding: 0.75rem 0.85rem;
+		border: 1px solid #edf2f7;
+		border-radius: 14px;
+		background: #fff;
+	}
+	.omr-live-def strong {
+		display: block;
+		font-size: 13px;
+		font-weight: 950;
+	}
+	.omr-live-tech-list {
+		margin: 0.75rem 0 0;
+		padding-left: 1.2rem;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.45;
+	}
+	.omr-live-tech-list li {
+		margin: 0.42rem 0;
+	}
+	.omr-live-tech-list strong {
+		color: var(--ink);
+		font-weight: 950;
+	}
+	@media (max-width: 760px) {
+		.omr-live-hero,
+		.omr-live-head,
+	.omr-live-path-head { flex-direction: column; }
+	.omr-live-path-rate { text-align: left; }
+	.omr-live-bar-row { grid-template-columns: 1fr; gap: 0.28rem; }
+}
+</style>
+
+<script type="text/javascript">//<![CDATA[
+(function() {
+	var dataUrl = '<%=url('admin/network/mptcp')%>/mptcp_paths_data/';
+	var token = '<%=token%>';
+	var pollTimer = null;
+	var busy = false;
+	var paused = false;
+	var previous = null;
+	var previousSubflows = {};
+	var smoothedRates = {};
+	var baseRttByPath = {};
+	var detailsOpen = {};
+	var history = [];
+	var peakByPath = {};
+	var graphSelected = {};
+	var graphMode = 'both';
+	var charts = [];
+	var colors = [
+		'#2563eb', '#16a34a', '#f97316', '#0f766e',
+		'#dc2626', '#7c3aed', '#0891b2', '#475569',
+		'#db2777', '#65a30d', '#9333ea', '#0d9488',
+		'#ea580c', '#0284c7', '#be123c', '#4f46e5'
+	];
+	var pollIntervalMs = 2500;
+	var smoothingAlpha = 0.42;
+	var maxWindowSeconds = 180;
+	var maxHistory = Math.ceil(maxWindowSeconds / (pollIntervalMs / 1000));
+	var maxRateBytes = 12500000000;
+	var idleThresholdBytes = 25000; /* 200 kbit/s: hides keepalive/background noise. */
+
+	function htmlEscape(value) {
+		return String(value == null ? '' : value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
+	function setHtml(id, value) {
+		var node = document.getElementById(id);
+		if (node) node.innerHTML = value;
+	}
+
+	function setText(id, value) {
+		setHtml(id, htmlEscape(value || '-'));
+	}
+
+	function badge(text, cls) {
+		return '<span class="omr-live-chip ' + htmlEscape(cls || '') + '">' + htmlEscape(text) + '</span>';
+	}
+
+	function info(text) {
+		return '<span class="omr-info" tabindex="0" data-tip="' + htmlEscape(text) + '">i</span>';
+	}
+
+	function pollIntervalSeconds() {
+		return pollIntervalMs / 1000;
+	}
+
+	function restartTimer() {
+		if (pollTimer) window.clearInterval(pollTimer);
+		pollTimer = window.setInterval(poll, pollIntervalMs);
+	}
+
+	function pathId(path) {
+		return path.device || path.name || 'path';
+	}
+
+	function pathName(path) {
+		var label = path.label ? ' (' + path.label + ')' : '';
+		return (path.name || path.device || 'path') + label;
+	}
+
+	function colorFor(index) {
+		return colors[index % colors.length];
+	}
+
+	function fmtRate(bytes) {
+		bytes = Number(bytes);
+		if (!isFinite(bytes) || bytes < 0) bytes = 0;
+		var bit = bytes * 8;
+		var units = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s'];
+		var i = 0;
+		while (bit >= 1000 && i < units.length - 1) {
+			bit = bit / 1000;
+			i++;
+		}
+		return bit.toFixed(i > 1 ? 2 : 1) + ' ' + units[i];
+	}
+
+	function fmtBytes(bytes) {
+		bytes = Number(bytes);
+		if (!isFinite(bytes) || bytes < 0) bytes = 0;
+		var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		var i = 0;
+		while (bytes >= 1000 && i < units.length - 1) {
+			bytes = bytes / 1000;
+			i++;
+		}
+		return bytes.toFixed(i ? 2 : 0) + ' ' + units[i];
+	}
+
+	function hasMetric(value) {
+		return value !== null && value !== undefined && value !== '';
+	}
+
+	function fmtMetric(value) {
+		return hasMetric(value) ? htmlEscape(value) : '-';
+	}
+
+	function fmtNum(value) {
+		value = Number(value);
+		return isFinite(value) ? String(value) : '-';
+	}
+
+	function fmtMs(value) {
+		value = Number(value);
+		if (!isFinite(value) || value <= 0) return '-';
+		return value.toFixed(value >= 10 ? 1 : 2) + ' ms';
+	}
+
+	function kv(label, value, cls) {
+		return '<span' + (cls ? ' class="' + cls + '"' : '') + '><b>' + htmlEscape(label) + '</b> ' + fmtMetric(value) + '</span>';
+	}
+
+	function kvNum(label, value, cls) {
+		return '<span' + (cls ? ' class="' + cls + '"' : '') + '><b>' + htmlEscape(label) + '</b> ' + fmtNum(value) + '</span>';
+	}
+
+	function kvBytes(label, value) {
+		return '<span><b>' + htmlEscape(label) + '</b> ' + fmtBytes(value) + '</span>';
+	}
+
+	function kvMs(label, value) {
+		return '<span><b>' + htmlEscape(label) + '</b> ' + fmtMs(value) + '</span>';
+	}
+
+	function subflowLossClass(value) {
+		if (!hasMetric(value)) return '';
+		if (String(value) == '0' || String(value) == '0/0') return 'ok';
+		return 'bad';
+	}
+
+	function pct(value) {
+		value = Number(value);
+		if (!isFinite(value) || value < 0) value = 0;
+		if (value > 100) value = 100;
+		return value.toFixed(value >= 10 ? 0 : 1) + '%';
+	}
+
+	function clamp(value, min, max) {
+		value = Number(value);
+		if (!isFinite(value)) value = 0;
+		return Math.max(min, Math.min(max, value));
+	}
+
+	function fmtPp(value) {
+		value = Number(value);
+		if (!isFinite(value)) value = 0;
+		var sign = value > 0 ? '+' : '';
+		return sign + value.toFixed(Math.abs(value) >= 10 ? 0 : 1) + ' pp';
+	}
+
+	function rateDelta(now, before, dt) {
+		var delta = Number(now || 0) - Number(before || 0);
+		if (!isFinite(delta) || delta < 0 || !isFinite(dt) || dt <= 0) return 0;
+		var rate = delta / dt;
+		if (rate > maxRateBytes) return 0;
+		return rate;
+	}
+
+	function smoothRate(id, field, value) {
+		var key = id + ':' + field;
+		value = Number(value);
+		if (!isFinite(value) || value < 0) value = 0;
+		if (smoothedRates[key] === undefined) {
+			smoothedRates[key] = value;
+			return value;
+		}
+		smoothedRates[key] = smoothedRates[key] + smoothingAlpha * (value - smoothedRates[key]);
+		return smoothedRates[key];
+	}
+
+	function findPreviousPath(id) {
+		if (!previous || !previous.paths) return null;
+		for (var i = 0; i < previous.paths.length; i++) {
+			if (pathId(previous.paths[i]) == id) return previous.paths[i];
+		}
+		return null;
+	}
+
+	function compute(payload) {
+		var now = Date.now() / 1000;
+		var dt = previous && previous.client_time ? now - previous.client_time : 0;
+		var paths = payload.paths || [];
+		var nextSubflows = {};
+		var total = 0;
+		var totalRx = 0;
+		var totalTx = 0;
+		var totalMptcp = 0;
+		var activePathCount = 0;
+		var activeRxPathCount = 0;
+		var activeTxPathCount = 0;
+
+		payload.client_time = now;
+
+		for (var i = 0; i < paths.length; i++) {
+			var p = paths[i];
+			var id = pathId(p);
+			var prevPath = findPreviousPath(id);
+			var stats = p.stats || {};
+			var prevStats = prevPath && prevPath.stats ? prevPath.stats : {};
+			var rx = prevPath ? rateDelta(stats.rx_bytes, prevStats.rx_bytes, dt) : 0;
+			var tx = prevPath ? rateDelta(stats.tx_bytes, prevStats.tx_bytes, dt) : 0;
+			var subRx = 0;
+			var subTx = 0;
+			var subflows = p.subflows || [];
+			var rttSum = 0;
+			var rttCount = 0;
+			var maxSendq = 0;
+			var maxCwnd = 0;
+
+			for (var s = 0; s < subflows.length; s++) {
+				var sf = subflows[s];
+				var key = sf.key || (id + ':' + s);
+				var prevSf = previousSubflows[key];
+				if (prevSf) {
+					subTx += rateDelta(sf.bytes_sent, prevSf.bytes_sent, dt);
+					subRx += rateDelta(sf.bytes_received, prevSf.bytes_received, dt);
+				}
+				nextSubflows[key] = sf;
+				if (Number(sf.rtt || 0) > 0) {
+					rttSum += Number(sf.rtt);
+					rttCount++;
+				}
+				if (Number(sf.sendq || 0) > maxSendq) maxSendq = Number(sf.sendq || 0);
+					if (Number(sf.cwnd || 0) > maxCwnd) maxCwnd = Number(sf.cwnd || 0);
+				}
+
+				rx = smoothRate(id, 'rx', rx);
+				tx = smoothRate(id, 'tx', tx);
+				subRx = smoothRate(id, 'mptcp_rx', subRx);
+				subTx = smoothRate(id, 'mptcp_tx', subTx);
+				var avgRtt = rttCount ? rttSum / rttCount : 0;
+				if (avgRtt > 0 && (!baseRttByPath[id] || avgRtt < baseRttByPath[id]))
+					baseRttByPath[id] = avgRtt;
+				var baseRtt = baseRttByPath[id] || avgRtt || 0;
+				var rttDelta = avgRtt > 0 && baseRtt > 0 ? Math.max(0, avgRtt - baseRtt) : 0;
+				var rttInflation = baseRtt > 0 ? rttDelta * 100 / baseRtt : 0;
+				var rttPressure = Math.max(
+					clamp((rttDelta - 5) * 100 / 45, 0, 100),
+					clamp((rttInflation - 20) * 100 / 100, 0, 100)
+				);
+				var queuePressure = clamp(maxSendq * 100 / 262144, 0, 100);
+
+				p.live = {
+					rx_rate: rx,
+					tx_rate: tx,
+					total_rate: rx + tx,
+					mptcp_rx_rate: subRx,
+					mptcp_tx_rate: subTx,
+					mptcp_total_rate: subRx + subTx,
+					active_rate: (rx + tx) >= idleThresholdBytes ? (rx + tx) : 0,
+					active_rx_rate: (rx + tx) >= idleThresholdBytes ? rx : 0,
+					active_tx_rate: (rx + tx) >= idleThresholdBytes ? tx : 0,
+					active_mptcp_rate: (subRx + subTx) >= idleThresholdBytes ? (subRx + subTx) : 0,
+					avg_rtt: avgRtt,
+					base_rtt: baseRtt,
+					rtt_delta: rttDelta,
+					rtt_inflation: rttInflation,
+					rtt_pressure: rttPressure,
+					queue_pressure: queuePressure,
+					max_sendq: maxSendq,
+					max_cwnd: maxCwnd
+				};
+
+				total += p.live.active_rate;
+				totalRx += p.live.active_rx_rate;
+				totalTx += p.live.active_tx_rate;
+				totalMptcp += p.live.active_mptcp_rate;
+				if (p.live.active_rate > 0) activePathCount++;
+				if (p.live.active_rx_rate > 0) activeRxPathCount++;
+				if (p.live.active_tx_rate > 0) activeTxPathCount++;
+			}
+
+			for (var j = 0; j < paths.length; j++) {
+				var path = paths[j];
+				var pid = pathId(path);
+				var fairShare = activePathCount > 0 ? 100 / activePathCount : 0;
+				var fairRxShare = activeRxPathCount > 0 ? 100 / activeRxPathCount : 0;
+				var fairTxShare = activeTxPathCount > 0 ? 100 / activeTxPathCount : 0;
+				path.live.share = total > 0 ? path.live.active_rate * 100 / total : 0;
+				path.live.rx_share = totalRx > 0 ? path.live.active_rx_rate * 100 / totalRx : 0;
+				path.live.tx_share = totalTx > 0 ? path.live.active_tx_rate * 100 / totalTx : 0;
+				path.live.mptcp_share = totalMptcp > 0 ? path.live.active_mptcp_rate * 100 / totalMptcp : 0;
+				path.live.load_imbalance = path.live.active_rate > 0 ? path.live.share - fairShare : 0;
+				path.live.rx_imbalance = path.live.active_rx_rate > 0 ? path.live.rx_share - fairRxShare : 0;
+				path.live.tx_imbalance = path.live.active_tx_rate > 0 ? path.live.tx_share - fairTxShare : 0;
+				peakByPath[pid] = Math.max(peakByPath[pid] || 0, path.live.total_rate);
+				path.live.peak_load = peakByPath[pid] > 0 && path.live.active_rate > 0 ? path.live.total_rate * 100 / peakByPath[pid] : 0;
+				var pressureMax = Math.max(path.live.rtt_pressure, path.live.queue_pressure);
+				var throughputPressure = pressureMax > 0 ? Math.min(path.live.peak_load * 0.25, pressureMax + 20) : 0;
+				path.live.saturation_score = path.live.active_rate > 0 ? clamp(Math.max(path.live.rtt_pressure, path.live.queue_pressure, throughputPressure), 0, 100) : 0;
+			}
+
+		payload.live_total = total;
+		payload.live_rx = totalRx;
+		payload.live_tx = totalTx;
+		payload.live_mptcp = totalMptcp;
+		previousSubflows = nextSubflows;
+		return payload;
+	}
+
+	function pushHistory(payload) {
+		var row = { time: payload.client_time, paths: {} };
+		for (var i = 0; i < (payload.paths || []).length; i++) {
+			var p = payload.paths[i];
+				row.paths[pathId(p)] = {
+					rate: p.live ? p.live.active_rate : 0,
+					rx: p.live ? p.live.active_rx_rate : 0,
+					tx: p.live ? p.live.active_tx_rate : 0,
+					name: pathName(p)
+				};
+		}
+		history.push(row);
+		if (history.length > maxHistory)
+			history = history.slice(history.length - maxHistory);
+	}
+
+	function pathState(path) {
+		if (!path.up) return ['Down', 'err'];
+		if (!path.has_endpoint) return ['No endpoint', 'warn'];
+		if (!path.live || path.live.active_rate <= 0) return ['Idle <200 kbit/s', 'info'];
+		if (Number(path.subflow_count || 0) === 0) return ['Idle', 'info'];
+		if (path.live.saturation_score >= 70) return ['Saturated', 'err'];
+		if (path.live.saturation_score >= 35) return ['Pressure', 'warn'];
+		if (path.live && path.live.max_sendq > 262144) return ['Queued', 'warn'];
+		return ['Active', 'ok'];
+	}
+
+	function renderSummary(payload) {
+		var paths = payload.paths || [];
+		var busiest = null;
+		var busiestRate = -1;
+		var active = 0;
+		var subflows = 0;
+		var worstRtt = 0;
+		var worstSat = 0;
+		var worstSatPath = null;
+
+		for (var i = 0; i < paths.length; i++) {
+			var p = paths[i];
+			var rate = p.live ? p.live.active_rate : 0;
+			if (rate > busiestRate) {
+				busiest = p;
+				busiestRate = rate;
+			}
+			if (p.live && p.live.active_rate > 0) active++;
+			subflows += Number(p.subflow_count || 0);
+			if (p.live && p.live.avg_rtt > worstRtt) worstRtt = p.live.avg_rtt;
+			if (p.live && p.live.saturation_score > worstSat) {
+				worstSat = p.live.saturation_score;
+				worstSatPath = p;
+			}
+		}
+
+		setText('live_total_rate', fmtRate(payload.live_total || 0));
+		setText('live_total_sub', 'RX ' + fmtRate(payload.live_rx || 0) + ' / TX ' + fmtRate(payload.live_tx || 0));
+		setText('live_busiest_path', busiest && busiestRate > 0 ? pathName(busiest) : 'Idle');
+		setText('live_busiest_sub', busiest && busiestRate > 0 ? pct(busiest.live.share) + ' of current WAN traffic' : 'all paths below 200 kbit/s');
+		setText('live_active_paths', String(active) + ' / ' + String(paths.length));
+		setText('live_active_sub', 'paths carrying traffic now');
+		setText('live_subflows', String(subflows));
+		setText('live_subflows_sub', 'visible MPTCP TCP subflows');
+		setText('live_saturation', worstSat.toFixed(0) + '%');
+		setText('live_saturation_sub', worstSatPath ? pathName(worstSatPath) + ' latency/queue pressure' : 'no active pressure');
+		setText('live_worst_rtt', worstRtt ? worstRtt.toFixed(1) + ' ms' : '-');
+		setText('live_worst_rtt_sub', 'highest average subflow RTT');
+	}
+
+	function pathIndex(paths, id) {
+		for (var i = 0; i < (paths || []).length; i++) {
+			if (pathId(paths[i]) == id) return i;
+		}
+		return 0;
+	}
+
+	function visiblePathIds(paths) {
+		var out = [];
+		for (var i = 0; i < (paths || []).length; i++) {
+			var id = pathId(paths[i]);
+			if (graphSelected[id] !== false)
+				out.push(id);
+		}
+		return out;
+	}
+
+	function pathLabel(paths, id) {
+		for (var i = 0; i < (paths || []).length; i++) {
+			if (pathId(paths[i]) == id) return pathName(paths[i]);
+		}
+		return id;
+	}
+
+	function pathColor(paths, id) {
+		return colorFor(pathIndex(paths, id));
+	}
+
+	function graphFieldsForMode(mode) {
+		if (mode == 'rx') return ['rx'];
+		if (mode == 'tx') return ['tx'];
+		return ['rx', 'tx'];
+	}
+
+	function graphFieldLabel(field) {
+		return field == 'rx' ? 'Download' : 'Upload';
+	}
+
+	function graphFieldShort(field) {
+		return field == 'rx' ? 'DL' : 'UL';
+	}
+
+	function graphModeLabel(mode) {
+		if (mode == 'rx') return 'Download';
+		if (mode == 'tx') return 'Upload';
+		return 'Download + Upload';
+	}
+
+	function graphScale(mode, paths) {
+		var ids = visiblePathIds(paths);
+		var fields = graphFieldsForMode(mode);
+		var max = 0;
+		for (var h = 0; h < history.length; h++) {
+			for (var i = 0; i < ids.length; i++) {
+				var item = history[h].paths[ids[i]];
+				if (!item) continue;
+				for (var f = 0; f < fields.length; f++)
+					max = Math.max(max, Number(item[fields[f]] || 0));
+			}
+		}
+		return max > 0 && isFinite(max) ? max * 1.15 : 1;
+	}
+
+	function resizeGraphCanvas(canvas) {
+		var dpr = window.devicePixelRatio || 1;
+		var rect = canvas.getBoundingClientRect();
+		var w = Math.max(320, Math.floor(rect.width));
+		var h = Math.max(240, Math.floor(rect.height));
+		if (canvas.width != Math.floor(w * dpr) || canvas.height != Math.floor(h * dpr)) {
+			canvas.width = Math.floor(w * dpr);
+			canvas.height = Math.floor(h * dpr);
+		}
+		var ctx = canvas.getContext('2d');
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		return { w: w, h: h };
+	}
+
+	function drawGraph(chart, payload) {
+		var canvas = chart.canvas;
+		if (!canvas || !canvas.getContext) return;
+		var paths = payload.paths || [];
+		var dim = resizeGraphCanvas(canvas);
+		var ctx = canvas.getContext('2d');
+		var w = dim.w, h = dim.h;
+		var padL = 62, padR = 16, padT = 18, padB = 34;
+		var graphW = Math.max(1, w - padL - padR);
+		var graphH = Math.max(1, h - padT - padB);
+		var mode = graphMode || 'both';
+		var ids = visiblePathIds(paths);
+		var maxY = graphScale(mode, paths);
+		var now = history.length ? history[history.length - 1].time : (Date.now() / 1000);
+		var start = now - maxWindowSeconds;
+
+		chart.geom = { padL: padL, padR: padR, padT: padT, padB: padB, graphW: graphW, graphH: graphH, maxY: maxY, start: start, end: now, ids: ids, paths: paths, mode: mode };
+
+		ctx.clearRect(0, 0, w, h);
+		var grad = ctx.createLinearGradient(0, 0, 0, h);
+		grad.addColorStop(0, '#ffffff');
+		grad.addColorStop(1, '#f8fafc');
+		ctx.fillStyle = grad;
+		ctx.fillRect(0, 0, w, h);
+		ctx.strokeStyle = '#e5e7eb';
+		ctx.lineWidth = 1;
+		ctx.font = '12px sans-serif';
+		ctx.fillStyle = '#64748b';
+
+		for (var g = 0; g <= 4; g++) {
+			var y = padT + graphH * g / 4;
+			ctx.beginPath();
+			ctx.moveTo(padL, y);
+			ctx.lineTo(w - padR, y);
+			ctx.stroke();
+			ctx.fillText(fmtRate(maxY * (1 - g / 4)), 6, y + 4);
+		}
+
+		for (var m = 0; m <= 5; m++) {
+			var xg = padL + graphW * m / 5;
+			ctx.beginPath();
+			ctx.moveTo(xg, padT);
+			ctx.lineTo(xg, padT + graphH);
+			ctx.stroke();
+			var ago = Math.round((maxWindowSeconds * (5 - m) / 5));
+			ctx.fillText(ago ? '-' + ago + 's' : 'now', xg - 14, h - 10);
+		}
+
+		var fields = mode == 'both' ? ['tx', 'rx'] : graphFieldsForMode(mode);
+		for (var f = 0; f < fields.length; f++) {
+			var field = fields[f];
+			var dashed = mode == 'both' && field == 'tx';
+			for (var n = ids.length - 1; n >= 0; n--) {
+				var id = ids[n];
+				ctx.beginPath();
+				var moved = false;
+				for (var i = 0; i < history.length; i++) {
+					var row = history[i];
+					if (row.time < start) continue;
+					var item = row.paths[id];
+					var value = item ? Number(item[field] || 0) : 0;
+					var x = padL + ((row.time - start) / maxWindowSeconds) * graphW;
+					var y = padT + graphH - (value / maxY) * graphH;
+					if (!moved) {
+						ctx.moveTo(x, y);
+						moved = true;
+					} else {
+						ctx.lineTo(x, y);
+					}
+				}
+				ctx.strokeStyle = pathColor(paths, id);
+				ctx.globalAlpha = dashed ? 0.56 : (ids.length > 10 ? 0.68 : 0.86);
+				ctx.lineWidth = dashed ? (ids.length > 10 ? 1.35 : 1.7) : (ids.length > 10 ? 1.7 : 2.3);
+				ctx.lineJoin = 'round';
+				ctx.lineCap = 'round';
+				if (dashed) ctx.setLineDash([6, 5]);
+				ctx.stroke();
+				if (dashed) ctx.setLineDash([]);
+				ctx.globalAlpha = 1;
+			}
+		}
+
+		if (chart.hoverX !== null && chart.hoverX !== undefined) {
+			ctx.strokeStyle = '#111827';
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(chart.hoverX, padT);
+			ctx.lineTo(chart.hoverX, padT + graphH);
+			ctx.stroke();
+		}
+	}
+
+	function statsForPath(id, field) {
+		var cur = 0, peak = 0, sum = 0, count = 0;
+		for (var i = 0; i < history.length; i++) {
+			var item = history[i].paths[id];
+			if (!item) continue;
+			var value = Number(item[field] || 0);
+			if (!isFinite(value)) continue;
+			cur = value;
+			peak = Math.max(peak, value);
+			sum += value;
+			count++;
+		}
+		return { cur: cur, avg: count ? sum / count : 0, peak: peak };
+	}
+
+	function renderGraphStats(tableId, mode, paths) {
+		var table = document.getElementById(tableId);
+		if (!table) return;
+		var ids = visiblePathIds(paths);
+		var fields = graphFieldsForMode(mode);
+		var html = '<tr><th>Path</th>' + (fields.length > 1 ? '<th>Direction</th>' : '') + '<th>Current</th><th>Average</th><th>Peak</th></tr>';
+		for (var i = 0; i < ids.length; i++) {
+			for (var f = 0; f < fields.length; f++) {
+				var st = statsForPath(ids[i], fields[f]);
+				html += '<tr><td><span class="omr-live-dot" style="display:inline-block;background:' + pathColor(paths, ids[i]) + ';margin-right:0.35rem;vertical-align:-0.1rem"></span>' + htmlEscape(pathLabel(paths, ids[i])) + '</td>' +
+					(fields.length > 1 ? '<td>' + graphFieldShort(fields[f]) + '</td>' : '') +
+					'<td>' + fmtRate(st.cur) + '</td><td>' + fmtRate(st.avg) + '</td><td>' + fmtRate(st.peak) + '</td></tr>';
+			}
+		}
+		table.innerHTML = html;
+	}
+
+	function renderGraphLegend(legendId, paths) {
+		var legend = document.getElementById(legendId);
+		if (!legend) return;
+		var html = '';
+		for (var i = 0; i < (paths || []).length; i++) {
+			var id = pathId(paths[i]);
+			var off = graphSelected[id] === false;
+			html += '<button type="button" class="' + (off ? 'off' : '') + '" data-path="' + htmlEscape(id) + '">' +
+				'<span class="omr-live-dot" style="background:' + colorFor(i) + '"></span>' + htmlEscape(pathName(paths[i])) + '</button>';
+		}
+		if (graphMode == 'both' && html)
+			html += '<span class="omr-live-muted" style="font-size:12px;font-weight:850">solid DL / dashed UL</span>';
+		legend.innerHTML = html || '<span>No paths</span>';
+	}
+
+	function renderBars(path) {
+		var live = path.live || {};
+		var mptcpText = live.mptcp_total_rate > 0 ? pct(live.mptcp_share) : '-';
+		var sat = Number(live.saturation_score || 0);
+		return '<div class="omr-live-bars">' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">Path saturation ' + info('Estimated pressure of this path. It rises when RTT grows above the observed baseline or TCP send queue grows. This is the best signal for saturation.') + '</div><div class="omr-live-bar-track"><div class="omr-live-bar-fill saturation" style="width:' + pct(sat) + '"></div></div><div class="omr-live-bar-value">' + pct(sat) + '</div></div>' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">WAN load share ' + info('Share of total physical WAN traffic currently seen on this interface. This is the clearest value to know which line is more loaded.') + '</div><div class="omr-live-bar-track"><div class="omr-live-bar-fill" style="width:' + pct(live.share) + '"></div></div><div class="omr-live-bar-value">' + pct(live.share) + '</div></div>' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">RX imbalance ' + info('Difference from an even split. With two active WANs, 0 pp means 50/50; +10 pp means this path is receiving about 60% instead of 50%.') + '</div>' + renderBalanceTrack(live.rx_imbalance) + '<div class="omr-live-bar-value">' + fmtPp(live.rx_imbalance) + '</div></div>' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">TX imbalance ' + info('Difference from an even split. With two active WANs, 0 pp means 50/50; negative values mean this path is carrying less than its fair share.') + '</div>' + renderBalanceTrack(live.tx_imbalance) + '<div class="omr-live-bar-value">' + fmtPp(live.tx_imbalance) + '</div></div>' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">Vs recent peak ' + info('Current physical rate compared with the highest rate seen on this path since the graph was opened or reset.') + '</div><div class="omr-live-bar-track"><div class="omr-live-bar-fill peak" style="width:' + pct(live.peak_load) + '"></div></div><div class="omr-live-bar-value">' + pct(live.peak_load) + '</div></div>' +
+			'<div class="omr-live-bar-row"><div class="omr-live-bar-label">MPTCP share ' + info('Estimated share using visible MPTCP subflow bytes from ss. Useful, but WAN load share is the physical truth.') + '</div><div class="omr-live-bar-track"><div class="omr-live-bar-fill mptcp" style="width:' + (live.mptcp_total_rate > 0 ? pct(live.mptcp_share) : '0%') + '"></div></div><div class="omr-live-bar-value">' + mptcpText + '</div></div>' +
+			'</div>';
+	}
+
+	function renderBalanceTrack(value) {
+		var v = clamp(value, -50, 50);
+		var width = Math.abs(v);
+		var cls = v < 0 ? ' neg' : '';
+		return '<div class="omr-live-balance-track"><div class="omr-live-balance-fill' + cls + '" style="width:' + pct(width) + '"></div></div>';
+	}
+
+	function renderPathMeta(path) {
+		var live = path.live || {};
+		var endpoint = path.endpoint || {};
+		var speed = path.stats && Number(path.stats.speed_mbps || 0) > 0 ? String(path.stats.speed_mbps) + ' Mbit/s link' : 'link speed unknown';
+		return '<div class="omr-live-path-meta">' +
+			'<div class="omr-live-metric"><strong>' + pct(live.saturation_score || 0) + ' ' + info('Saturation estimate. 0-30% is normal, 35-70% means pressure, above 70% means this path is likely saturated or queueing.') + '</strong><p>path saturation</p></div>' +
+			'<div class="omr-live-metric"><strong>' + fmtRate(live.rx_rate || 0) + ' ' + info('Current receive rate read from the Linux interface byte counter, smoothed for readability.') + '</strong><p>RX physical rate</p></div>' +
+			'<div class="omr-live-metric"><strong>' + fmtRate(live.tx_rate || 0) + ' ' + info('Current transmit rate read from the Linux interface byte counter, smoothed for readability.') + '</strong><p>TX physical rate</p></div>' +
+			'<div class="omr-live-metric"><strong>' + (live.avg_rtt ? live.avg_rtt.toFixed(1) + ' ms' : '-') + ' ' + info('Current average RTT of the MPTCP TCP subflows. Compare this with baseline: rising RTT is the main saturation signal.') + '</strong><p>RTT current</p></div>' +
+			'<div class="omr-live-metric"><strong>' + (live.base_rtt ? live.base_rtt.toFixed(1) + ' ms' : '-') + ' +' + (live.rtt_delta ? live.rtt_delta.toFixed(1) : '0.0') + ' ms</strong><p>RTT baseline / delta</p></div>' +
+			'<div class="omr-live-metric"><strong>' + String(path.subflow_count || 0) + ' ' + info('Number of TCP subflows visible below MPTCP on this path. More subflows usually means this path is actively participating.') + '</strong><p>MPTCP subflows visible</p></div>' +
+			'<div class="omr-live-metric"><strong>' + htmlEscape(path.stats && path.stats.operstate ? path.stats.operstate : '-') + '</strong><p>' + htmlEscape(speed) + '</p></div>' +
+			'<div class="omr-live-metric"><strong>' + htmlEscape(endpoint.address || '-') + '</strong><p>kernel endpoint</p></div>' +
+			'</div>';
+	}
+
+	function renderSubflowTable(path) {
+		var subflows = path.subflows || [];
+		if (!subflows.length) return '<div class="omr-live-empty">No MPTCP subflow currently mapped to this path.</div>';
+		var html = '<div class="omr-live-table-wrap"><table class="omr-live-table"><tr><th>Subflow</th><th>Latency</th><th>Queue / loss</th><th>Window</th><th>Rate / BBR</th><th>Counters</th></tr>';
+		for (var i = 0; i < subflows.length; i++) {
+			var sf = subflows[i];
+			html += '<tr>' +
+				'<td><strong>' + htmlEscape(sf.local_addr || '-') + '</strong><small>' + htmlEscape(sf.peer_addr || '-') + '</small></td>' +
+				'<td><div class="omr-live-kv">' +
+					kvMs('RTT', sf.rtt) +
+					kvMs('var', sf.rttvar) +
+					kvMs('min', sf.minrtt || sf.bbr_mrtt) +
+					kvMs('rcv', sf.rcv_rtt) +
+					kv('rto', sf.rto) +
+				'</div></td>' +
+				'<td><div class="omr-live-kv">' +
+					kvNum('sendq', sf.sendq || 0, Number(sf.sendq || 0) > 0 ? 'bad' : '') +
+					kvNum('recvq', sf.recvq || 0, Number(sf.recvq || 0) > 0 ? 'bad' : '') +
+					kvNum('unacked', sf.unacked || 0, Number(sf.unacked || 0) > 0 ? 'bad' : '') +
+					kv('retrans', sf.retrans || '0', subflowLossClass(sf.retrans || '0')) +
+					kvNum('lost', sf.lost || 0, Number(sf.lost || 0) > 0 ? 'bad' : 'ok') +
+					kvNum('reorder', sf.reordering || 0) +
+				'</div></td>' +
+				'<td><div class="omr-live-kv">' +
+					kvNum('cwnd', sf.cwnd || 0) +
+					kvNum('snd_wnd', sf.snd_wnd || 0) +
+					kvNum('rcv_wnd', sf.rcv_wnd || 0) +
+					kvNum('rcv_space', sf.rcv_space || 0) +
+					kvNum('rcv_ssthresh', sf.rcv_ssthresh || 0) +
+					kv('mss/pmtu', String(sf.mss || 0) + '/' + String(sf.pmtu || 0)) +
+				'</div></td>' +
+				'<td><div class="omr-live-kv">' +
+					kv('BBR bw', sf.bbr_bw) +
+					kv('delivery', sf.delivery_rate) +
+					kv('pacing', sf.pacing_rate) +
+					kv('send', sf.send_rate) +
+					kv('gain', (sf.bbr_pacing_gain || '-') + '/' + (sf.bbr_cwnd_gain || '-')) +
+					(sf.app_limited ? '<span><b>app</b> limited</span>' : '<span class="ok"><b>app</b> not limited</span>') +
+				'</div></td>' +
+				'<td><div class="omr-live-kv">' +
+					kvBytes('sent', sf.bytes_sent || 0) +
+					kvBytes('recv', sf.bytes_received || 0) +
+					kvBytes('acked', sf.bytes_acked || 0) +
+					kv('segs', String(sf.segs_out || 0) + '/' + String(sf.segs_in || 0)) +
+					kv('data', String(sf.data_segs_out || 0) + '/' + String(sf.data_segs_in || 0)) +
+					kvNum('deliv', sf.delivered || 0) +
+				'</div></td>' +
+				'</tr>';
+		}
+		html += '</table></div>';
+		return html;
+	}
+
+	function attachDetailsToggles() {
+		var nodes = document.querySelectorAll('#path_live_paths details[data-path]');
+		for (var i = 0; i < nodes.length; i++) {
+			nodes[i].addEventListener('toggle', function() {
+				detailsOpen[this.getAttribute('data-path')] = this.open;
+			});
+		}
+	}
+
+	function renderPaths(payload) {
+		var paths = payload.paths || [];
+		if (!paths.length) {
+			setHtml('path_live_paths', '<div class="omr-live-empty">No active MPTCP WAN path configured. Set at least one interface to master/on/backup.</div>');
+			return;
+		}
+		var html = '';
+		for (var i = 0; i < paths.length; i++) {
+			var p = paths[i];
+			var st = pathState(p);
+			var id = pathId(p);
+			var detailsAttr = detailsOpen[id] ? ' open' : '';
+			html += '<div class="omr-live-path">' +
+				'<div class="omr-live-path-head"><div><div class="omr-live-path-name">' + htmlEscape(pathName(p)) + ' ' + badge(p.role || '-', p.role == 'backup' ? 'warn' : 'info') + ' ' + badge(st[0], st[1]) + '</div><p>' + htmlEscape(p.device || '-') + ' / ' + htmlEscape((p.addresses || []).join(', ') || '-') + '</p></div>' +
+				'<div class="omr-live-path-rate">' + fmtRate(p.live ? p.live.active_rate : 0) + '<p>RX + TX physical, idle-filtered</p></div></div>' +
+				renderBars(p) +
+				renderPathMeta(p) +
+				'<details data-path="' + htmlEscape(id) + '" style="margin-top:0.85rem"' + detailsAttr + '><summary style="cursor:pointer;font-weight:900;color:#334155">Subflow details ' + info('Detailed TCP subflows below this MPTCP path. This section now stays open across refreshes.') + '</summary><div style="margin-top:0.65rem">' + renderSubflowTable(p) + '</div></details>' +
+				'</div>';
+		}
+		setHtml('path_live_paths', html);
+		attachDetailsToggles();
+	}
+
+	function nearestAt(chart, x) {
+		if (!chart.geom) return null;
+		var g = chart.geom;
+		var t = g.start + ((x - g.padL) / g.graphW) * maxWindowSeconds;
+		var rows = [];
+		var threshold = Math.max(2.5, pollIntervalSeconds() * 1.7);
+		var fields = graphFieldsForMode(g.mode || graphMode);
+
+		for (var i = 0; i < g.ids.length; i++) {
+			var id = g.ids[i];
+			var best = null, dist = Infinity;
+			for (var j = 0; j < history.length; j++) {
+				var d = Math.abs(history[j].time - t);
+				if (d < dist) {
+					dist = d;
+					best = history[j];
+				}
+			}
+			if (best && dist <= threshold && best.paths[id]) {
+				for (var f = 0; f < fields.length; f++) {
+					rows.push({
+						id: id,
+						color: pathColor(g.paths, id),
+						label: pathLabel(g.paths, id) + (fields.length > 1 ? ' ' + graphFieldShort(fields[f]) : ''),
+						value: best.paths[id][fields[f]] || 0
+					});
+				}
+			}
+		}
+
+		rows.sort(function(a, b) { return b.value - a.value; });
+		return rows.length ? { t: t, rows: rows } : null;
+	}
+
+	function renderGraphs(payload) {
+		var paths = payload.paths || [];
+		for (var i = 0; i < charts.length; i++)
+			drawGraph(charts[i], payload);
+		renderGraphLegend('path_graph_legend', paths);
+		renderGraphStats('path_graph_stats', graphMode, paths);
+	}
+
+	function bindGraphTooltip(chart) {
+		var canvas = chart.canvas;
+		var tip = chart.tooltip;
+		if (!canvas || !tip) return;
+		canvas.addEventListener('mousemove', function(ev) {
+			var rect = canvas.getBoundingClientRect();
+			var x = ev.clientX - rect.left;
+			chart.hoverX = x;
+			var hit = nearestAt(chart, x);
+			if (!hit) {
+				tip.style.display = 'none';
+				if (previous) renderGraphs(previous);
+				return;
+			}
+			var html = '<strong>' + graphModeLabel(chart.geom ? chart.geom.mode : graphMode) + '</strong><br />';
+			for (var i = 0; i < hit.rows.length; i++) {
+				var row = hit.rows[i];
+				html += '<span style="color:' + row.color + '">&#9632;</span> ' + htmlEscape(row.label) + ': ' + fmtRate(row.value) + '<br />';
+			}
+			tip.innerHTML = html;
+			tip.style.display = 'block';
+			tip.style.left = Math.min(rect.width - 240, Math.max(8, x + 12)) + 'px';
+			tip.style.top = Math.max(8, ev.clientY - rect.top - 18) + 'px';
+			if (previous) renderGraphs(previous);
+		});
+		canvas.addEventListener('mouseleave', function() {
+			chart.hoverX = null;
+			tip.style.display = 'none';
+			if (previous) renderGraphs(previous);
+		});
+	}
+
+	function bindGraphLegend(legend) {
+		if (!legend) return;
+		legend.addEventListener('click', function(ev) {
+			var node = ev.target;
+			while (node && node != legend && !node.getAttribute('data-path')) node = node.parentNode;
+			if (!node || node == legend) return;
+			var id = node.getAttribute('data-path');
+			graphSelected[id] = graphSelected[id] === false;
+			if (previous) renderGraphs(previous);
+		});
+	}
+
+	function initGraphs() {
+		var graph = document.getElementById('path_graph_canvas');
+		if (graph) charts.push({ canvas: graph, tooltip: document.getElementById('path_graph_tooltip'), hoverX: null });
+		for (var i = 0; i < charts.length; i++)
+			bindGraphTooltip(charts[i]);
+		bindGraphLegend(document.getElementById('path_graph_legend'));
+	}
+
+	function render(payload) {
+		var processed = compute(payload);
+		pushHistory(processed);
+		renderSummary(processed);
+		renderPaths(processed);
+		renderGraphs(processed);
+		setText('path_live_updated', new Date().toLocaleTimeString());
+		var badgeNode = document.getElementById('path_live_badge');
+			if (badgeNode) {
+				badgeNode.className = 'omr-live-badge ok';
+				badgeNode.innerHTML = 'Live ' + String(pollIntervalSeconds()) + 's';
+			}
+		previous = processed;
+	}
+
+	function showError(message) {
+		var badgeNode = document.getElementById('path_live_badge');
+		if (badgeNode) {
+			badgeNode.className = 'omr-live-badge err';
+			badgeNode.innerHTML = 'Error';
+		}
+		setHtml('path_live_paths', '<div class="omr-live-empty">Unable to read path live data: ' + htmlEscape(message) + '</div>');
+	}
+
+	function poll() {
+		if (busy || paused) return;
+		busy = true;
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', dataUrl, true);
+		xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState != 4) return;
+			busy = false;
+			try {
+				if (xhr.status < 200 || xhr.status >= 300)
+					throw new Error('HTTP ' + xhr.status);
+				render(JSON.parse(xhr.responseText || '{}'));
+			} catch (e) {
+				showError(e.message);
+			}
+		};
+		xhr.send('token=' + encodeURIComponent(token));
+	}
+
+	window.addEventListener('load', function() {
+		initGraphs();
+		var pauseBtn = document.getElementById('path_live_pause');
+		if (pauseBtn) {
+			pauseBtn.onclick = function() {
+				paused = !paused;
+				pauseBtn.innerHTML = paused ? 'Resume' : 'Pause';
+				var badgeNode = document.getElementById('path_live_badge');
+				if (badgeNode && paused) {
+					badgeNode.className = 'omr-live-badge warn';
+					badgeNode.innerHTML = 'Paused';
+				}
+			};
+		}
+		var resetBtn = document.getElementById('path_live_reset');
+		if (resetBtn) {
+			resetBtn.onclick = function() {
+				history = [];
+				peakByPath = {};
+				baseRttByPath = {};
+				smoothedRates = {};
+				previous = null;
+				previousSubflows = {};
+				poll();
+			};
+		}
+		var intervalSelect = document.getElementById('path_live_interval');
+		if (intervalSelect) {
+			intervalSelect.value = String(pollIntervalMs);
+			intervalSelect.onchange = function() {
+				var next = Number(intervalSelect.value);
+				if (!isFinite(next) || next < 1000) next = 2500;
+				pollIntervalMs = next;
+				maxHistory = Math.ceil(maxWindowSeconds / pollIntervalSeconds());
+				if (history.length > maxHistory)
+					history = history.slice(history.length - maxHistory);
+				restartTimer();
+				poll();
+				if (previous) renderGraphs(previous);
+			};
+		}
+		var windowSelect = document.getElementById('path_live_window');
+		if (windowSelect) {
+			windowSelect.value = String(maxWindowSeconds);
+			windowSelect.onchange = function() {
+				var next = Number(windowSelect.value);
+				if (!isFinite(next) || next < 60) next = 180;
+				maxWindowSeconds = next;
+				maxHistory = Math.ceil(maxWindowSeconds / pollIntervalSeconds());
+				if (history.length > maxHistory)
+					history = history.slice(history.length - maxHistory);
+				if (previous) renderGraphs(previous);
+			};
+		}
+		var graphModeSelect = document.getElementById('path_live_graph_mode');
+		if (graphModeSelect) {
+			graphModeSelect.value = graphMode;
+			graphModeSelect.onchange = function() {
+				var next = graphModeSelect.value;
+				graphMode = (next == 'rx' || next == 'tx' || next == 'both') ? next : 'both';
+				if (previous) renderGraphs(previous);
+			};
+		}
+		poll();
+		restartTimer();
+	});
+
+	window.addEventListener('resize', function() {
+		if (previous) renderGraphs(previous);
+	});
+	window.addEventListener('unload', function() {
+		if (pollTimer) window.clearInterval(pollTimer);
+	});
+})();
+//]]></script>
+
+<div class="omr-path-live">
+	<div class="omr-live-hero">
+		<div>
+			<h2><a id="content" name="content"><%:MPTCP path live%></a></h2>
+			<p><%:Smoothed live view of WAN path load and saturation. Use it during iperf or speed tests to see which physical line is loaded and which one is starting to queue.%></p>
+			<p><%:WAN load comes from real interface byte counters. Saturation is estimated from RTT increase over the observed baseline plus TCP queue pressure. Paths below 200 kbit/s are treated as idle.%></p>
+			<p><%:Last update%>: <span id="path_live_updated">-</span></p>
+		</div>
+		<div class="omr-live-actions">
+			<span id="path_live_badge" class="omr-live-badge info"><%:Loading%></span>
+			<label class="omr-live-muted" for="path_live_interval" style="margin:0;font-weight:900"><%:Refresh%></label>
+			<select id="path_live_interval" class="omr-live-select">
+				<option value="1000">1s</option>
+				<option value="2500" selected="selected">2.5s</option>
+				<option value="5000">5s</option>
+				<option value="10000">10s</option>
+			</select>
+			<label class="omr-live-muted" for="path_live_window" style="margin:0;font-weight:900"><%:Window%></label>
+			<select id="path_live_window" class="omr-live-select">
+				<option value="60">1m</option>
+				<option value="180" selected="selected">3m</option>
+				<option value="300">5m</option>
+				<option value="600">10m</option>
+			</select>
+			<label class="omr-live-muted" for="path_live_graph_mode" style="margin:0;font-weight:900"><%:Graph%></label>
+			<select id="path_live_graph_mode" class="omr-live-select">
+				<option value="both" selected="selected">DL + UL</option>
+				<option value="rx">Download</option>
+				<option value="tx">Upload</option>
+			</select>
+			<button id="path_live_pause" class="omr-live-btn" type="button"><%:Pause%></button>
+			<button id="path_live_reset" class="omr-live-btn" type="button"><%:Reset graph%></button>
+		</div>
+	</div>
+
+	<div class="omr-live-grid">
+		<div class="omr-live-card"><div class="omr-live-label"><%:Total load%></div><div id="live_total_rate" class="omr-live-value">-</div><p id="live_total_sub">-</p></div>
+		<div class="omr-live-card"><div class="omr-live-label"><%:Busiest path%></div><div id="live_busiest_path" class="omr-live-value">-</div><p id="live_busiest_sub">-</p></div>
+		<div class="omr-live-card"><div class="omr-live-label"><%:Active paths%></div><div id="live_active_paths" class="omr-live-value">-</div><p id="live_active_sub">-</p></div>
+		<div class="omr-live-card"><div class="omr-live-label"><%:Subflows%></div><div id="live_subflows" class="omr-live-value">-</div><p id="live_subflows_sub">-</p></div>
+		<div class="omr-live-card"><div class="omr-live-label"><%:Saturation%> <span class="omr-info" data-tip="<%:Estimated path pressure from RTT increase over the observed baseline and TCP queue growth. This is closer to real saturation than raw throughput share.%>">i</span></div><div id="live_saturation" class="omr-live-value">-</div><p id="live_saturation_sub">-</p></div>
+		<div class="omr-live-card"><div class="omr-live-label"><%:Worst RTT%></div><div id="live_worst_rtt" class="omr-live-value">-</div><p id="live_worst_rtt_sub">-</p></div>
+	</div>
+
+	<div class="omr-live-panel">
+		<div class="omr-live-head">
+			<div><h3 class="omr-live-title"><%:Path load graph%></h3><p class="omr-live-muted"><%:Interactive graph of smoothed WAN traffic per path. Select download, upload, or both in the top bar; click path chips to hide noisy series.%></p></div>
+		</div>
+		<div class="omr-live-chart-shell">
+			<canvas id="path_graph_canvas" class="omr-live-graph-canvas"></canvas>
+			<div id="path_graph_tooltip" class="omr-live-graph-tooltip"></div>
+		</div>
+		<div id="path_graph_legend" class="omr-live-legend"></div>
+		<table id="path_graph_stats" class="omr-live-stats-table"></table>
+	</div>
+
+	<div class="omr-live-panel">
+		<div class="omr-live-head">
+			<div><h3 class="omr-live-title"><%:Live path cards%></h3><p class="omr-live-muted"><%:Path saturation is the main congestion signal. WAN load share only shows traffic distribution; imbalance shows deviation from an even split.%></p></div>
+		</div>
+		<div id="path_live_paths" class="omr-live-paths"><div class="omr-live-empty"><%:Loading%>...</div></div>
+	</div>
+
+	<div class="omr-live-panel">
+		<details class="omr-live-help" open>
+			<summary><%:Legend and reading guide%></summary>
+			<ul class="omr-live-tech-list">
+				<li><strong><%:Path saturation%>:</strong> <%:0-100 pressure estimate. It is driven mainly by RTT growth over the observed baseline and TCP send queue. This is the value to watch when a line starts saturating.%></li>
+				<li><strong><%:RTT baseline / delta%>:</strong> <%:baseline is the lowest RTT observed for that path during the current page session; delta is the current increase over that baseline.%></li>
+				<li><strong><%:WAN load share%>:</strong> <%:physical RX+TX traffic share from interface counters. It tells which line is carrying more traffic, but not whether that line is saturated.%></li>
+				<li><strong><%:RX/TX imbalance%>:</strong> <%:deviation from an even split, in percentage points. With two active WANs, 0 pp means 50/50; +10 pp means about 60/40 on that direction.%></li>
+				<li><strong><%:Vs recent peak%>:</strong> <%:current physical rate compared with the highest rate seen on the same path since opening or resetting the graph.%></li>
+				<li><strong><%:MPTCP share%>:</strong> <%:estimated from visible MPTCP subflow byte counters in ss. Useful for scheduler behavior, less authoritative than physical WAN counters.%></li>
+				<li><strong><%:Queue%>:</strong> <%:TCP send/receive queue size. A growing send queue together with rising RTT is a strong saturation signal.%></li>
+				<li><strong><%:cwnd / windows%>:</strong> <%:cwnd is the congestion window; snd_wnd and rcv_wnd are the advertised TCP send/receive windows. rcv_space and rcv_ssthresh show receive-side room and threshold.%></li>
+				<li><strong><%:BBR / rates%>:</strong> <%:BBR bw is the congestion-control bandwidth estimate; delivery, pacing and send are kernel TCP rate hints for the same subflow.%></li>
+				<li><strong><%:loss / retrans%>:</strong> <%:kernel TCP loss and retransmission counters when exposed by ss. Treat them as diagnostic events, not as a perfect physical WAN packet-loss percentage.%></li>
+				<li><strong><%:segments%>:</strong> <%:segs and data show TCP segment counters out/in. They help distinguish real data movement from keepalive or control traffic.%></li>
+				<li><strong><%:Idle filter%>:</strong> <%:traffic below 200 kbit/s is ignored for active/share calculations to hide SSH, keepalives and counter noise.%></li>
+			</ul>
+		</details>
+	</div>
+</div>
+
+<%+footer%>

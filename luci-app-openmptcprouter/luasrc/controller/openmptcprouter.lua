@@ -17,10 +17,296 @@ function index()
 	entry({"admin", "system", menuentry:lower(), "interfaces_status"}, call("interfaces_status")).leaf = true
 	entry({"admin", "system", menuentry:lower(), "settings"}, template("openmptcprouter/settings"), _("Advanced Settings"), 3).leaf = true
 	entry({"admin", "system", menuentry:lower(), "settings_add"}, post("settings_add"))
-	entry({"admin", "system", menuentry:lower(), "update_vps"}, post("update_vps"))
-	entry({"admin", "system", menuentry:lower(), "backup"}, template("openmptcprouter/backup"), _("Backup on server"), 3).leaf = true
-	entry({"admin", "system", menuentry:lower(), "backupgr"}, post("backupgr"))
+	entry({"admin", "system", menuentry:lower(), "logs"}, template("openmptcprouter/logs"), _("Diagnostic logs"), 4).leaf = true
+	entry({"admin", "system", menuentry:lower(), "logs_data"}, call("logs_data")).leaf = true
+	entry({"admin", "system", menuentry:lower(), "logs_download"}, call("logs_download")).leaf = true
 	entry({"admin", "system", menuentry:lower(), "debug"}, template("openmptcprouter/debug"), _("Show all settings"), 5).leaf = true
+end
+
+local log_months = {
+	Jan = 1, Feb = 2, Mar = 3, Apr = 4, May = 5, Jun = 6,
+	Jul = 7, Aug = 8, Sep = 9, Oct = 10, Nov = 11, Dec = 12
+}
+
+local function redact_log_message(message)
+	message = message:gsub("([Aa]uthorization:%s*[Bb]earer%s+)%S+", "%1[redacted]")
+	message = message:gsub("([Pp]assword%s*[=:]%s*)%S+", "%1[redacted]")
+	message = message:gsub("([Tt]oken%s*[=:]%s*)%S+", "%1[redacted]")
+	message = message:gsub("([Ss]ecret%s*[=:]%s*)%S+", "%1[redacted]")
+	message = message:gsub("([Kk]ey%s*[=:]%s*)%S+", "%1[redacted]")
+	return message
+end
+
+local function normalize_log_severity(severity, message)
+	local lower = message:lower()
+	if lower:match("%[dbg%]") or lower:match("%[debug%]") then
+		severity = "debug"
+	elseif lower:match("%[inf%]") or lower:match("%[info%]") then
+		severity = "info"
+	elseif lower:match("%[wrn%]") or lower:match("%[warn%]") then
+		severity = "warning"
+	elseif lower:match("%[err%]") or lower:match("%[error%]") then
+		severity = "error"
+	end
+	if lower:match("err:0x0") and
+	   (lower:match("local close") or lower:match("remote close")) then
+		return "info", true
+	end
+	if severity == "emerg" or severity == "alert" or severity == "crit" or severity == "err" then
+		return "error", false
+	elseif severity == "warn" then
+		return "warning", false
+	end
+	return severity, false
+end
+
+local function log_component(source, message)
+	local text = (source .. " " .. message):lower()
+	if text:match("mqvpn2") then return "mqvpn2" end
+	if text:match("mqvpn") or text:match("xquic") then return "mqvpn" end
+	if text:match("glorytun") or text:match("openvpn") or text:match("dsvpn") then return "vpn" end
+	if text:match("omr%-tracker") or text:match("post%-tracking") or text:match("wan") then return "wan" end
+	if text:match("mptcp") or text:match("nanbbr") then return "mptcp" end
+	if text:match("omr%-vps") or text:match("vps") or text:match("server") then return "vps_sync" end
+	if text:match("firewall") or text:match("shorewall") then return "firewall" end
+	if text:match("netifd") or text:match("network") then return "network" end
+	if text:match("dropbear") or text:match("auth") then return "security" end
+	return "system"
+end
+
+local function relevant_log(source, component, severity)
+	local text = source:lower()
+	if component ~= "system" and component ~= "security" then return true end
+	if text:match("^omr") or text:match("openmptcprouter") then return true end
+	return severity == "error" or severity == "warning"
+end
+
+local function local_log_entries(limit)
+	local entries = {}
+	local security_groups = {}
+	local seen_lines = {}
+	local raw = sys.exec(
+		"tail -n 5000 /etc/openmptcprouter-logs/diagnostic.log.old " ..
+		"/etc/openmptcprouter-logs/diagnostic.log 2>/dev/null; logread 2>/dev/null"
+	)
+	for line in raw:gmatch("[^\r\n]+") do
+		if seen_lines[line] then
+			line = ""
+		else
+			seen_lines[line] = true
+		end
+		local _, month, day, hour, minute, second, year, facility, severity, process, message =
+			line:match("^(%a+) (%a+) +(%d+) (%d+):(%d+):(%d+) (%d+) (%S+)%.(%S+) ([^:]+): (.*)$")
+		if month and log_months[month] then
+			local source = process:gsub("%[%d+%]$", "")
+			severity = normalize_log_severity(severity, message)
+			local component = log_component(source, message)
+			if relevant_log(source, component, severity) then
+				local timestamp = os.time({
+						year = tonumber(year), month = log_months[month], day = tonumber(day),
+						hour = tonumber(hour), min = tonumber(minute), sec = tonumber(second)
+					})
+				local entry_data = {
+					timestamp = timestamp,
+					scope = "router",
+					source = source,
+					component = component,
+					severity = severity,
+					message = redact_log_message(message)
+				}
+				local security_message = message:match("^(Bad password attempt.-) from ")
+				if component == "security" and security_message then
+					local signature = source .. ":" .. severity .. ":" .. security_message
+					local grouped = security_groups[signature]
+					if grouped and timestamp - grouped.timestamp <= 300 then
+						grouped.timestamp = timestamp
+						grouped.repeats = grouped.repeats + 1
+						grouped.message = security_message .. " (repeated " .. grouped.repeats .. " times)"
+					else
+						entry_data.message = security_message
+						entry_data.repeats = 1
+						entries[#entries + 1] = entry_data
+						security_groups[signature] = entry_data
+					end
+				else
+					entries[#entries + 1] = entry_data
+				end
+			end
+		end
+	end
+	local first = math.max(1, #entries - limit + 1)
+	local result = {}
+	for index = first, #entries do
+		result[#result + 1] = entries[index]
+	end
+	return result
+end
+
+local function vps_log_entries(limit)
+	local raw = sys.exec("/etc/init.d/openmptcprouter-vps diagnostic_logs " .. limit .. " 2>/dev/null")
+	local ok, data = pcall(json.decode, raw)
+	if not ok then
+		return {}, "VPS diagnostics unavailable"
+	end
+	if type(data) ~= "table" or type(data.entries) ~= "table" then
+		return {}, "VPS diagnostics unavailable"
+	end
+	return data.entries, data.error
+end
+
+local function log_snapshot()
+	local vpn = ucic:get("openmptcprouter", "settings", "vpn") or "none"
+	local congestion = ucic:get("network", "globals", "congestion") or
+		sys.exec("sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null"):gsub("%s+$", "")
+	local aggressiveness = ucic:get("network", "globals", "nanbbr_aggressiveness") or ""
+	local tunnel = ucic:get("network", "omrvpn", "device") or "tun0"
+	local wan_total = 0
+	local wan_up = 0
+	ucic:foreach("network", "interface", function(section)
+		local name = section[".name"]
+		local multipath = section.multipath or ""
+		if name:match("^wan") and multipath ~= "off" then
+			wan_total = wan_total + 1
+			local iface = net:get_network(name)
+			if iface and iface:is_up() then wan_up = wan_up + 1 end
+		end
+	end)
+	return {
+		vpn = vpn,
+		congestion = congestion,
+		aggressiveness = aggressiveness,
+		tunnel = tunnel,
+		tunnel_up = fs.access("/sys/class/net/" .. tunnel),
+		wan_up = wan_up,
+		wan_total = wan_total
+	}
+end
+
+local function collect_diagnostic_logs(limit, scope)
+	local entries = {}
+	local remote_error
+	if scope ~= "vps" then
+		for _, entry_data in ipairs(local_log_entries(limit)) do
+			entries[#entries + 1] = entry_data
+		end
+	end
+	if scope ~= "router" then
+		local remote
+		remote, remote_error = vps_log_entries(limit)
+		for _, entry_data in ipairs(remote) do
+			entries[#entries + 1] = entry_data
+		end
+	end
+	table.sort(entries, function(a, b)
+		return (tonumber(a.timestamp) or 0) > (tonumber(b.timestamp) or 0)
+	end)
+	while #entries > limit do table.remove(entries) end
+	return {
+		generated_at = os.time(),
+		entries = entries,
+		count = #entries,
+		snapshot = log_snapshot(),
+		vps_error = remote_error
+	}
+end
+
+local function support_report_metadata()
+	local board = {}
+	local ok, board_data = pcall(json.decode, sys.exec("/bin/ubus call system board 2>/dev/null"))
+	if ok and type(board_data) == "table" then board = board_data end
+	local release = type(board.release) == "table" and board.release or {}
+	local uptime = tonumber((sys.exec("cut -d' ' -f1 /proc/uptime 2>/dev/null"):gsub("%s+$", ""))) or 0
+	local wans = {}
+	ucic:foreach("network", "interface", function(section)
+		local name = section[".name"]
+		local multipath = section.multipath or ""
+		if name:match("^wan") and multipath ~= "off" then
+			local iface = net:get_network(name)
+			wans[#wans + 1] = {
+				name = name,
+				device = section.device or section.ifname or "",
+				protocol = section.proto or "",
+				multipath = multipath,
+				up = iface and iface:is_up() or false
+			}
+		end
+	end)
+	table.sort(wans, function(a, b) return a.name < b.name end)
+
+	local server_sync = {}
+	ucic:foreach("openmptcprouter", "server", function(section)
+		server_sync[#server_sync + 1] = {
+			name = section[".name"],
+			disabled = section.disabled == "1",
+			master = section.master == "1",
+			admin_error = section.admin_error or "0",
+			token_error = section.token_error or "0"
+		}
+	end)
+
+	return {
+		router = {
+			hostname = board.hostname or "",
+			model = board.model or "",
+			board_name = board.board_name or "",
+			kernel = board.kernel or sys.exec("uname -r"):gsub("%s+$", ""),
+			distribution = release.distribution or "",
+			version = release.version or "",
+			revision = release.revision or "",
+			target = release.target or "",
+			uptime_seconds = math.floor(uptime)
+		},
+		wans = wans,
+		server_sync = server_sync,
+		vpn = {
+			active = ucic:get("openmptcprouter", "settings", "vpn") or "none",
+			glorytun = sys.call("pgrep -x glorytun >/dev/null 2>&1") == 0,
+			mqvpn = {
+				running = sys.call("pgrep -x mqvpn >/dev/null 2>&1") == 0,
+				enabled = ucic:get("mqvpn", "vpn", "enable") == "1",
+				scheduler = ucic:get("mqvpn", "vpn", "scheduler") or "",
+				congestion_control = ucic:get("mqvpn", "vpn", "cc") or "",
+				mtu = ucic:get("mqvpn", "vpn", "mtu") or "",
+				outer_packet_size = ucic:get("mqvpn", "vpn", "outer_packet_size") or "",
+				pmtud = ucic:get("mqvpn", "vpn", "pmtud") or "",
+				log_level = ucic:get("mqvpn", "vpn", "log_level") or ""
+			},
+			mqvpn2 = {
+				running = sys.call("pgrep -x mqvpn2 >/dev/null 2>&1") == 0,
+				enabled = ucic:get("mqvpn2", "vpn", "enable") == "1",
+				scheduler = ucic:get("mqvpn2", "vpn", "scheduler") or "",
+				congestion_control = ucic:get("mqvpn2", "vpn", "cc") or "",
+				mtu = ucic:get("mqvpn2", "vpn", "mtu") or "",
+				reorder = ucic:get("mqvpn2", "vpn", "reorder") or "",
+				log_level = ucic:get("mqvpn2", "vpn", "log_level") or ""
+			}
+		}
+	}
+end
+
+function logs_data()
+	local limit = tonumber(luci.http.formvalue("limit")) or 300
+	limit = math.max(1, math.min(1000, math.floor(limit)))
+	local scope = luci.http.formvalue("scope") or "all"
+	if scope ~= "router" and scope ~= "vps" then scope = "all" end
+	luci.http.prepare_content("application/json")
+	luci.http.write_json(collect_diagnostic_logs(limit, scope))
+end
+
+function logs_download()
+	local payload = collect_diagnostic_logs(1000, "all")
+	local report_id = sys.exec("cat /proc/sys/kernel/random/uuid 2>/dev/null"):gsub("[^%w%-]", "")
+	if report_id == "" then report_id = os.date("%Y%m%d%H%M%S") end
+	payload.kind = "omr_support_report"
+	payload.schema_version = 1
+	payload.report_id = report_id
+	payload.metadata = support_report_metadata()
+	luci.http.header(
+		"Content-Disposition",
+		"attachment; filename=omr-support-" .. report_id:sub(1, 8) .. ".json"
+	)
+	luci.http.prepare_content("application/json")
+	luci.http.write_json(payload)
 end
 
 function interface_from_device(dev)
@@ -99,9 +385,8 @@ function wizard_add()
 			ucic:set("glorytun","vpn","host",server_ip)
 			ucic:set("glorytun-udp","vpn","host",server_ip)
 			ucic:set("dsvpn","vpn","host",server_ip)
-			ucic:set("mlvpn","general","host",server_ip)
 			ucic:set("mqvpn","vpn","host",server_ip)
-			ucic:set("ubond","general","host",server_ip)
+			ucic:set("mqvpn2","vpn","host",server_ip)
 			luci.sys.call("uci -q del openvpn.omr.remote")
 			luci.sys.call("uci -q add_list openvpn.omr.remote=" .. server_ip)
 			ucic:set("qos","serverin","srchost",server_ip)
@@ -505,10 +790,6 @@ function wizard_add()
 		vpn_intf = "tun0"
 		--ucic:set("network","omrvpn","proto","dhcp")
 		ucic:set("network","omrvpn","proto","none")
-	elseif default_vpn == "mlvpn" then
-		vpn_port = 65201
-		vpn_intf = "mlvpn0"
-		ucic:set("network","omrvpn","proto","dhcp")
 	elseif default_vpn == "mqvpn" then
 		vpn_port = 65411
 		vpn_intf = "mqvpn0"
@@ -517,10 +798,14 @@ function wizard_add()
 		ucic:set("mqvpn","vpn","remoteip","10.255.249.1")
 		ucic:set("network","omr6in4","ipaddr","10.255.249.2")
 		ucic:set("network","omr6in4","peeraddr","10.255.249.1")
-	elseif default_vpn == "ubond" then
-		vpn_port = 65251
-		vpn_intf = "ubond0"
-		ucic:set("network","omrvpn","proto","dhcp")
+	elseif default_vpn == "mqvpn2" then
+		vpn_port = 65412
+		vpn_intf = "mqvpn2"
+		ucic:set("network","omrvpn","proto","none")
+		ucic:set("mqvpn2","vpn","localip","10.255.248.2")
+		ucic:set("mqvpn2","vpn","remoteip","10.255.248.1")
+		ucic:set("network","omr6in4","ipaddr","10.255.248.2")
+		ucic:set("network","omr6in4","peeraddr","10.255.248.1")
 	elseif default_vpn == "dsvpn" then
 		vpn_port = 65011
 		vpn_intf = "tun0"
@@ -786,9 +1071,8 @@ function wizard_add()
 					ucic:set("glorytun","vpn","host",server_ip)
 					ucic:set("glorytun-udp","vpn","host",server_ip)
 					ucic:set("dsvpn","vpn","host",server_ip)
-					ucic:set("mlvpn","general","host",server_ip)
 					ucic:set("mqvpn","vpn","host",server_ip)
-					ucic:set("ubond","general","host",server_ip)
+					ucic:set("mqvpn2","vpn","host",server_ip)
 					ucic:set("v2ray","omrout","s_vmess_address",server_ip)
 					ucic:set("v2ray","omrout","s_vless_address",server_ip)
 					ucic:set("v2ray","omrout","s_trojan_address",server_ip)
@@ -846,9 +1130,8 @@ function wizard_add()
 				ucic:set("glorytun","vpn","host",server_ip)
 				ucic:set("glorytun-udp","vpn","host",server_ip)
 				ucic:set("dsvpn","vpn","host",server_ip)
-				ucic:set("mlvpn","general","host",server_ip)
 				ucic:set("mqvpn","vpn","host",server_ip)
-				ucic:set("ubond","general","host",server_ip)
+				ucic:set("mqvpn2","vpn","host",server_ip)
 				ucic:set("v2ray","omrout","s_vmess_address",server_ip)
 				ucic:set("v2ray","omrout","s_vless_address",server_ip)
 				ucic:set("v2ray","omrout","s_trojan_address",server_ip)
@@ -900,12 +1183,10 @@ function wizard_add()
 	ucic:commit("nginx-ha")
 	ucic:save("openvpn")
 	--ucic:commit("openvpn")
-	ucic:save("mlvpn")
 	ucic:save("mqvpn")
-	ucic:save("ubond")
+	ucic:save("mqvpn2")
 	ucic:save("v2ray")
 	ucic:save("xray")
-	--ucic:commit("mlvpn")
 	--ucic:commit("mqvpn")
 	ucic:save("dsvpn")
 	--ucic:commit("dsvpn")
@@ -931,7 +1212,6 @@ function wizard_add()
 			end
 		end)
 		--ucic:set("openvpn","omr","cipher","none")
-		ucic:set("mlvpn","general","cleartext_data","1")
 		ucic:set("v2ray","omrout","s_vmess_user_security","none")
 		ucic:set("v2ray","omrout","s_vless_user_security","none")
 		ucic:set("v2ray","omrout","s_trojan_user_security","none")
@@ -956,7 +1236,6 @@ function wizard_add()
 			end
 		end)
 		--ucic:set("openvpn","omr","cipher","AES-256-GCM")
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_vless_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_trojan_user_security","aes-128-gcm")
@@ -982,7 +1261,6 @@ function wizard_add()
 			end
 		end)
 		--ucic:set("openvpn","omr","cipher","AES-256-CFB")
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_vless_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_trojan_user_security","aes-128-gcm")
@@ -1008,7 +1286,6 @@ function wizard_add()
 			end
 		end)
 		--ucic:set("openvpn","omr","cipher","chacha20-poly1305")
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","chacha20-poly1305")
 		ucic:set("v2ray","omrout","s_vless_user_security","chacha20-poly1305")
 		ucic:set("v2ray","omrout","s_trojan_user_security","chacha20-poly1305")
@@ -1193,14 +1470,6 @@ function wizard_add()
 	ucic:save("dsvpn")
 	ucic:commit("dsvpn")
 
-	-- Set MLVPN settings
-	if default_vpn == "mlvpn" and disablednb ~= serversnb  then
-		ucic:set("mlvpn","general","enable",1)
-		ucic:set("network","omrvpn","proto","dhcp")
-	else
-		ucic:set("mlvpn","general","enable",0)
-	end
-
 	-- Set MQVPN settings
 	if default_vpn == "mqvpn" and disablednb ~= serversnb  then
 		ucic:set("mqvpn","vpn","enable",1)
@@ -1215,18 +1484,19 @@ function wizard_add()
 	else
 		ucic:set("mqvpn","vpn","enable",0)
 	end
-
-	local mlvpn_password = luci.http.formvalue("mlvpn_password")
-	if mlvpn_password ~= "" then
-		ucic:set("mlvpn","general","password",mlvpn_password)
-		ucic:set("mlvpn","general","firstport","65201")
-		ucic:set("mlvpn","general","interface_name","mlvpn0")
+	if default_vpn == "mqvpn2" and disablednb ~= serversnb then
+		ucic:set("mqvpn2","vpn","enable",1)
+		ucic:set("mqvpn2","vpn","port","65412")
+		ucic:set("mqvpn2","vpn","dev","mqvpn2")
+		ucic:set("mqvpn2","vpn","localip","10.255.248.2")
+		ucic:set("mqvpn2","vpn","remoteip","10.255.248.1")
+		ucic:set("mqvpn2","vpn","manage_routes","0")
+		ucic:set("network","omr6in4","ipaddr","10.255.248.2")
+		ucic:set("network","omr6in4","peeraddr","10.255.248.1")
+		ucic:set("network","omrvpn","proto","none")
 	else
-		--ucic:set("mlvpn","general","enable",0)
-		ucic:set("mlvpn","general","password","")
+		ucic:set("mqvpn2","vpn","enable",0)
 	end
-	ucic:save("mlvpn")
-	ucic:commit("mlvpn")
 
 	local mqvpn_key = luci.http.formvalue("mqvpn_key") or ""
 	if mqvpn_key ~= "" then
@@ -1237,25 +1507,10 @@ function wizard_add()
 	ucic:save("mqvpn")
 	ucic:commit("mqvpn")
 
-	-- Set UBOND settings
-	if default_vpn == "ubond" and disablednb ~= serversnb  then
-		ucic:set("ubond","general","enable",1)
-		ucic:set("network","omrvpn","proto","dhcp")
-	else
-		ucic:set("ubond","general","enable",0)
-	end
-
-	local ubond_password = luci.http.formvalue("ubond_password")
-	if ubond_password ~= "" then
-		ucic:set("ubond","general","password",ubond_password)
-		ucic:set("ubond","general","firstport","65251")
-		ucic:set("ubond","general","interface_name","ubond0")
-	else
-		--ucic:set("ubond","general","enable",0)
-		ucic:set("ubond","general","password","")
-	end
-	ucic:save("ubond")
-	ucic:commit("ubond")
+	local mqvpn2_key = luci.http.formvalue("mqvpn2_key") or ""
+	ucic:set("mqvpn2","vpn","key",mqvpn2_key)
+	ucic:save("mqvpn2")
+	ucic:commit("mqvpn2")
 
 	if default_vpn == "openvpn" and disablednb ~= serversnb  then
 		if ucic:get("openmptcprouter","settings","openvpn_lb") == "0" then
@@ -1325,9 +1580,8 @@ function wizard_add()
 		luci.sys.call("/etc/init.d/shadowsocks-rust restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/glorytun restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null")
-		luci.sys.call("/etc/init.d/mlvpn restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/mqvpn restart >/dev/null 2>/dev/null")
-		luci.sys.call("/etc/init.d/ubond restart >/dev/null 2>/dev/null")
+		luci.sys.call("/etc/init.d/mqvpn2 restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/mptcpovervpn restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/openvpn restart >/dev/null 2>/dev/null")
 		luci.sys.call("/etc/init.d/openvpnbonding restart >/dev/null 2>/dev/null")
@@ -1595,41 +1849,6 @@ function settings_add()
 	-- Done, redirect
 	menuentry = ucic:get("openmptcprouter","settings","menu") or "openmptcprouter"
 	luci.http.redirect(luci.dispatcher.build_url("admin/system/" .. menuentry:lower() .. "/settings"))
-	return
-end
-
-function update_vps()
-	-- Update VPS
-	local update_vps = luci.http.formvalue("flash") or ""
-	if update_vps ~= "" then
-		local ut = require "luci.util"
-		local result = ut.ubus("openmptcprouter", "updateVPS", {})
-	end
-	return
-end
-
-function backupgr()
-	local get_backup = luci.http.formvalue("restore") or ""
-	if get_backup ~= "" then
-		local dobackup = 0
-		ucic:foreach("openmptcprouter","server", function(s)
-			servername = s[".name"]
-			local get_selected_backup = luci.http.formvalue(servername .. "") or ""
-			if get_selected_backup ~= "" then
-				dobackup = 1
-				luci.sys.call("/etc/init.d/openmptcprouter-vps backup_get " .. servername .. " " .. get_selected_backup .. ">/dev/null 2>/dev/null")
-			end
-		end)
-		if dobackup == 0 then
-			luci.sys.call("/etc/init.d/openmptcprouter-vps backup_get >/dev/null 2>/dev/null")
-		end
-	end
-	local send_backup = luci.http.formvalue("save") or ""
-	if send_backup ~= "" then
-		luci.sys.call("/etc/init.d/openmptcprouter-vps backup_send >/dev/null 2>/dev/null")
-	end
-	menuentry = ucic:get("openmptcprouter","settings","menu") or "openmptcprouter"
-	luci.http.redirect(luci.dispatcher.build_url("admin/system/" .. menuentry:lower() .. "/backup"))
 	return
 end
 

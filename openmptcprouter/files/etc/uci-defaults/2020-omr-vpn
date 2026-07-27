@@ -64,6 +64,12 @@ if [ "$(uci -q get mqvpn.vpn)" = "" ]; then
 		set mqvpn.vpn.remoteip=10.255.249.1
 		set mqvpn.vpn.mode=client
 		set mqvpn.vpn.scheduler=wlb
+		set mqvpn.vpn.cc=cubic
+		set mqvpn.vpn.mtu_profile=default
+		set mqvpn.vpn.mtu=0
+		set mqvpn.vpn.outer_packet_size=1400
+		set mqvpn.vpn.pmtud=0
+		set mqvpn.vpn.pmtud_probe_size=1420
 		set mqvpn.vpn.insecure=1
 		set mqvpn.vpn.manage_routes=0
 		set mqvpn.vpn.paths_auto=1
@@ -71,6 +77,32 @@ if [ "$(uci -q get mqvpn.vpn)" = "" ]; then
 		set mqvpn.vpn.reconnect_interval=5
 		set mqvpn.vpn.log_level=info
 		commit mqvpn
+	EOF
+fi
+
+if [ "$(uci -q get mqvpn2.vpn)" = "" ]; then
+	uci -q batch <<-EOF >/dev/null
+		set mqvpn2.vpn=mqvpn2
+		set mqvpn2.vpn.enable=0
+		set mqvpn2.vpn.host=128.128.128.128
+		set mqvpn2.vpn.port=65412
+		set mqvpn2.vpn.key=''
+		set mqvpn2.vpn.dev=mqvpn2
+		set mqvpn2.vpn.localip=10.255.248.2
+		set mqvpn2.vpn.remoteip=10.255.248.1
+		set mqvpn2.vpn.mode=client
+		set mqvpn2.vpn.scheduler=wlb
+		set mqvpn2.vpn.cc=cubic
+		set mqvpn2.vpn.mtu=0
+		set mqvpn2.vpn.init_max_path_id=128
+		set mqvpn2.vpn.reorder=0
+		set mqvpn2.vpn.insecure=1
+		set mqvpn2.vpn.manage_routes=0
+		set mqvpn2.vpn.paths_auto=1
+		set mqvpn2.vpn.reconnect=1
+		set mqvpn2.vpn.reconnect_interval=5
+		set mqvpn2.vpn.log_level=info
+		commit mqvpn2
 	EOF
 fi
 
@@ -116,6 +148,14 @@ fi
 if [ "$(uci -q get ucitrack.@network[-1].affects | grep mqvpn)" = "" ]; then
 	uci -q batch <<-EOF >/dev/null
 		add_list ucitrack.@network[-1].affects="mqvpn"
+		commit ucitrack
+	EOF
+fi
+
+if ! uci -q get ucitrack.@network[-1].affects | tr ' ' '\n' |
+	grep -Fxq mqvpn2; then
+	uci -q batch <<-EOF >/dev/null
+		add_list ucitrack.@network[-1].affects="mqvpn2"
 		commit ucitrack
 	EOF
 fi

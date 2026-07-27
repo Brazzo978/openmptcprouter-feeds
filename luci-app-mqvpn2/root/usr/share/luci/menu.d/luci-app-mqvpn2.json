@@ -1,0 +1,13 @@
+{
+	"admin/vpn/mqvpn2": {
+		"title": "MQVPN2 Experimental",
+		"order": 32,
+		"action": {
+			"type": "view",
+			"path": "services/mqvpn2"
+		},
+		"depends": {
+			"acl": [ "luci-app-mqvpn2" ]
+		}
+	}
+}

@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mqvpn
 PKG_VERSION:=0.5.0
-PKG_RELEASE:=1
+PKG_RELEASE:=4
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/mp0rta/mqvpn.git
@@ -51,10 +51,13 @@ CMAKE_OPTIONS += \
 	-DSSL_LIB_PATH="$(STAGING_DIR)/usr/lib/boringssl/libssl.so;$(STAGING_DIR)/usr/lib/boringssl/libcrypto.so" \
 	-DSSL_LIB=$(STAGING_DIR)/usr/lib/boringssl/libssl.so \
 	-DCRYPTO_LIB=$(STAGING_DIR)/usr/lib/boringssl/libcrypto.so \
-	-DBORINGSSL_BUILD_DIR=$(STAGING_DIR)/usr/lib/boringssl \
-	-DXQC_ENABLE_BBR2=ON \
-	-DXQC_ENABLE_FEC=ON \
-	-DXQC_ENABLE_XOR=ON
+		-DBORINGSSL_BUILD_DIR=$(STAGING_DIR)/usr/lib/boringssl \
+		-DXQC_ENABLE_BBR2=ON \
+		-DXQC_ENABLE_RENO=ON \
+		-DXQC_ENABLE_COPA=ON \
+		-DXQC_ENABLE_UNLIMITED=ON \
+		-DXQC_ENABLE_FEC=ON \
+		-DXQC_ENABLE_XOR=ON
 
 define Package/mqvpn/install
 	$(INSTALL_DIR) $(1)/usr/sbin
@@ -68,6 +71,7 @@ define Package/mqvpn/install
 	$(INSTALL_BIN) ./files/etc/init.d/mqvpn $(1)/etc/init.d/mqvpn
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/etc/uci-defaults/4100-mqvpn $(1)/etc/uci-defaults/4100-mqvpn
+	$(INSTALL_BIN) ./files/etc/uci-defaults/4110-mqvpn-v06214-safety $(1)/etc/uci-defaults/4110-mqvpn-v06214-safety
 endef
 
 $(eval $(call BuildPackage,mqvpn))

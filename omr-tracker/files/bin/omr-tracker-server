@@ -278,8 +278,10 @@ _check_master() {
 							commit glorytun
 							set dsvpn.vpn.host="$ip"
 							commit dsvpn
-							set mlvpn.general.host="$ip"
-							commit mlvpn
+							set mqvpn.vpn.host="$ip"
+							commit mqvpn
+							set mqvpn2.vpn.host="$ip"
+							commit mqvpn2
 							del openvpn.omr.remote
 							add_list openvpn.omr.remote="$ip"
 							commit openvpn
@@ -290,9 +292,10 @@ _check_master() {
 						/etc/init.d/xray restart >/dev/null 2>/dev/null
 						/etc/init.d/glorytun restart >/dev/null 2>/dev/null
 						/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null
-						/etc/init.d/mlvpn restart >/dev/null 2>/dev/null
 						#/etc/init.d/openvpn restart omr >/dev/null 2>/dev/null
 						/etc/init.d/dsvpn restart >/dev/null 2>/dev/null
+						/etc/init.d/mqvpn restart >/dev/null 2>/dev/null
+						/etc/init.d/mqvpn2 restart >/dev/null 2>/dev/null
 						/etc/init.d/mptcpovervpn restart >/dev/null 2>/dev/null
 					fi
 				fi
@@ -491,8 +494,10 @@ _check_backup() {
 							commit glorytun
 							set dsvpn.vpn.host="$ip"
 							commit dsvpn
-							set mlvpn.general.host="$ip"
-							commit mlvpn
+							set mqvpn.vpn.host="$ip"
+							commit mqvpn
+							set mqvpn2.vpn.host="$ip"
+							commit mqvpn2
 							del openvpn.omr.remote
 							add_list openvpn.omr.remote="$ip"
 							commit openvpn
@@ -503,9 +508,10 @@ _check_backup() {
 						/etc/init.d/xray restart >/dev/null 2>/dev/null
 						/etc/init.d/glorytun restart >/dev/null 2>/dev/null
 						/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null
-						/etc/init.d/mlvpn restart >/dev/null 2>/dev/null
 						#/etc/init.d/openvpn restart omr >/dev/null 2>/dev/null
 						/etc/init.d/dsvpn restart >/dev/null 2>/dev/null
+						/etc/init.d/mqvpn restart >/dev/null 2>/dev/null
+						/etc/init.d/mqvpn2 restart >/dev/null 2>/dev/null
 						/etc/init.d/mptcpovervpn restart >/dev/null 2>/dev/null
 					fi
 					sleep $waittest

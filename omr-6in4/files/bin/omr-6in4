@@ -18,8 +18,10 @@ while true; do
 		iface=$(uci -q get mqvpn.vpn.dev)
 		addr=$(uci -q get mqvpn.vpn.localip)
 		peer=$(uci -q get mqvpn.vpn.remoteip)
-	elif [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
-		iface=$(uci -q get mlvpn.general.interface_name)
+	elif [ "$(uci -q get mqvpn2.vpn.enable)" = "1" ]; then
+		iface=$(uci -q get mqvpn2.vpn.dev)
+		addr=$(uci -q get mqvpn2.vpn.localip)
+		peer=$(uci -q get mqvpn2.vpn.remoteip)
 	elif [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
 		iface=$(uci -q get openvpn.omr.dev)
 	fi

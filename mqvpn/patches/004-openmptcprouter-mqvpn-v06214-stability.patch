@@ -1,0 +1,180 @@
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -743,6 +743,15 @@ cb_set_event_timer(xqc_usec_t wake_after, void *user_data)
+ }
+
+ static void
++client_run_engine(mqvpn_client_t *c)
++{
++    /* A callback during main_logic must arm the next timer. Clearing the old
++     * value prevents a stale 1 us deadline from becoming a permanent poll. */
++    c->next_wake_us = 0;
++    xqc_engine_main_logic(c->engine);
++}
++
++static void
+ cb_xqc_log_write(xqc_log_level_t lvl, const void *buf, size_t size, void *user_data)
+ {
+     mqvpn_client_t *c = (mqvpn_client_t *)user_data;
+@@ -1719,6 +1728,15 @@ cli_start_connection(mqvpn_client_t *c)
+
+     int multipath = c->config.multipath ? 1 : 0;
+
++    if (c->n_paths > 0 && c->primary_path_idx < c->n_paths) {
++        path_entry_t *pp = &c->paths[c->primary_path_idx];
++        if (!pp->platform_attached || pp->fd < 0) {
++            LOG_W(c, "primary path[%s] not ready (attached=%d fd=%d state=%s)", pp->name,
++                  pp->platform_attached, pp->fd, path_lifecycle_name(pp->state));
++            goto cleanup;
++        }
++    }
++
+     xqc_conn_settings_t cs;
+     memset(&cs, 0, sizeof(cs));
+     cs.max_datagram_frame_size = 65535;
+@@ -1969,7 +1987,7 @@ mqvpn_client_disconnect(mqvpn_client_t *c)
+     c->shutting_down = 1;
+     if (c->conn && c->engine) {
+         xqc_conn_close(c->engine, &c->conn->cid);
+-        xqc_engine_main_logic(c->engine);
++        client_run_engine(c);
+     }
+     client_set_state(c, MQVPN_STATE_CLOSED);
+     return MQVPN_OK;
+@@ -2152,6 +2170,9 @@ mqvpn_client_on_platform_path_dropped(mqvpn_client_t *c, mqvpn_path_handle_t han
+               (long long)handle, info->iface, (int)info->reason);
+     }
+
++    if (p->xquic_path_live && c->engine && c->conn)
++        xqc_conn_close_path(c->engine, &c->conn->cid, p->xqc_path_id);
++
+     path_event_ctx_t ctx = {.now_us = client_now_us(c)};
+     path_on_event(c, p, PATH_EVENT_PLATFORM_DROP, &ctx);
+     return MQVPN_OK;
+@@ -2511,7 +2532,7 @@ tick_reconnect(mqvpn_client_t *c)
+         if (c->cbs.reconnect_scheduled) c->cbs.reconnect_scheduled(delay, c->user_ctx);
+     } else {
+         client_set_state(c, MQVPN_STATE_CONNECTING);
+-        xqc_engine_main_logic(c->engine);
++        client_run_engine(c);
+     }
+ }
+
+@@ -2559,7 +2580,7 @@ mqvpn_client_tick(mqvpn_client_t *c)
+     ASSERT_TICK_THREAD(c);
+
+     tick_handshake_watchdog(c);
+-    if (c->engine) xqc_engine_main_logic(c->engine);
++    if (c->engine) client_run_engine(c);
+     tick_path_recovery(c);
+     tick_reconnect(c);
+
+@@ -2703,7 +2724,7 @@ mqvpn_client_get_interest(const mqvpn_client_t *c, mqvpn_interest_t *out)
+         }
+     }
+
+-    out->next_timer_ms = ms > 0 ? ms : 1;
++    out->next_timer_ms = ms > 0 ? ms : 100;
+     out->tun_readable = (c->tun_active && !c->backpressure) ? 1 : 0;
+     out->is_idle = (c->state != MQVPN_STATE_ESTABLISHED) ? 1 : 0;
+     return MQVPN_OK;
+diff --git a/src/mqvpn_server.c b/src/mqvpn_server.c
+--- a/src/mqvpn_server.c
++++ b/src/mqvpn_server.c
+@@ -361,6 +361,13 @@ cb_set_event_timer(xqc_usec_t wake_after, void *user_data)
+ }
+
+ static void
++server_run_engine(mqvpn_server_t *s)
++{
++    s->next_wake_us = 0;
++    xqc_engine_main_logic(s->engine);
++}
++
++static void
+ cb_xqc_log_write(xqc_log_level_t lvl, const void *buf, size_t size, void *user_data)
+ {
+     mqvpn_server_t *s = (mqvpn_server_t *)user_data;
+@@ -1268,6 +1275,7 @@ mqvpn_server_new(const mqvpn_config_t *cfg, const mqvpn_server_callbacks_t *cbs,
+     conn_settings.proto_version = XQC_VERSION_V1;
+     conn_settings.enable_multipath = 1;
+     conn_settings.mp_ping_on = 1;
++    conn_settings.init_max_path_id = 128;
+     conn_settings.pacing_on = 1;
+     mqvpn_apply_transport_tuning(&conn_settings, &s->config);
+     mqvpn_apply_cc(&conn_settings, s->config.cc);
+@@ -1587,7 +1595,7 @@ mqvpn_server_tick(mqvpn_server_t *s)
+     if (!s) return MQVPN_ERR_INVALID_ARG;
+     ASSERT_TICK_THREAD(s);
+
+-    if (s->engine) xqc_engine_main_logic(s->engine);
++    if (s->engine) server_run_engine(s);
+
+     return MQVPN_OK;
+ }
+@@ -1954,7 +1962,7 @@ mqvpn_server_get_interest(const mqvpn_server_t *s, mqvpn_interest_t *out)
+     out->struct_size = sizeof(*out);
+
+     int ms = (int)(s->next_wake_us / 1000);
+-    out->next_timer_ms = ms > 0 ? ms : 1;
++    out->next_timer_ms = ms > 0 ? ms : (s->n_sessions == 0 ? 1000 : 100);
+     out->tun_readable = s->tun_paused ? 0 : 1;
+     out->is_idle = (s->n_sessions == 0) ? 1 : 0;
+     return MQVPN_OK;
+diff --git a/src/path_state_machine.c b/src/path_state_machine.c
+--- a/src/path_state_machine.c
++++ b/src/path_state_machine.c
+@@ -638,9 +638,9 @@ path_on_conn_reset(mqvpn_client_t *c, path_entry_t *p, const path_event_ctx_t *c
+
+     if (p->platform_attached) {
+         set_path_state_with_log(c, p, PATH_LC_PENDING, PATH_REASON_CONN_RESET);
++    } else {
++        maybe_transition_dropped_to_free(c, p, PATH_REASON_CONN_RESET);
+     }
+-    /* else: state unchanged (CLOSED_DROPPED/CLOSED_FREE lazy invariants permit
+-     * pre-cleared xquic-side fields). */
+ }
+
+ static void
+diff --git a/third_party/xquic/src/congestion_control/xqc_bbr2.h b/third_party/xquic/src/congestion_control/xqc_bbr2.h
+--- a/third_party/xquic/src/congestion_control/xqc_bbr2.h
++++ b/third_party/xquic/src/congestion_control/xqc_bbr2.h
+@@ -138,7 +138,7 @@ typedef struct xqc_bbr2_s {
+     /* packet loss in this cycle? */
+     bool                loss_in_cycle;
+     /* scb->tx.delivered ending loss round */
+-    uint32_t            loss_round_delivered;
++    uint64_t            loss_round_delivered;
+     /* bw_lo before latest losses */
+     uint32_t            undo_bw_lo;
+     /* inflight_lo before latest losses */
+diff --git a/third_party/xquic/src/congestion_control/xqc_bbr2.c b/third_party/xquic/src/congestion_control/xqc_bbr2.c
+--- a/third_party/xquic/src/congestion_control/xqc_bbr2.c
++++ b/third_party/xquic/src/congestion_control/xqc_bbr2.c
+@@ -13,6 +13,9 @@
+ #include "src/transport/xqc_send_ctl.h"
+ #include "src/transport/xqc_packet.h"
+
++_Static_assert(sizeof(((xqc_bbr2_t *)0)->loss_round_delivered) == sizeof(uint64_t),
++    "BBR2 loss round counter must not wrap after 4 GiB");
++
+ #define XQC_BBR2_MAX_DATAGRAM_SIZE XQC_MSS
+ #define XQC_BBR2_MIN_WINDOW (4 * XQC_BBR2_MAX_DATAGRAM_SIZE)
+ /* The RECOMMENDED value is the minimum of 10 * kMaxDatagramSize and max(2* kMaxDatagramSize, 14720)). */
+diff --git a/third_party/xquic/src/transport/xqc_frame.c b/third_party/xquic/src/transport/xqc_frame.c
+--- a/third_party/xquic/src/transport/xqc_frame.c
++++ b/third_party/xquic/src/transport/xqc_frame.c
+@@ -2134,6 +2134,12 @@ xqc_process_max_path_id_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in
+
+     if (conn->remote_max_path_id < max_path_id) {
+         conn->remote_max_path_id = max_path_id;
++        if (max_path_id > conn->local_max_path_id) {
++            conn->local_max_path_id = max_path_id;
++            (void)xqc_write_max_path_id_to_packet(conn, max_path_id);
++            xqc_log(conn->log, XQC_LOG_INFO,
++                    "|MAX_PATH_ID reciprocal grant|new_local_max:%ui|", max_path_id);
++        }
+         new_max_path_id = xqc_min(conn->local_max_path_id, conn->remote_max_path_id);
+         if (new_max_path_id > conn->curr_max_path_id) {
+             if (xqc_conn_add_path_cid_sets(conn, conn->curr_max_path_id + 1, new_max_path_id) != XQC_OK) {

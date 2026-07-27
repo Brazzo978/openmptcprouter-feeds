@@ -4,7 +4,8 @@ if [ "$(uci -q get network.globals.mptcp_path_manager)" = "" ]; then
 	set network.globals.multipath='enable'
 	set network.globals.mptcp_path_manager='fullmesh'
 	set network.globals.mptcp_scheduler='blest'
-	set network.globals.congestion='bbr2'
+	set network.globals.congestion='bbr'
+	set network.globals.nanbbr_aggressiveness='50'
 	set network.globals.mptcp_checksum=0
 	set network.globals.mptcp_debug=0
 	set network.globals.mptcp_syn_retries=4
@@ -18,8 +19,27 @@ if [ "$(uci -q get network.globals.mptcp_path_manager)" = "" ]; then
 	commit network
 	EOF
 fi
-# BBRv2 is replaced by BBRv3
-if [ "$(uci -q get network.globals.congestion)" = "bbr2" ] && [ -z "$(uname -a | grep 5.4)" ]; then
+
+nanbbr_aggressiveness="$(uci -q get network.globals.nanbbr_aggressiveness)"
+case "$nanbbr_aggressiveness" in
+	''|*[!0-9]*)
+		nanbbr_aggressiveness=50
+		;;
+esac
+if [ "$nanbbr_aggressiveness" -lt 1 ] || [ "$nanbbr_aggressiveness" -gt 100 ]; then
+	nanbbr_aggressiveness=50
+fi
+if [ "$(uci -q get network.globals.nanbbr_aggressiveness)" != "$nanbbr_aggressiveness" ]; then
+	uci -q batch <<-EOF >/dev/null
+	set network.globals.nanbbr_aggressiveness='$nanbbr_aggressiveness'
+	commit network
+	EOF
+fi
+
+# Keep the selected CC only if the running kernel exposes it.
+congestion="$(uci -q get network.globals.congestion)"
+available_congestion="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null)"
+if [ -n "$congestion" ] && [ -n "$available_congestion" ] && ! echo "$available_congestion" | grep -qw -- "$congestion"; then
 	uci -q batch <<-EOF >/dev/null
 	set network.globals.congestion='bbr'
 	commit network

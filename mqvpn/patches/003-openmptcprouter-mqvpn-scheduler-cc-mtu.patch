@@ -1,0 +1,951 @@
+diff --git a/include/libmqvpn.h b/include/libmqvpn.h
+index cd96437..cb73aea 100644
+--- a/include/libmqvpn.h
++++ b/include/libmqvpn.h
+@@ -92,11 +92,22 @@ typedef enum {
+     MQVPN_MODE_SERVER = 1,
+ } mqvpn_mode_t;
+
++typedef enum {
++    MQVPN_CC_BBR2 = 0,
++    MQVPN_CC_BBR = 1,
++    MQVPN_CC_CUBIC = 2,
++    MQVPN_CC_NEW_RENO = 3,
++    MQVPN_CC_COPA = 4,
++    MQVPN_CC_UNLIMITED = 5,
++} mqvpn_cc_t;
++
+ typedef enum {
+     MQVPN_SCHED_MINRTT = 0,
+     MQVPN_SCHED_WLB = 1,
+     MQVPN_SCHED_BACKUP_FEC =
+         2, /* FEC repair on standby path. Requires XQC_ENABLE_FEC build. */
++    MQVPN_SCHED_BACKUP = 3,
++    MQVPN_SCHED_RAP = 4,
+ } mqvpn_scheduler_t;
+
+ typedef enum {
+@@ -400,12 +411,31 @@ MQVPN_API int mqvpn_config_remove_user(mqvpn_config_t *cfg, const char *username
+ MQVPN_API int mqvpn_config_load_json(mqvpn_config_t *cfg, const char *json_text);
+ MQVPN_API int mqvpn_config_set_insecure(mqvpn_config_t *cfg, int insecure);
+ MQVPN_API int mqvpn_config_set_scheduler(mqvpn_config_t *cfg, mqvpn_scheduler_t sched);
++MQVPN_API int mqvpn_config_set_cc(mqvpn_config_t *cfg, mqvpn_cc_t cc);
+ MQVPN_API int mqvpn_config_set_log_level(mqvpn_config_t *cfg, mqvpn_log_level_t level);
+ MQVPN_API int mqvpn_config_set_multipath(mqvpn_config_t *cfg, int enable);
+ MQVPN_API int mqvpn_config_set_reconnect(mqvpn_config_t *cfg, int enable,
+                                          int interval_sec);
+ MQVPN_API int mqvpn_config_set_killswitch_hint(mqvpn_config_t *cfg, int enable);
+
++/* MTU/packet sizing.
++ * TUN MTU: 0 = auto, otherwise pinned. The outer packet size is the QUIC/UDP
++ * payload size before IP+UDP headers; on a 1500-byte IPv4 path, 1472 is the
++ * highest non-fragmented value.
++ */
++#define MQVPN_TUN_MTU_AUTO 0
++#define MQVPN_TUN_MTU_MIN 1280
++#define MQVPN_TUN_MTU_MAX 1402
++#define MQVPN_OUTER_PACKET_SIZE_DEFAULT 1400
++#define MQVPN_OUTER_PACKET_SIZE_MIN 1298
++#define MQVPN_OUTER_PACKET_SIZE_MAX 1472
++#define MQVPN_PMTUD_PROBE_SIZE_DEFAULT 1420
++
++MQVPN_API int mqvpn_config_set_mtu(mqvpn_config_t *cfg, int mtu);
++MQVPN_API int mqvpn_config_set_outer_packet_size(mqvpn_config_t *cfg, int size);
++MQVPN_API int mqvpn_config_set_pmtud(mqvpn_config_t *cfg, int enable);
++MQVPN_API int mqvpn_config_set_pmtud_probe_size(mqvpn_config_t *cfg, int size);
++
+ /* Clock injection (Android: CLOCK_BOOTTIME, testing: mock clock) */
+ typedef uint64_t (*mqvpn_clock_fn)(void *ctx);
+ MQVPN_API int mqvpn_config_set_clock(mqvpn_config_t *cfg, mqvpn_clock_fn clock_fn,
+diff --git a/src/config.c b/src/config.c
+index 32fbcf9..d680718 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -270,6 +270,9 @@ handle_kv(mqvpn_file_config_t *cfg, int section, const char *key, const char *va
+         } else if (strcasecmp(key, "ReconnectInterval") == 0) {
+             int v = atoi(val);
+             if (v > 0) cfg->reconnect_interval = v;
++        } else if (strcasecmp(key, "MTU") == 0 || strcasecmp(key, "TunnelMTU") == 0) {
++            int v = atoi(val);
++            if (v == 0 || (v >= 1280 && v <= 1402)) cfg->mtu = v;
+         } else {
+             LOG_WRN("%s:%d: unknown key '%s' in [Interface]", path, lineno, key);
+         }
+@@ -315,6 +318,20 @@ handle_kv(mqvpn_file_config_t *cfg, int section, const char *key, const char *va
+     case SEC_MULTIPATH:
+         if (strcasecmp(key, "Scheduler") == 0) {
+             snprintf(cfg->scheduler, sizeof(cfg->scheduler), "%s", val);
++        } else if (strcasecmp(key, "CC") == 0 ||
++                   strcasecmp(key, "CongestionControl") == 0) {
++            snprintf(cfg->cc, sizeof(cfg->cc), "%s", val);
++        } else if (strcasecmp(key, "OuterPacketSize") == 0 ||
++                   strcasecmp(key, "PacketSize") == 0) {
++            int v = atoi(val);
++            if (v == 0 || (v >= 1298 && v <= 1472)) cfg->outer_packet_size = v;
++        } else if (strcasecmp(key, "PMTUD") == 0 ||
++                   strcasecmp(key, "Pmtud") == 0) {
++            cfg->pmtud_enable = parse_bool(val);
++        } else if (strcasecmp(key, "PMTUDProbeSize") == 0 ||
++                   strcasecmp(key, "PmtudProbeSize") == 0) {
++            int v = atoi(val);
++            if (v == 0 || (v >= 1298 && v <= 1472)) cfg->pmtud_probe_size = v;
+         } else if (strcasecmp(key, "Path") == 0) {
+             if (cfg->n_paths < MQVPN_CONFIG_MAX_PATHS) {
+                 snprintf(cfg->paths[cfg->n_paths], sizeof(cfg->paths[0]), "%s", val);
+@@ -424,6 +441,25 @@ mqvpn_config_load_json_filecfg(mqvpn_file_config_t *cfg, const char *json_text)
+     if (v && json_read_string(v, s32, sizeof(s32)) == 0)
+         mqvpn_copy_str(cfg->scheduler, sizeof(cfg->scheduler), s32);
+
++    v = json_find_key(json_text, "cc");
++    if (v && json_read_string(v, s32, sizeof(s32)) == 0)
++        mqvpn_copy_str(cfg->cc, sizeof(cfg->cc), s32);
++
++    v = json_find_key(json_text, "mtu");
++    if (v && json_read_int(v, &iv) == 0 && (iv == 0 || (iv >= 1280 && iv <= 1402)))
++        cfg->mtu = iv;
++
++    v = json_find_key(json_text, "outer_packet_size");
++    if (v && json_read_int(v, &iv) == 0 && (iv == 0 || (iv >= 1298 && iv <= 1472)))
++        cfg->outer_packet_size = iv;
++
++    v = json_find_key(json_text, "pmtud");
++    if (v && json_read_bool(v, &iv) == 0) cfg->pmtud_enable = iv;
++
++    v = json_find_key(json_text, "pmtud_probe_size");
++    if (v && json_read_int(v, &iv) == 0 && (iv == 0 || (iv >= 1298 && iv <= 1472)))
++        cfg->pmtud_probe_size = iv;
++
+     v = json_find_key(json_text, "reconnect");
+     if (v && json_read_bool(v, &iv) == 0) cfg->reconnect = iv;
+
+@@ -557,6 +593,9 @@ mqvpn_config_defaults(mqvpn_file_config_t *cfg)
+     snprintf(cfg->cert_file, sizeof(cfg->cert_file), "server.crt");
+     snprintf(cfg->key_file, sizeof(cfg->key_file), "server.key");
+     snprintf(cfg->scheduler, sizeof(cfg->scheduler), "wlb");
++    snprintf(cfg->cc, sizeof(cfg->cc), "cubic");
++    cfg->outer_packet_size = 1400;
++    cfg->pmtud_probe_size = 1420;
+     cfg->max_clients = 64;
+     cfg->reconnect = 1;
+     cfg->reconnect_interval = 5;
+diff --git a/src/config.h b/src/config.h
+index 2d67304..9f6b955 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -56,7 +56,12 @@ typedef struct mqvpn_file_config_s {
+     /* [Multipath] */
+     char paths[MQVPN_CONFIG_MAX_PATHS][32];
+     int n_paths;
+-    char scheduler[16];
++    char scheduler[24];
++    char cc[16];
++    int mtu;
++    int outer_packet_size;
++    int pmtud_enable;
++    int pmtud_probe_size;
+
+     /* [Interface] — client reconnection */
+     int reconnect;          /* 1=auto-reconnect (default), 0=exit on disconnect */
+diff --git a/src/flow_sched.h b/src/flow_sched.h
+index 45b115e..b50434d 100644
+--- a/src/flow_sched.h
++++ b/src/flow_sched.h
+@@ -1,20 +1,15 @@
+ /*
+  * flow_sched.h
+  *
+- * Scheduler mode constants and IPv4/IPv6 5-tuple flow hash utility.
+- * Path selection is handled inside xquic scheduler callbacks
+- * (minrtt/wlb).
++ * IPv4/IPv6 5-tuple flow hash utility. Path selection is handled inside
++ * xquic scheduler callbacks.
+  */
+ #ifndef MQVPN_FLOW_SCHED_H
+ #define MQVPN_FLOW_SCHED_H
+
++#include "libmqvpn.h"
+ #include <stdint.h>
+
+-/* Scheduler mode (mirrors mqvpn_scheduler_t in include/libmqvpn.h) */
+-#define MQVPN_SCHED_MINRTT     0
+-#define MQVPN_SCHED_WLB        1 /* WLB with flow-affinity WRR (default) */
+-#define MQVPN_SCHED_BACKUP_FEC 2 /* FEC repair on standby path (experimental) */
+-
+ /* Sentinel: WRR without flow pinning (for UDP/QUIC — no reordering concern) */
+ #define MQVPN_FLOW_HASH_UNPINNED 0xFFFFFFFFU
+
+diff --git a/src/main.c b/src/main.c
+index 5f2c677..33b8898 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -60,8 +60,14 @@ usage(const char *prog)
+         "  --status                  Query server status via control API and exit\n"
+         "                            (uses --control-port, or [Control] Listen from "
+         "--config)\n"
+-        "  --scheduler minrtt|wlb|backup_fec\n"
++        "  --scheduler minrtt|wlb|backup|backup_fec|rap\n"
+         "                            Multipath scheduler (default wlb)\n"
++        "  --cc bbr2|bbr|cubic|new_reno|copa|unlimited\n"
++        "                            Congestion control (default cubic)\n"
++        "  --mtu N                   TUN MTU override, 0=auto (default 0)\n"
++        "  --outer-packet-size N     QUIC/UDP payload size 1298-1472 (default 1400)\n"
++        "  --pmtud                   Enable negotiated xquic PMTUD (off by default)\n"
++        "  --pmtud-probe-size N      PMTUD probe cap 1298-1472 (default 1420)\n"
+         "  --max-clients N           Max concurrent clients (server mode, default 64)\n"
+         "  --log-level debug|info|warn|error  (default info)\n"
+         "  --version                 Show version and exit\n"
+@@ -106,6 +112,79 @@ parse_host_port(const char *str, char *host, size_t host_len, int *port)
+     return 0;
+ }
+
++static int
++parse_range_int(const char *str, int min, int max, const char *name, int allow_zero,
++                int *out)
++{
++    if (!str || *str == '\0') {
++        fprintf(stderr, "error: %s must be %s%d and %d\n", name,
++                allow_zero ? "0 or between " : "between ", min, max);
++        return -1;
++    }
++    char *end = NULL;
++    long v = strtol(str, &end, 10);
++    if (!end || *end != '\0' ||
++        ((!allow_zero || v != 0) && (v < min || v > max))) {
++        fprintf(stderr, "error: %s must be %s%d and %d\n", name,
++                allow_zero ? "0 or between " : "between ", min, max);
++        return -1;
++    }
++    *out = (int)v;
++    return 0;
++}
++
++static int
++parse_scheduler_name(const char *name, mqvpn_scheduler_t *out)
++{
++    if (strcmp(name, "wlb") == 0) {
++        *out = MQVPN_SCHED_WLB;
++    } else if (strcmp(name, "backup") == 0) {
++        *out = MQVPN_SCHED_BACKUP;
++    } else if (strcmp(name, "backup_fec") == 0) {
++#if defined(XQC_ENABLE_FEC) && defined(XQC_ENABLE_XOR)
++        *out = MQVPN_SCHED_BACKUP_FEC;
++#else
++        fprintf(stderr, "error: --scheduler 'backup_fec' requires rebuild with "
++                        "-DXQC_ENABLE_FEC=ON -DXQC_ENABLE_XOR=ON in xquic\n");
++        return -1;
++#endif
++    } else if (strcmp(name, "rap") == 0) {
++        *out = MQVPN_SCHED_RAP;
++    } else if (strcmp(name, "minrtt") == 0) {
++        *out = MQVPN_SCHED_MINRTT;
++    } else {
++        fprintf(stderr,
++                "error: --scheduler must be 'minrtt', 'wlb', 'backup', "
++                "'backup_fec', or 'rap'\n");
++        return -1;
++    }
++    return 0;
++}
++
++static int
++parse_cc_name(const char *name, mqvpn_cc_t *out)
++{
++    if (strcmp(name, "bbr2") == 0) {
++        *out = MQVPN_CC_BBR2;
++    } else if (strcmp(name, "bbr") == 0) {
++        *out = MQVPN_CC_BBR;
++    } else if (strcmp(name, "cubic") == 0) {
++        *out = MQVPN_CC_CUBIC;
++    } else if (strcmp(name, "new_reno") == 0 || strcmp(name, "reno") == 0) {
++        *out = MQVPN_CC_NEW_RENO;
++    } else if (strcmp(name, "copa") == 0) {
++        *out = MQVPN_CC_COPA;
++    } else if (strcmp(name, "unlimited") == 0) {
++        *out = MQVPN_CC_UNLIMITED;
++    } else {
++        fprintf(stderr,
++                "error: --cc must be 'bbr2', 'bbr', 'cubic', 'new_reno', "
++                "'copa', or 'unlimited'\n");
++        return -1;
++    }
++    return 0;
++}
++
+ /* mqvpn_copy_str is provided by json_mini.h as mqvpn_copy_str */
+
+ int
+@@ -136,6 +215,11 @@ main(int argc, char *argv[])
+         {"path", required_argument, NULL, 'p'},
+         {"dns", required_argument, NULL, 'd'},
+         {"scheduler", required_argument, NULL, 'S'},
++        {"cc", required_argument, NULL, 'Q'},
++        {"mtu", required_argument, NULL, 0x100},
++        {"outer-packet-size", required_argument, NULL, 0x101},
++        {"pmtud", no_argument, NULL, 0x102},
++        {"pmtud-probe-size", required_argument, NULL, 0x103},
+         {"max-clients", required_argument, NULL, 'M'},
+         {"log-level", required_argument, NULL, 'L'},
+         {"no-reconnect", no_argument, NULL, 'R'},
+@@ -166,6 +250,11 @@ main(int argc, char *argv[])
+     int genkey = 0;
+     const char *log_level_str = NULL;
+     const char *scheduler_str = NULL;
++    const char *cc_str = NULL;
++    int mtu = -1;
++    int outer_packet_size = -1;
++    int pmtud_enable = -1;
++    int pmtud_probe_size = -1;
+     int max_clients = -1; /* -1 means "not set by CLI" */
+     const char *path_ifaces[MQVPN_MAX_PATH_IFACES];
+     int n_paths = 0;
+@@ -180,7 +269,7 @@ main(int argc, char *argv[])
+     int status_mode = 0;
+
+     int opt;
+-    while ((opt = getopt_long(argc, argv, "C:m:s:l:n:6:t:c:k:ia:u:Gp:d:S:M:L:X:x:Vh",
++    while ((opt = getopt_long(argc, argv, "C:m:s:l:n:6:t:c:k:ia:u:Gp:d:S:Q:M:L:X:x:Vh",
+                               long_opts, NULL)) != -1) {
+         switch (opt) {
+         case 'C': config_path = optarg; break;
+@@ -238,6 +327,25 @@ main(int argc, char *argv[])
+             }
+             break;
+         case 'S': scheduler_str = optarg; break;
++        case 'Q': cc_str = optarg; break;
++        case 0x100:
++            if (parse_range_int(optarg, MQVPN_TUN_MTU_MIN, MQVPN_TUN_MTU_MAX,
++                                "--mtu", 1, &mtu) < 0)
++                return 1;
++            break;
++        case 0x101:
++            if (parse_range_int(optarg, MQVPN_OUTER_PACKET_SIZE_MIN,
++                                MQVPN_OUTER_PACKET_SIZE_MAX,
++                                "--outer-packet-size", 1, &outer_packet_size) < 0)
++                return 1;
++            break;
++        case 0x102: pmtud_enable = 1; break;
++        case 0x103:
++            if (parse_range_int(optarg, MQVPN_OUTER_PACKET_SIZE_MIN,
++                                MQVPN_OUTER_PACKET_SIZE_MAX,
++                                "--pmtud-probe-size", 1, &pmtud_probe_size) < 0)
++                return 1;
++            break;
+         case 'M': max_clients = atoi(optarg); break;
+         case 'R': no_reconnect = 1; break;
+         case 'K': kill_switch = 1; break;
+@@ -308,6 +416,13 @@ main(int argc, char *argv[])
+     const char *eff_tun_name = tun_name ? tun_name : file_cfg.tun_name;
+     const char *eff_log_level = log_level_str ? log_level_str : file_cfg.log_level;
+     const char *eff_scheduler = scheduler_str ? scheduler_str : file_cfg.scheduler;
++    const char *eff_cc = cc_str ? cc_str : file_cfg.cc;
++    int eff_mtu = mtu >= 0 ? mtu : file_cfg.mtu;
++    int eff_outer_packet_size =
++        outer_packet_size >= 0 ? outer_packet_size : file_cfg.outer_packet_size;
++    int eff_pmtud_enable = pmtud_enable >= 0 ? pmtud_enable : file_cfg.pmtud_enable;
++    int eff_pmtud_probe_size =
++        pmtud_probe_size >= 0 ? pmtud_probe_size : file_cfg.pmtud_probe_size;
+     const char *eff_listen = listen_str ? listen_str : file_cfg.listen;
+     const char *eff_subnet = subnet ? subnet : file_cfg.subnet;
+     const char *eff_subnet6 =
+@@ -376,22 +491,11 @@ main(int argc, char *argv[])
+         log_level = MQVPN_LOG_ERROR;
+     mqvpn_log_set_level(log_level);
+
+-    /* Parse scheduler */
+-    int scheduler = MQVPN_SCHED_MINRTT;
+-    if (strcmp(eff_scheduler, "wlb") == 0) {
+-        scheduler = MQVPN_SCHED_WLB;
+-    } else if (strcmp(eff_scheduler, "backup_fec") == 0) {
+-#if defined(XQC_ENABLE_FEC) && defined(XQC_ENABLE_XOR)
+-        scheduler = MQVPN_SCHED_BACKUP_FEC;
+-#else
+-        fprintf(stderr, "error: --scheduler 'backup_fec' requires rebuild with "
+-                        "-DXQC_ENABLE_FEC=ON -DXQC_ENABLE_XOR=ON in xquic\n");
+-        return 1;
+-#endif
+-    } else if (strcmp(eff_scheduler, "minrtt") != 0) {
+-        fprintf(stderr, "error: --scheduler must be 'minrtt', 'wlb', or 'backup_fec'\n");
+-        return 1;
+-    }
++    mqvpn_scheduler_t scheduler = MQVPN_SCHED_MINRTT;
++    if (parse_scheduler_name(eff_scheduler, &scheduler) < 0) return 1;
++
++    mqvpn_cc_t cc = MQVPN_CC_CUBIC;
++    if (parse_cc_name(eff_cc, &cc) < 0) return 1;
+
+     /* Paths: CLI paths override config paths entirely */
+     if (n_paths == 0 && file_cfg.n_paths > 0) {
+@@ -435,6 +539,11 @@ main(int argc, char *argv[])
+             .log_level = log_level,
+             .n_paths = n_paths,
+             .scheduler = scheduler,
++            .cc = cc,
++            .mtu = eff_mtu,
++            .outer_packet_size = eff_outer_packet_size,
++            .pmtud_enable = eff_pmtud_enable,
++            .pmtud_probe_size = eff_pmtud_probe_size,
+             .auth_key = eff_auth_key,
+             .n_dns = n_dns,
+             .n_client_routes = file_cfg.n_client_routes,
+@@ -483,6 +592,11 @@ main(int argc, char *argv[])
+             .key_file = eff_key,
+             .log_level = log_level,
+             .scheduler = scheduler,
++            .cc = cc,
++            .mtu = eff_mtu,
++            .outer_packet_size = eff_outer_packet_size,
++            .pmtud_enable = eff_pmtud_enable,
++            .pmtud_probe_size = eff_pmtud_probe_size,
+             .auth_key = eff_auth_key,
+             .n_users = eff_n_users,
+             .max_clients = eff_max_clients,
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+index bb1c5d0..da486b2 100644
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -1141,14 +1141,9 @@ cb_request_read(xqc_h3_request_t *h3_request, xqc_request_notify_flag_t flag,
+         /* Notify platform on ADDRESS_ASSIGN */
+         if (conn->addr_assigned && c->state != MQVPN_STATE_ESTABLISHED &&
+             c->state != MQVPN_STATE_TUNNEL_READY) {
+-            /* Compute MTU */
+-            int tun_mtu = IPV6_MIN_MTU;
+-            if (conn->dgram_mss > 0) {
+-                size_t udp_mss =
+-                    xqc_h3_ext_masque_udp_mss(conn->dgram_mss, conn->masque_stream_id);
+-                if (udp_mss >= 68) tun_mtu = (int)udp_mss;
+-            }
+-            if (conn->addr6_assigned && tun_mtu < IPV6_MIN_MTU) tun_mtu = IPV6_MIN_MTU;
++            int tun_mtu = mqvpn_effective_tun_mtu(&c->config, conn->dgram_mss,
++                                                  conn->masque_stream_id,
++                                                  conn->addr6_assigned);
+             c->mtu = tun_mtu;
+
+             /* Build tunnel info for callback */
+@@ -1319,11 +1314,11 @@ cb_dgram_mss_updated(xqc_h3_conn_t *h, size_t mss, void *ud)
+     mqvpn_client_t *c = conn->client;
+     LOG_I(c, "datagram MSS updated: %zu", mss);
+
+-    if (conn && c->tun_active) {
++    if (conn && c->tun_active && c->config.mtu <= 0) {
+         size_t udp_mss = xqc_h3_ext_masque_udp_mss(mss, conn->masque_stream_id);
+-        if (udp_mss >= 68) {
+-            int new_mtu = (int)udp_mss;
+-            if (conn->addr6_assigned && new_mtu < IPV6_MIN_MTU) new_mtu = IPV6_MIN_MTU;
++        if (udp_mss >= MQVPN_TUN_MTU_MIN) {
++            int new_mtu = mqvpn_effective_tun_mtu(&c->config, mss, conn->masque_stream_id,
++                                                  conn->addr6_assigned);
+             if (new_mtu != c->last_notified_mtu) {
+                 c->mtu = new_mtu;
+                 c->last_notified_mtu = new_mtu;
+@@ -1342,7 +1337,10 @@ cb_dgram_mss_updated(xqc_h3_conn_t *h, size_t mss, void *ud)
+ static activate_result_t
+ activate_via_xquic_classify(mqvpn_client_t *c, uint64_t *out_path_id)
+ {
+-    int path_status = (c->config.scheduler == MQVPN_SCHED_BACKUP_FEC) ? 1 : 0;
++    int path_status = (c->config.scheduler == MQVPN_SCHED_BACKUP ||
++                       c->config.scheduler == MQVPN_SCHED_BACKUP_FEC)
++                          ? 1
++                          : 0;
+     *out_path_id = 0;
+     xqc_int_t ret =
+         xqc_conn_create_path(c->engine, &c->conn->cid, out_path_id, path_status);
+@@ -1354,10 +1352,10 @@ activate_via_xquic_classify(mqvpn_client_t *c, uint64_t *out_path_id)
+ /* Create an xquic path for a secondary path entry. Thin caller — all state
+  * mutation happens inside path_on_event(ACTIVATE_REQUESTED) per spec §6.6.
+  *
+- * For MQVPN_SCHED_BACKUP_FEC the secondary path is created in STANDBY
+- * (path_status=1) so that xquic's backup_fec scheduler routes only FEC repair
+- * symbols to it, while the primary path stays AVAILABLE. Per xquic's public
+- * API: 1 = STANDBY, anything else = AVAILABLE (xquic.h L2210). */
++ * For backup-style schedulers the secondary path is created in STANDBY
++ * (path_status=1). The primary path stays AVAILABLE; xquic decides when to
++ * use standby traffic or FEC repair. Per xquic's public API: 1 = STANDBY,
++ * anything else = AVAILABLE (xquic.h L2210). */
+ static void
+ client_activate_path(mqvpn_client_t *c, path_entry_t *p, int idx)
+ {
+@@ -1583,7 +1581,9 @@ cli_conn_destroy(mqvpn_client_t *c)
+ bool
+ mqvpn_check_scheduler_preconditions(mqvpn_scheduler_t scheduler, int n_paths)
+ {
+-    return scheduler == MQVPN_SCHED_BACKUP_FEC && n_paths < 2;
++    return (scheduler == MQVPN_SCHED_BACKUP ||
++            scheduler == MQVPN_SCHED_BACKUP_FEC) &&
++           n_paths < 2;
+ }
+
+ /* ─── Scheduler dispatch helper (shared with mqvpn_server.c) ─── */
+@@ -1593,6 +1593,8 @@ mqvpn_apply_scheduler(xqc_conn_settings_t *cs, mqvpn_scheduler_t sched)
+ {
+     switch (sched) {
+     case MQVPN_SCHED_WLB: cs->scheduler_callback = xqc_wlb_scheduler_cb; break;
++    case MQVPN_SCHED_BACKUP: cs->scheduler_callback = xqc_backup_scheduler_cb; break;
++    case MQVPN_SCHED_RAP: cs->scheduler_callback = xqc_rap_scheduler_cb; break;
+     case MQVPN_SCHED_BACKUP_FEC:
+ #if defined(XQC_ENABLE_FEC) && defined(XQC_ENABLE_XOR)
+         cs->scheduler_callback = xqc_backup_fec_scheduler_cb;
+@@ -1619,6 +1621,94 @@ mqvpn_apply_scheduler(xqc_conn_settings_t *cs, mqvpn_scheduler_t sched)
+     }
+ }
+
++static void
++mqvpn_set_fallback_cc(xqc_conn_settings_t *cs)
++{
++    cs->cong_ctrl_callback = xqc_cubic_cb;
++}
++
++void
++mqvpn_apply_cc(xqc_conn_settings_t *cs, mqvpn_cc_t cc)
++{
++    switch (cc) {
++    case MQVPN_CC_BBR: cs->cong_ctrl_callback = xqc_bbr_cb; break;
++    case MQVPN_CC_CUBIC: cs->cong_ctrl_callback = xqc_cubic_cb; break;
++    case MQVPN_CC_NEW_RENO:
++#ifdef XQC_ENABLE_RENO
++        cs->cong_ctrl_callback = xqc_reno_cb;
++#else
++        mqvpn_set_fallback_cc(cs);
++#endif
++        break;
++    case MQVPN_CC_COPA:
++#ifdef XQC_ENABLE_COPA
++        cs->cong_ctrl_callback = xqc_copa_cb;
++#else
++        mqvpn_set_fallback_cc(cs);
++#endif
++        break;
++    case MQVPN_CC_UNLIMITED:
++#ifdef XQC_ENABLE_UNLIMITED
++        cs->cong_ctrl_callback = xqc_unlimited_cc_cb;
++#else
++        mqvpn_set_fallback_cc(cs);
++#endif
++        break;
++    case MQVPN_CC_BBR2:
++#ifdef XQC_ENABLE_BBR2
++        cs->cong_ctrl_callback = xqc_bbr2_cb;
++        cs->cc_params.cc_optimization_flags =
++            XQC_BBR2_FLAG_RTTVAR_COMPENSATION | XQC_BBR2_FLAG_FAST_CONVERGENCE;
++#else
++        mqvpn_set_fallback_cc(cs);
++#endif
++        break;
++    default: mqvpn_set_fallback_cc(cs); break;
++    }
++}
++
++static int
++clamp_packet_size(int size)
++{
++    if (size <= 0) return MQVPN_OUTER_PACKET_SIZE_DEFAULT;
++    if (size < MQVPN_OUTER_PACKET_SIZE_MIN) return MQVPN_OUTER_PACKET_SIZE_MIN;
++    if (size > MQVPN_OUTER_PACKET_SIZE_MAX) return MQVPN_OUTER_PACKET_SIZE_MAX;
++    return size;
++}
++
++void
++mqvpn_apply_transport_tuning(xqc_conn_settings_t *cs, const mqvpn_config_t *cfg)
++{
++    int base = cfg ? cfg->outer_packet_size : 0;
++    int probe = cfg ? cfg->pmtud_probe_size : 0;
++
++    base = clamp_packet_size(base);
++    cs->max_pkt_out_size = (size_t)base;
++
++    if (cfg && cfg->pmtud_enable) {
++        probe = probe > 0 ? clamp_packet_size(probe) : MQVPN_PMTUD_PROBE_SIZE_DEFAULT;
++        if (probe < base) probe = base;
++        cs->enable_pmtud = 0x3;
++        cs->probing_pkt_out_size = (size_t)probe;
++        cs->pmtud_probing_interval = 500000;
++    }
++}
++
++int
++mqvpn_effective_tun_mtu(const mqvpn_config_t *cfg, size_t dgram_mss,
++                        uint64_t masque_stream_id, int has_v6)
++{
++    if (cfg && cfg->mtu > 0) return cfg->mtu;
++
++    int tun_mtu = MQVPN_TUN_MTU_MIN;
++    if (dgram_mss > 0) {
++        size_t udp_mss = xqc_h3_ext_masque_udp_mss(dgram_mss, masque_stream_id);
++        if (udp_mss >= MQVPN_TUN_MTU_MIN) tun_mtu = (int)udp_mss;
++    }
++    if (has_v6 && tun_mtu < MQVPN_TUN_MTU_MIN) tun_mtu = MQVPN_TUN_MTU_MIN;
++    return tun_mtu;
++}
++
+ /* ─── Start a QUIC/H3 connection ─── */
+
+ static int
+@@ -1639,10 +1727,8 @@ cli_start_connection(mqvpn_client_t *c)
+     cs.ping_on = 1;
+     cs.mp_ping_on = multipath;
+     cs.pacing_on = 1;
+-    cs.max_pkt_out_size = 1400;
+-    cs.cong_ctrl_callback = xqc_bbr2_cb;
+-    cs.cc_params.cc_optimization_flags =
+-        XQC_BBR2_FLAG_RTTVAR_COMPENSATION | XQC_BBR2_FLAG_FAST_CONVERGENCE;
++    mqvpn_apply_transport_tuning(&cs, &c->config);
++    mqvpn_apply_cc(&cs, c->config.cc);
+     cs.sndq_packets_used_max = XQC_SNDQ_MAX_PKTS;
+     cs.so_sndbuf = 8 * 1024 * 1024;
+     cs.idle_time_out = 120000;
+@@ -1844,11 +1930,11 @@ mqvpn_client_connect(mqvpn_client_t *c)
+      * This is a snapshot at connect time — adding a second path later via
+      * mqvpn_client_add_path_fd() resolves the underlying issue but does
+      * not retract the warning. Acceptable tradeoff: the warning is
+-     * informational only and the typical backup_fec deployment configures
++     * informational only and the typical backup/backup_fec deployment configures
+      * both paths before connect(). */
+     if (mqvpn_check_scheduler_preconditions(c->config.scheduler, c->n_paths)) {
+         LOG_W(c,
+-              "backup_fec scheduler is most effective with >=2 paths; "
++              "backup-style scheduler is most effective with >=2 paths; "
+               "currently %d path(s) configured",
+               c->n_paths);
+     }
+@@ -2367,12 +2453,13 @@ tick_check_all_validations(mqvpn_client_t *c, uint64_t now)
+          * still validating below that. */
+
+         /* Branch on connection-scoped scheduler config — secondary paths
+-         * created under backup_fec are STANDBY (spec §10.1.1). Scheduler
++         * created under backup/backup_fec are STANDBY (spec §10.1.1). Scheduler
+          * is immutable per-connection so the result is stable for the
+          * lifetime of this path. Dispatched via VALIDATION_OK; the
+          * handler sets path_stable_since_us = now and transitions to
+          * the carried target. */
+-        path_lifecycle_t target = (c->config.scheduler == MQVPN_SCHED_BACKUP_FEC)
++        path_lifecycle_t target = (c->config.scheduler == MQVPN_SCHED_BACKUP ||
++                                   c->config.scheduler == MQVPN_SCHED_BACKUP_FEC)
+                                       ? PATH_LC_STANDBY
+                                       : PATH_LC_ACTIVE;
+         path_event_ctx_t v_ctx = {.validated_target = target, .now_us = now};
+diff --git a/src/mqvpn_config.c b/src/mqvpn_config.c
+index d090655..cba41c5 100644
+--- a/src/mqvpn_config.c
++++ b/src/mqvpn_config.c
+@@ -131,12 +131,17 @@ mqvpn_config_new(void)
+     /* Defaults */
+     cfg->server_port = 443;
+     cfg->scheduler = MQVPN_SCHED_WLB;
++    cfg->cc = MQVPN_CC_CUBIC;
+     cfg->log_level = MQVPN_LOG_INFO;
+     cfg->multipath = 1;
+     cfg->reconnect_enable = 1;
+     cfg->reconnect_interval_sec = 5;
+     cfg->max_clients = 64;
+     cfg->listen_port = 443;
++    cfg->mtu = MQVPN_TUN_MTU_AUTO;
++    cfg->outer_packet_size = MQVPN_OUTER_PACKET_SIZE_DEFAULT;
++    cfg->pmtud_enable = 0;
++    cfg->pmtud_probe_size = MQVPN_PMTUD_PROBE_SIZE_DEFAULT;
+
+     return cfg;
+ }
+@@ -319,6 +324,59 @@ mqvpn_config_load_json(mqvpn_config_t *cfg, const char *json_text)
+         cfg->killswitch_hint = iv;
+     }
+
++    v = json_find_key(json_text, "scheduler");
++    if (v && json_read_string(v, tmp, sizeof(tmp)) == MQVPN_OK) {
++        if (strcmp(tmp, "minrtt") == 0)
++            cfg->scheduler = MQVPN_SCHED_MINRTT;
++        else if (strcmp(tmp, "backup") == 0)
++            cfg->scheduler = MQVPN_SCHED_BACKUP;
++        else if (strcmp(tmp, "backup_fec") == 0)
++            cfg->scheduler = MQVPN_SCHED_BACKUP_FEC;
++        else if (strcmp(tmp, "rap") == 0)
++            cfg->scheduler = MQVPN_SCHED_RAP;
++        else
++            cfg->scheduler = MQVPN_SCHED_WLB;
++    }
++
++    v = json_find_key(json_text, "cc");
++    if (v && json_read_string(v, tmp, sizeof(tmp)) == MQVPN_OK) {
++        if (strcmp(tmp, "bbr") == 0)
++            cfg->cc = MQVPN_CC_BBR;
++        else if (strcmp(tmp, "cubic") == 0)
++            cfg->cc = MQVPN_CC_CUBIC;
++        else if (strcmp(tmp, "new_reno") == 0 || strcmp(tmp, "reno") == 0)
++            cfg->cc = MQVPN_CC_NEW_RENO;
++        else if (strcmp(tmp, "copa") == 0)
++            cfg->cc = MQVPN_CC_COPA;
++        else if (strcmp(tmp, "unlimited") == 0)
++            cfg->cc = MQVPN_CC_UNLIMITED;
++        else
++            cfg->cc = MQVPN_CC_CUBIC;
++    }
++
++    v = json_find_key(json_text, "mtu");
++    if (v && json_read_int(v, &iv) == MQVPN_OK &&
++        (iv == 0 || (iv >= MQVPN_TUN_MTU_MIN && iv <= MQVPN_TUN_MTU_MAX))) {
++        cfg->mtu = iv;
++    }
++
++    v = json_find_key(json_text, "outer_packet_size");
++    if (v && json_read_int(v, &iv) == MQVPN_OK &&
++        (iv == 0 || (iv >= MQVPN_OUTER_PACKET_SIZE_MIN &&
++                     iv <= MQVPN_OUTER_PACKET_SIZE_MAX))) {
++        cfg->outer_packet_size = iv ? iv : MQVPN_OUTER_PACKET_SIZE_DEFAULT;
++    }
++
++    v = json_find_key(json_text, "pmtud");
++    if (v && json_read_bool(v, &iv) == MQVPN_OK) cfg->pmtud_enable = iv ? 1 : 0;
++
++    v = json_find_key(json_text, "pmtud_probe_size");
++    if (v && json_read_int(v, &iv) == MQVPN_OK &&
++        (iv == 0 || (iv >= MQVPN_OUTER_PACKET_SIZE_MIN &&
++                     iv <= MQVPN_OUTER_PACKET_SIZE_MAX))) {
++        cfg->pmtud_probe_size = iv ? iv : MQVPN_PMTUD_PROBE_SIZE_DEFAULT;
++    }
++
+     /* "paths" sets the multipath flag; individual interface names are not stored
+      * in the opaque config — callers must configure interface binding separately
+      * via the platform layer. */
+@@ -351,6 +409,59 @@ mqvpn_config_set_scheduler(mqvpn_config_t *cfg, mqvpn_scheduler_t sched)
+     return MQVPN_OK;
+ }
+
++int
++mqvpn_config_set_cc(mqvpn_config_t *cfg, mqvpn_cc_t cc)
++{
++    if (!cfg) return MQVPN_ERR_INVALID_ARG;
++    if ((int)cc < 0 || cc > MQVPN_CC_UNLIMITED) return MQVPN_ERR_INVALID_ARG;
++    cfg->cc = cc;
++    return MQVPN_OK;
++}
++
++int
++mqvpn_config_set_mtu(mqvpn_config_t *cfg, int mtu)
++{
++    if (!cfg) return MQVPN_ERR_INVALID_ARG;
++    if (mtu != MQVPN_TUN_MTU_AUTO &&
++        (mtu < MQVPN_TUN_MTU_MIN || mtu > MQVPN_TUN_MTU_MAX)) {
++        return MQVPN_ERR_INVALID_ARG;
++    }
++    cfg->mtu = mtu;
++    return MQVPN_OK;
++}
++
++int
++mqvpn_config_set_outer_packet_size(mqvpn_config_t *cfg, int size)
++{
++    if (!cfg) return MQVPN_ERR_INVALID_ARG;
++    if (size != 0 &&
++        (size < MQVPN_OUTER_PACKET_SIZE_MIN || size > MQVPN_OUTER_PACKET_SIZE_MAX)) {
++        return MQVPN_ERR_INVALID_ARG;
++    }
++    cfg->outer_packet_size = size ? size : MQVPN_OUTER_PACKET_SIZE_DEFAULT;
++    return MQVPN_OK;
++}
++
++int
++mqvpn_config_set_pmtud(mqvpn_config_t *cfg, int enable)
++{
++    if (!cfg) return MQVPN_ERR_INVALID_ARG;
++    cfg->pmtud_enable = enable ? 1 : 0;
++    return MQVPN_OK;
++}
++
++int
++mqvpn_config_set_pmtud_probe_size(mqvpn_config_t *cfg, int size)
++{
++    if (!cfg) return MQVPN_ERR_INVALID_ARG;
++    if (size != 0 &&
++        (size < MQVPN_OUTER_PACKET_SIZE_MIN || size > MQVPN_OUTER_PACKET_SIZE_MAX)) {
++        return MQVPN_ERR_INVALID_ARG;
++    }
++    cfg->pmtud_probe_size = size ? size : MQVPN_PMTUD_PROBE_SIZE_DEFAULT;
++    return MQVPN_OK;
++}
++
+ int
+ mqvpn_config_set_log_level(mqvpn_config_t *cfg, mqvpn_log_level_t level)
+ {
+diff --git a/src/mqvpn_internal.h b/src/mqvpn_internal.h
+index bac2a33..37b318e 100644
+--- a/src/mqvpn_internal.h
++++ b/src/mqvpn_internal.h
+@@ -25,6 +25,7 @@ struct mqvpn_config_s {
+     int insecure;
+
+     mqvpn_scheduler_t scheduler;
++    mqvpn_cc_t cc;
+     mqvpn_log_level_t log_level;
+     int multipath;
+     int reconnect_enable;
+@@ -45,6 +46,11 @@ struct mqvpn_config_s {
+     char tls_cert[256];
+     char tls_key[256];
+     int max_clients;
++
++    int mtu;               /* 0 = auto; otherwise pinned TUN MTU */
++    int outer_packet_size; /* QUIC packet size before IP/UDP headers */
++    int pmtud_enable;      /* 0 = off, 1 = negotiated xquic PMTUD */
++    int pmtud_probe_size;  /* 0 = default probe cap */
+ };
+
+ /* ─── State transition validation (M0-5) ─── */
+@@ -73,7 +79,7 @@ bool mqvpn_check_scheduler_preconditions(mqvpn_scheduler_t scheduler, int n_path
+ #  define MQVPN_INTERNAL
+ #endif
+
+-/* Returns "minrtt" / "wlb" / "backup_fec" / "unknown" — caller-owned static
++/* Returns "minrtt" / "wlb" / "backup" / "backup_fec" / "rap" / "unknown" — caller-owned static
+  * string, do not free. Used by control_socket.c for get_build_info JSON. */
+ MQVPN_INTERNAL const char *mqvpn_server_scheduler_label(const mqvpn_server_t *s);
+
+diff --git a/src/mqvpn_scheduler.h b/src/mqvpn_scheduler.h
+index c8c40f6..6fea011 100644
+--- a/src/mqvpn_scheduler.h
++++ b/src/mqvpn_scheduler.h
+@@ -36,6 +36,10 @@
+ /* Apply scheduler-specific xquic conn settings (callback + FEC params).
+  * Used by both client (mqvpn_client.c) and server (mqvpn_server.c). */
+ void mqvpn_apply_scheduler(xqc_conn_settings_t *cs, mqvpn_scheduler_t sched);
++void mqvpn_apply_cc(xqc_conn_settings_t *cs, mqvpn_cc_t cc);
++void mqvpn_apply_transport_tuning(xqc_conn_settings_t *cs, const mqvpn_config_t *cfg);
++int mqvpn_effective_tun_mtu(const mqvpn_config_t *cfg, size_t dgram_mss,
++                            uint64_t masque_stream_id, int has_v6);
+
+ /* Map scheduler choice → DATAGRAM send-time QoS level.
+  *
+diff --git a/src/mqvpn_server.c b/src/mqvpn_server.c
+index a166329..714b552 100644
+--- a/src/mqvpn_server.c
++++ b/src/mqvpn_server.c
+@@ -166,7 +166,9 @@ mqvpn_scheduler_label(int s)
+     switch (s) {
+     case MQVPN_SCHED_MINRTT: return "minrtt";
+     case MQVPN_SCHED_WLB: return "wlb";
++    case MQVPN_SCHED_BACKUP: return "backup";
+     case MQVPN_SCHED_BACKUP_FEC: return "backup_fec";
++    case MQVPN_SCHED_RAP: return "rap";
+     default: return "unknown";
+     }
+ }
+@@ -764,7 +766,8 @@ svr_masque_send_response(xqc_h3_request_t *h3_request, svr_stream_t *stream)
+         client_info.assigned_prefix = 32;
+         memcpy(client_info.server_ip, &s->pool.base.s_addr, 4);
+         client_info.server_prefix = (uint8_t)s->pool.prefix_len;
+-        client_info.mtu = 1280;
++        client_info.mtu = mqvpn_effective_tun_mtu(&s->config, conn->dgram_mss,
++                                                  conn->masque_stream_id, conn->has_v6);
+         if (conn->has_v6) {
+             memcpy(client_info.assigned_ip6, &conn->assigned_ip6, 16);
+             client_info.assigned_prefix6 = (uint8_t)s->pool.prefix6;
+@@ -1266,10 +1269,8 @@ mqvpn_server_new(const mqvpn_config_t *cfg, const mqvpn_server_callbacks_t *cbs,
+     conn_settings.enable_multipath = 1;
+     conn_settings.mp_ping_on = 1;
+     conn_settings.pacing_on = 1;
+-    conn_settings.max_pkt_out_size = 1400;
+-    conn_settings.cong_ctrl_callback = xqc_bbr2_cb;
+-    conn_settings.cc_params.cc_optimization_flags =
+-        XQC_BBR2_FLAG_RTTVAR_COMPENSATION | XQC_BBR2_FLAG_FAST_CONVERGENCE;
++    mqvpn_apply_transport_tuning(&conn_settings, &s->config);
++    mqvpn_apply_cc(&conn_settings, s->config.cc);
+ #if !defined(XQC_ENABLE_FEC) || !defined(XQC_ENABLE_XOR)
+     if (cfg->scheduler == MQVPN_SCHED_BACKUP_FEC) {
+         LOG_W(s, "backup_fec scheduler requested but library built without FEC "
+@@ -1386,7 +1387,7 @@ mqvpn_server_start(mqvpn_server_t *s)
+     info.assigned_prefix = (uint8_t)s->pool.prefix_len;
+     memcpy(info.server_ip, &s->pool.base.s_addr, 4);
+     info.server_prefix = (uint8_t)s->pool.prefix_len;
+-    info.mtu = 1280;
++    info.mtu = s->config.mtu > 0 ? s->config.mtu : MQVPN_TUN_MTU_MIN;
+
+     if (s->pool.has_v6) {
+         struct in6_addr srv_addr6;
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+index 366dedd..97233e6 100644
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -1020,9 +1020,16 @@ linux_platform_run_client(const mqvpn_client_cfg_t *cfg)
+     switch (cfg->scheduler) {
+     case 1: lib_sched = MQVPN_SCHED_WLB; break;
+     case 2: lib_sched = MQVPN_SCHED_BACKUP_FEC; break;
++    case 3: lib_sched = MQVPN_SCHED_BACKUP; break;
++    case 4: lib_sched = MQVPN_SCHED_RAP; break;
+     default: lib_sched = MQVPN_SCHED_MINRTT; break;
+     }
+     mqvpn_config_set_scheduler(lib_cfg, lib_sched);
++    mqvpn_config_set_cc(lib_cfg, (mqvpn_cc_t)cfg->cc);
++    mqvpn_config_set_mtu(lib_cfg, cfg->mtu);
++    mqvpn_config_set_outer_packet_size(lib_cfg, cfg->outer_packet_size);
++    mqvpn_config_set_pmtud(lib_cfg, cfg->pmtud_enable);
++    mqvpn_config_set_pmtud_probe_size(lib_cfg, cfg->pmtud_probe_size);
+
+     /* Create callbacks */
+     mqvpn_client_callbacks_t cbs = MQVPN_CLIENT_CALLBACKS_INIT;
+@@ -1469,9 +1476,16 @@ linux_platform_run_server(const mqvpn_server_cfg_t *cfg)
+     switch (cfg->scheduler) {
+     case 1: lib_sched = MQVPN_SCHED_WLB; break;
+     case 2: lib_sched = MQVPN_SCHED_BACKUP_FEC; break;
++    case 3: lib_sched = MQVPN_SCHED_BACKUP; break;
++    case 4: lib_sched = MQVPN_SCHED_RAP; break;
+     default: lib_sched = MQVPN_SCHED_MINRTT; break;
+     }
+     mqvpn_config_set_scheduler(lib_cfg, lib_sched);
++    mqvpn_config_set_cc(lib_cfg, (mqvpn_cc_t)cfg->cc);
++    mqvpn_config_set_mtu(lib_cfg, cfg->mtu);
++    mqvpn_config_set_outer_packet_size(lib_cfg, cfg->outer_packet_size);
++    mqvpn_config_set_pmtud(lib_cfg, cfg->pmtud_enable);
++    mqvpn_config_set_pmtud_probe_size(lib_cfg, cfg->pmtud_probe_size);
+
+     mqvpn_config_set_log_level(lib_cfg, (mqvpn_log_level_t)cfg->log_level);
+
+diff --git a/src/platform/windows/platform_windows.c b/src/platform/windows/platform_windows.c
+index b4564aa..0bb220b 100644
+--- a/src/platform/windows/platform_windows.c
++++ b/src/platform/windows/platform_windows.c
+@@ -528,9 +528,16 @@ win_platform_run_client(const mqvpn_client_cfg_t *cfg)
+     switch (cfg->scheduler) {
+     case 1: lib_sched = MQVPN_SCHED_WLB; break;
+     case 2: lib_sched = MQVPN_SCHED_BACKUP_FEC; break;
++    case 3: lib_sched = MQVPN_SCHED_BACKUP; break;
++    case 4: lib_sched = MQVPN_SCHED_RAP; break;
+     default: lib_sched = MQVPN_SCHED_MINRTT; break;
+     }
+     mqvpn_config_set_scheduler(lib_cfg, lib_sched);
++    mqvpn_config_set_cc(lib_cfg, (mqvpn_cc_t)cfg->cc);
++    mqvpn_config_set_mtu(lib_cfg, cfg->mtu);
++    mqvpn_config_set_outer_packet_size(lib_cfg, cfg->outer_packet_size);
++    mqvpn_config_set_pmtud(lib_cfg, cfg->pmtud_enable);
++    mqvpn_config_set_pmtud_probe_size(lib_cfg, cfg->pmtud_probe_size);
+
+     /* Create callbacks */
+     mqvpn_client_callbacks_t cbs = MQVPN_CLIENT_CALLBACKS_INIT;
+diff --git a/src/vpn_client.h b/src/vpn_client.h
+index 72f1b72..450c8f6 100644
+--- a/src/vpn_client.h
++++ b/src/vpn_client.h
+@@ -14,6 +14,11 @@ typedef struct mqvpn_client_cfg_s {
+     const char *path_ifaces[MQVPN_MAX_PATH_IFACES]; /* network interfaces for multipath */
+     int n_paths;                /* number of path interfaces (0 = single-path) */
+     int scheduler;              /* 0=minrtt, 1=wlb (default) */
++    int cc;                     /* mqvpn_cc_t */
++    int mtu;                    /* 0=auto; otherwise pinned TUN MTU */
++    int outer_packet_size;      /* QUIC packet size, 0/default=1400 */
++    int pmtud_enable;           /* 1=enable negotiated xquic PMTUD */
++    int pmtud_probe_size;       /* PMTUD probe cap, 0/default=1420 */
+     const char *auth_key;       /* PSK for server authentication (NULL = no auth) */
+     const char *dns_servers[4]; /* DNS servers to configure (NULL = no DNS override) */
+     int n_dns;                  /* number of DNS servers */
+diff --git a/src/vpn_server.h b/src/vpn_server.h
+index 5062996..f235e9b 100644
+--- a/src/vpn_server.h
++++ b/src/vpn_server.h
+@@ -21,6 +21,11 @@ typedef struct mqvpn_server_cfg_s {
+     const char *key_file;    /* TLS private key path */
+     int log_level;           /* mqvpn_log_level_t */
+     int scheduler;           /* 0=minrtt, 1=wlb (default) */
++    int cc;                  /* mqvpn_cc_t */
++    int mtu;                 /* 0=auto; otherwise pinned TUN MTU */
++    int outer_packet_size;   /* QUIC packet size, 0/default=1400 */
++    int pmtud_enable;        /* 1=enable negotiated xquic PMTUD */
++    int pmtud_probe_size;    /* PMTUD probe cap, 0/default=1420 */
+     const char *auth_key;    /* PSK for client authentication (NULL = no auth) */
+     const char *user_names[64];
+     const char *user_keys[64];

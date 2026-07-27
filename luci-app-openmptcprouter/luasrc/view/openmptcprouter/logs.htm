@@ -1,0 +1,315 @@
+<%+header%>
+
+<style>
+.omr-log-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: end;
+	margin: 12px 0;
+}
+.omr-log-control { min-width: 130px; }
+.omr-log-control label {
+	display: block;
+	font-size: 12px;
+	font-weight: 600;
+	margin-bottom: 3px;
+}
+.omr-log-control select,
+.omr-log-control input[type="search"] {
+	box-sizing: border-box;
+	height: 32px;
+	width: 100%;
+}
+.omr-log-search { flex: 1; min-width: 190px; }
+.omr-log-actions {
+	display: flex;
+	gap: 6px;
+	margin-left: auto;
+	align-items: center;
+}
+.omr-log-actions .cbi-button { height: 32px; }
+.omr-log-summary {
+	display: grid;
+	grid-template-columns: repeat(6, minmax(90px, 1fr));
+	border: 1px solid #d5d8dc;
+	margin: 10px 0;
+}
+.omr-log-summary > div {
+	padding: 8px 10px;
+	border-right: 1px solid #d5d8dc;
+	min-width: 0;
+}
+.omr-log-summary > div:last-child { border-right: 0; }
+.omr-log-summary span {
+	display: block;
+	color: #687078;
+	font-size: 11px;
+}
+.omr-log-summary strong {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.omr-log-state {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 22px;
+	font-size: 12px;
+	color: #687078;
+}
+.omr-log-table-wrap {
+	overflow: auto;
+	border: 1px solid #d5d8dc;
+	max-height: 62vh;
+}
+.omr-log-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+.omr-log-table th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: #f4f5f6;
+	text-align: left;
+	padding: 7px 8px;
+	border-bottom: 1px solid #c8ccd0;
+}
+.omr-log-table td {
+	padding: 6px 8px;
+	border-bottom: 1px solid #e6e8ea;
+	vertical-align: top;
+}
+.omr-log-table .time { white-space: nowrap; width: 145px; }
+.omr-log-table .scope { width: 55px; }
+.omr-log-table .source { width: 125px; word-break: break-word; }
+.omr-log-table .severity { width: 62px; font-weight: 600; text-transform: uppercase; }
+.omr-log-table .message {
+	font-family: monospace;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.omr-log-table tr.error { border-left: 3px solid #c0392b; }
+.omr-log-table tr.warning { border-left: 3px solid #d68910; }
+.omr-log-table tr.notice { border-left: 3px solid #2874a6; }
+.omr-log-table tr.info { border-left: 3px solid transparent; }
+.omr-log-table tr.debug { border-left: 3px solid #a6acaf; color: #687078; }
+.omr-log-empty { padding: 24px; text-align: center; color: #687078; }
+@media (max-width: 900px) {
+	.omr-log-summary { grid-template-columns: repeat(3, 1fr); }
+	.omr-log-summary > div:nth-child(3) { border-right: 0; }
+	.omr-log-actions { margin-left: 0; }
+}
+@media (max-width: 560px) {
+	.omr-log-summary { grid-template-columns: repeat(2, 1fr); }
+	.omr-log-summary > div:nth-child(3) { border-right: 1px solid #d5d8dc; }
+	.omr-log-summary > div:nth-child(even) { border-right: 0; }
+	.omr-log-control { width: calc(50% - 4px); min-width: 0; }
+	.omr-log-search { width: 100%; }
+	.omr-log-actions { width: 100%; }
+	.omr-log-table .source { width: 90px; }
+}
+</style>
+
+<div class="cbi-map">
+	<h2><%:Diagnostic logs%></h2>
+
+	<div class="omr-log-summary">
+		<div><span><%:VPN%></span><strong id="omr-vpn">-</strong></div>
+		<div><span><%:Tunnel%></span><strong id="omr-tunnel">-</strong></div>
+		<div><span><%:WANs online%></span><strong id="omr-wans">-</strong></div>
+		<div><span><%:Congestion control%></span><strong id="omr-cc">-</strong></div>
+		<div><span><%:Errors%></span><strong id="omr-errors">0</strong></div>
+		<div><span><%:Warnings%></span><strong id="omr-warnings">0</strong></div>
+	</div>
+
+	<div class="omr-log-toolbar">
+		<div class="omr-log-control">
+			<label for="omr-scope"><%:Origin%></label>
+			<select id="omr-scope">
+				<option value="all"><%:Router and VPS%></option>
+				<option value="router"><%:Router%></option>
+				<option value="vps"><%:VPS%></option>
+			</select>
+		</div>
+		<div class="omr-log-control">
+			<label for="omr-severity"><%:Severity%></label>
+			<select id="omr-severity">
+				<option value="all"><%:All%></option>
+				<option value="error"><%:Errors%></option>
+				<option value="warning"><%:Warnings%></option>
+				<option value="notice"><%:Notices%></option>
+				<option value="info"><%:Information%></option>
+				<option value="debug"><%:Debug%></option>
+			</select>
+		</div>
+		<div class="omr-log-control">
+			<label for="omr-component"><%:Component%></label>
+			<select id="omr-component">
+				<option value="all"><%:All%></option>
+			</select>
+		</div>
+		<div class="omr-log-control omr-log-search">
+			<label for="omr-search"><%:Search%></label>
+			<input id="omr-search" type="search" autocomplete="off">
+		</div>
+		<div class="omr-log-actions">
+			<label><input id="omr-auto" type="checkbox" checked> <%:Auto refresh%></label>
+			<button id="omr-refresh" class="cbi-button" type="button"><%:Refresh%></button>
+			<a class="cbi-button cbi-button-action" href="<%=luci.dispatcher.build_url('admin/system/openmptcprouter/logs_download')%>"><%:Download support report%></a>
+		</div>
+	</div>
+
+	<div class="omr-log-state">
+		<span id="omr-status"><%:Loading%></span>
+		<span id="omr-updated"></span>
+	</div>
+
+	<div class="omr-log-table-wrap">
+		<table class="omr-log-table">
+			<thead><tr>
+				<th><%:Time%></th>
+				<th><%:Origin%></th>
+				<th><%:Source%></th>
+				<th><%:Severity%></th>
+				<th><%:Message%></th>
+			</tr></thead>
+			<tbody id="omr-log-body"></tbody>
+		</table>
+		<div id="omr-empty" class="omr-log-empty" hidden><%:No matching log entries%></div>
+	</div>
+</div>
+
+<script>
+(function() {
+	'use strict';
+	var dataUrl = '<%=luci.dispatcher.build_url("admin/system/openmptcprouter/logs_data")%>';
+	var entries = [];
+	var timer = null;
+	var componentLabels = {
+		mqvpn: 'MQVPN', mqvpn2: 'MQVPN2', vpn: 'VPN', wan: 'WAN',
+		mptcp: 'MPTCP', vps_sync: 'VPS sync', firewall: 'Firewall',
+		network: 'Network', security: 'Security', system: 'System'
+	};
+	var scope = document.getElementById('omr-scope');
+	var severity = document.getElementById('omr-severity');
+	var component = document.getElementById('omr-component');
+	var search = document.getElementById('omr-search');
+	var body = document.getElementById('omr-log-body');
+	var empty = document.getElementById('omr-empty');
+
+	function textCell(row, className, value) {
+		var cell = document.createElement('td');
+		cell.className = className;
+		cell.textContent = value == null ? '' : String(value);
+		row.appendChild(cell);
+	}
+
+	function formatTime(timestamp) {
+		var value = Number(timestamp);
+		if (!value) return '-';
+		return new Date(value * 1000).toLocaleString();
+	}
+
+	function render() {
+		var query = search.value.toLowerCase();
+		var shown = 0;
+		body.textContent = '';
+		entries.forEach(function(entry) {
+			if (severity.value !== 'all' && entry.severity !== severity.value) return;
+			if (component.value !== 'all' && entry.component !== component.value) return;
+			var haystack = [entry.source, entry.component, entry.message].join(' ').toLowerCase();
+			if (query && haystack.indexOf(query) === -1) return;
+			var row = document.createElement('tr');
+			row.className = entry.severity || 'info';
+			textCell(row, 'time', formatTime(entry.timestamp));
+			textCell(row, 'scope', entry.scope === 'vps' ? 'VPS' : 'Router');
+			textCell(row, 'source', entry.source);
+			textCell(row, 'severity', entry.severity);
+			textCell(row, 'message', entry.message);
+			body.appendChild(row);
+			shown++;
+		});
+		empty.hidden = shown !== 0;
+		document.getElementById('omr-status').textContent = shown + ' / ' + entries.length + ' <%:entries%>';
+	}
+
+	function rebuildComponents() {
+		var selected = component.value;
+		var found = {};
+		entries.forEach(function(entry) { found[entry.component || 'system'] = true; });
+		component.options.length = 1;
+		Object.keys(found).sort().forEach(function(name) {
+			var option = document.createElement('option');
+			option.value = name;
+			option.textContent = componentLabels[name] || name;
+			component.appendChild(option);
+		});
+		component.value = found[selected] ? selected : 'all';
+	}
+
+	function setSummary(payload) {
+		var snapshot = payload.snapshot || {};
+		document.getElementById('omr-vpn').textContent = snapshot.vpn || '-';
+		document.getElementById('omr-tunnel').textContent =
+			(snapshot.tunnel || '-') + (snapshot.tunnel_up ? ' up' : ' down');
+		document.getElementById('omr-wans').textContent =
+			(snapshot.wan_up == null ? '-' : snapshot.wan_up) + ' / ' +
+			(snapshot.wan_total == null ? '-' : snapshot.wan_total);
+		document.getElementById('omr-cc').textContent =
+			(snapshot.congestion || '-') +
+			(snapshot.aggressiveness ? ' (' + snapshot.aggressiveness + '%)' : '');
+		document.getElementById('omr-errors').textContent =
+			entries.filter(function(entry) { return entry.severity === 'error'; }).length;
+		document.getElementById('omr-warnings').textContent =
+			entries.filter(function(entry) { return entry.severity === 'warning'; }).length;
+	}
+
+	function load() {
+		document.getElementById('omr-status').textContent = '<%:Loading%>';
+		var xhr = new XMLHttpRequest();
+		xhr.open('GET', dataUrl + '?limit=500&scope=' + encodeURIComponent(scope.value), true);
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState !== 4) return;
+			if (xhr.status < 200 || xhr.status >= 300) {
+				document.getElementById('omr-status').textContent = '<%:Unable to load logs%>';
+				return;
+			}
+			try {
+				var payload = JSON.parse(xhr.responseText);
+				entries = payload.entries || [];
+				rebuildComponents();
+				setSummary(payload);
+				render();
+				var updated = formatTime(payload.generated_at);
+				document.getElementById('omr-updated').textContent =
+					(payload.vps_error ? payload.vps_error + ' - ' : '') + updated;
+			} catch (error) {
+				document.getElementById('omr-status').textContent = '<%:Invalid diagnostic response%>';
+			}
+		};
+		xhr.send();
+	}
+
+	function schedule() {
+		if (timer) window.clearInterval(timer);
+		timer = document.getElementById('omr-auto').checked ?
+			window.setInterval(load, 15000) : null;
+	}
+
+	scope.addEventListener('change', load);
+	severity.addEventListener('change', render);
+	component.addEventListener('change', render);
+	search.addEventListener('input', render);
+	document.getElementById('omr-refresh').addEventListener('click', load);
+	document.getElementById('omr-auto').addEventListener('change', schedule);
+	schedule();
+	load();
+}());
+</script>
+
+<%+footer%>

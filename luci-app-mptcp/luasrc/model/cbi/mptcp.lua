@@ -77,6 +77,14 @@ for cong in string.gmatch(availablecong, "[^%s]+") do
 	end
 end
 
+o = s:option(Value, "nanbbr_aggressiveness", translate("NanBBR aggressiveness"), translate("Applied to new TCP connections and MPTCP subflows; active connections keep their current profile."))
+o.datatype = "range(1,100)"
+o.default = 50
+o.rmempty = false
+o:depends("congestion", "nanbbr1_var")
+o:depends("congestion", "nanbbr2_var")
+o:depends("congestion", "nanbbr3_var")
+
 -- if tonumber(uname.release:sub(1,4)) >= 5.15 then
 if uname.release:sub(1,4) == "5.15" or uname.release:sub(1,1) == "6" then
     if uname.release:sub(1,1) == "6" then

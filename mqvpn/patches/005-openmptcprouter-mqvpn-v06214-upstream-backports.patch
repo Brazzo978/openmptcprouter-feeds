@@ -1,0 +1,517 @@
+From: OpenMPTCProuter maintainers
+Subject: mqvpn: backport Linux recovery and server stability fixes for v0.62.14
+
+Backports selected from upstream mqvpn after ca1e4f3:
+  5a7e1c9  fix(netlink): treat admin down as immediate path drop
+  840f692  fix(netlink): gate path re-add on usable address of server family
+  1feebf1  fix(netlink): exclude v4 link-local and require carrier in re-add gate
+  b907484  fix(platform): drive engine after netlink-driven path changes
+  220a2e6  fix(client): honor CREATE_WAIT retry deadline in tick interest
+  0051cf7  fix(linux): drop path on RTM_DELADDR when no usable source remains
+  0bcee8a  feat(api): add Linux platform path-drop reasons
+  554a9c5  refactor(linux): share drop-by-interface handling
+  be5941b  fix(linux): let link events own DELADDR races on down links
+
+Also includes the Linux-only behavior from dbaae1b (drive/re-arm after
+TUN-originated sends), the server pre-handshake context lifetime fix from
+3cb574a, and the live primary path-id 0 abandon fix from a92e664.
+
+xquic 540330f is intentionally not included: it fixes a leak introduced by
+the later dynamic paths_info refactor. In xquic 9e588b6 paths_info is inline
+storage, so that commit would free a non-heap object and fails compilation
+with -Werror=free-nonheap-object.
+
+The patch is intentionally based on mqvpn b23a4ae with xquic 9e588b6
+after OpenMPTCProuter patches 001-004.
+
+diff --git a/include/libmqvpn.h b/include/libmqvpn.h
+index 4fdc44ccb338b3156248d5e5efea74c1b38a8f72..1e09e41f2e5688e64521ddb9e1b7c5f1ecc17131 100644
+--- a/include/libmqvpn.h
++++ b/include/libmqvpn.h
+@@ -193,11 +193,14 @@ typedef enum {
+  * Fields:
+  *   iface  - interface name (NUL-terminated, may be empty if N/A).
+  *            Diagnostic only - library does not parse this.
+- *   reason - platform-specific reason code. Currently only
+- *            MQVPN_PLATFORM_REASON_RTM_DELLINK is emitted (Linux PR5).
++ *   reason - platform-specific reason code. Linux emits RTM_DELLINK
++ *            (interface gone), CARRIER_LOST (cable unplugged / peer down),
++ *            ADMIN_DOWN (ip link set down) and ADDR_REMOVED (last usable
++ *            source address removed while the link stayed up — nmcli
++ *            disconnect / DHCP lease loss).
+  *            Library does not branch on this - log only.
+- *            More values added when concrete emitter ships (CARRIER_LOST,
+- *            NM_IFDOWN, iOS variants etc) - ABI-additive.
++ *            More values added when concrete emitter ships (iOS variants
++ *            etc) - ABI-additive.
+  *
+  * Future: `platform_net_id` (Android Network handle) is intentionally NOT
+  * included now. Android path management uses existing
+@@ -209,10 +212,12 @@ typedef enum {
+  * semantic). */
+ typedef enum {
+     MQVPN_PLATFORM_REASON_UNKNOWN = 0,
+-    MQVPN_PLATFORM_REASON_RTM_DELLINK = 1,
+-    /* extend ABI-additively when concrete emitter ships:
+-     * MQVPN_PLATFORM_REASON_CARRIER_LOST = 2,
+-     * MQVPN_PLATFORM_REASON_NM_IFDOWN    = 3, ... */
++    MQVPN_PLATFORM_REASON_RTM_DELLINK = 1,  /* interface removed */
++    MQVPN_PLATFORM_REASON_CARRIER_LOST = 2, /* IFF_UP set, operstate DOWN */
++    MQVPN_PLATFORM_REASON_ADMIN_DOWN = 3,   /* IFF_UP cleared (ip link set down) */
++    MQVPN_PLATFORM_REASON_ADDR_REMOVED = 4, /* no usable source address left
++                                             * (RTM_DELADDR, link stays up) */
++    /* extend ABI-additively when concrete emitter ships (iOS variants etc) */
+ } mqvpn_platform_reason_t;
+
+ typedef struct {
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+index 6f2aabe2f84186cc4cc4c4061bfa9c8c14a5132f..8648d3e41ae0bc87ef677af5548fc09cd3791292 100644
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -2140,7 +2140,7 @@ mqvpn_client_remove_path(mqvpn_client_t *c, mqvpn_path_handle_t path)
+
+     /* Spec §5.0: REMOVE_API allows orderly xquic close. Issue before
+      * dispatch so the FSM stays xquic-API-free (avoids layer leak). */
+-    if (p->xquic_path_live && p->xqc_path_id != 0 && c->engine && c->conn)
++    if (p->xquic_path_live && c->engine && c->conn)
+         xqc_conn_close_path(c->engine, &c->conn->cid, p->xqc_path_id);
+
+     path_event_ctx_t ctx = {.now_us = client_now_us(c)};
+@@ -2697,8 +2697,13 @@ mqvpn_client_get_interest(const mqvpn_client_t *c, mqvpn_interest_t *out)
+             /* Recovery timer — shorten `ms` only, never extend. Same shape as
+              * Stability timer below. Unlike the RECONNECTING / CONNECTING
+              * blocks above, the tunnel is live here and BBR pacing depends
+-             * on near-term ticks. */
+-            if (p->status == MQVPN_PATH_DEGRADED && p->recreate_after_us > 0) {
++             * on near-term ticks.
++             *
++             * recreate_after_us != 0 exactly in CREATE_WAIT (public PENDING)
++             * and DEGRADED — both carry a retry deadline the tick must honor.
++             * Gating on the public DEGRADED status alone left CREATE_WAIT
++             * retries waiting for an unrelated timer. */
++            if (p->recreate_after_us > 0) {
+                 if (p->recreate_after_us > now_val) {
+                     int pms = (int)((p->recreate_after_us - now_val) / 1000);
+                     if (ms > 0 && pms < ms) ms = pms;
+diff --git a/src/mqvpn_server.c b/src/mqvpn_server.c
+index f4e4602a36b19161702413d590018e2b6a34b57a..6ff703f3bb41f68b86f9d03d315a8c454182a634 100644
+--- a/src/mqvpn_server.c
++++ b/src/mqvpn_server.c
+@@ -422,6 +422,12 @@ svr_do_send(mqvpn_server_t *s, const unsigned char *buf, size_t size,
+
+ /* ─── xquic transport callbacks ─── */
+
++static void
++svr_conn_free(svr_conn_t *conn)
++{
++    free(conn);
++}
++
+ static ssize_t
+ cb_write_socket(const unsigned char *buf, size_t size, const struct sockaddr *peer,
+                 socklen_t peerlen, void *conn_user_data)
+@@ -451,9 +457,20 @@ cb_accept(xqc_engine_t *engine, xqc_connection_t *conn, const xqc_cid_t *cid,
+           void *user_data)
+ {
+     (void)engine;
+-    (void)conn;
+-    (void)cid;
+     mqvpn_server_t *s = (mqvpn_server_t *)user_data;
++
++    /* Bind a correctly typed per-connection context before xquic switches
++     * post-accept writes from cb_write_before_accept to cb_write_socket. */
++    svr_conn_t *conn_ctx = calloc(1, sizeof(*conn_ctx));
++    if (!conn_ctx) {
++        LOG_E(s, "accept: connection context alloc failed");
++        return -1;
++    }
++    conn_ctx->server = s;
++    /* cid may be misaligned inside xquic's internal structures */
++    memcpy(&conn_ctx->cid, (const void *)cid, sizeof(conn_ctx->cid));
++    xqc_conn_set_transport_user_data(conn, conn_ctx);
++
+     LOG_I(s, "connection accepted");
+     return 0;
+ }
+@@ -465,11 +482,9 @@ cb_refuse(xqc_engine_t *engine, xqc_connection_t *conn, const xqc_cid_t *cid,
+     (void)engine;
+     (void)conn;
+     (void)cid;
+-    (void)user_data;
+-    /* No per-connection context is allocated in cb_accept.
+-     * svr_conn_t is allocated in cb_h3_conn_create and freed in cb_h3_conn_close.
+-     * If refuse fires before H3 setup, user_data is the engine user_data
+-     * (mqvpn_server_t *), which must NOT be freed. */
++    /* Pre-H3 connection: cb_accept bound this context, but no H3 close
++     * callback will run to release it. */
++    svr_conn_free((svr_conn_t *)user_data);
+ }
+
+ static ssize_t
+@@ -511,13 +526,11 @@ cb_path_removed(const xqc_cid_t *cid, uint64_t path_id, void *conn_user_data)
+ static int
+ cb_h3_conn_create(xqc_h3_conn_t *h3_conn, const xqc_cid_t *cid, void *conn_user_data)
+ {
+-    /* For server-side connections, xquic passes engine_user_data
+-     * as conn_user_data initially (set during xqc_engine_create). */
+-    mqvpn_server_t *s = (mqvpn_server_t *)conn_user_data;
+-
+-    svr_conn_t *conn = calloc(1, sizeof(*conn));
++    /* cb_accept allocated and bound the transport context before H3 setup. */
++    svr_conn_t *conn = (svr_conn_t *)conn_user_data;
+     if (!conn) return -1;
+-    conn->server = s;
++    mqvpn_server_t *s = conn->server;
++
+     conn->h3_conn = h3_conn;
+     /* cid may be misaligned inside xquic's internal structures */
+     memcpy(&conn->cid, (const void *)cid, sizeof(conn->cid));
+@@ -559,7 +572,7 @@ cb_h3_conn_close(xqc_h3_conn_t *h3_conn, const xqc_cid_t *cid, void *conn_user_d
+     }
+
+     LOG_I(s, "H3 connection closed");
+-    free(conn);
++    svr_conn_free(conn);
+     return 0;
+ }
+
+@@ -1353,7 +1366,7 @@ mqvpn_server_destroy(mqvpn_server_t *s)
+     /* Step 2: Defensive sweep — free any sessions not freed by engine callbacks */
+     for (int i = 1; i <= MQVPN_ADDR_POOL_MAX; i++) {
+         if (s->sessions[i]) {
+-            free(s->sessions[i]);
++            svr_conn_free(s->sessions[i]);
+             s->sessions[i] = NULL;
+         }
+     }
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+index 97233e626ef2b9d56aed09068513b3719dbdc855..5ac2f99c65cd03376ac42d53fa2731e0868d77fa 100644
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -375,6 +375,12 @@ on_tun_read(evutil_socket_t fd, short what, void *arg)
+             break;
+         }
+     }
++
++    /* TUN sends update xquic pacing/PTO wakeups. Drive the engine and
++     * re-arm the event from the new interest instead of leaving a stale
++     * timer pending during outbound-only traffic. */
++    mqvpn_client_tick(p->client);
++    schedule_next_tick(p);
+ }
+
+ static void
+@@ -457,26 +463,43 @@ nlmsg_get_operstate(struct nlmsghdr *nh)
+     return -1;
+ }
+
++/* Log wording per reason. Frozen: e2e scripts grep these exact strings
++ * ("interface <if> <reason>, closing path"). */
++static const char *
++drop_reason_str(mqvpn_platform_reason_t reason)
++{
++    switch (reason) {
++    case MQVPN_PLATFORM_REASON_RTM_DELLINK: return "removed";
++    case MQVPN_PLATFORM_REASON_CARRIER_LOST: return "carrier lost";
++    case MQVPN_PLATFORM_REASON_ADMIN_DOWN: return "admin down";
++    case MQVPN_PLATFORM_REASON_ADDR_REMOVED: return "address removed";
++    default: return "dropped";
++    }
++}
++
+ /* Remove a path because the kernel says it's no longer usable.
+- * Two callers: RTM_DELLINK (interface gone) and RTM_NEWLINK with IFLA_OPERSTATE
+- * = IF_OPER_DOWN / IF_OPER_LOWERLAYERDOWN (carrier lost — cable unplugged etc).
+- * Both share cleanup; only the log message differs.
++ * Four callers: RTM_DELLINK (interface gone); RTM_NEWLINK with
++ * IFLA_OPERSTATE = IF_OPER_DOWN / IF_OPER_LOWERLAYERDOWN (carrier lost —
++ * cable unplugged etc); RTM_NEWLINK with IFF_UP cleared (admin down,
++ * e.g. `ip link set down`); and RTM_DELADDR (no usable source address
++ * left). All share cleanup; the reason is logged and reported in the
++ * public event.
+  *
+  * Cleans up: library path, libevent, fd. Preserves iface name for re-add. */
+ static void
+-remove_path_by_index(platform_ctx_t *p, int idx, const char *reason)
++remove_path_by_index(platform_ctx_t *p, int idx, mqvpn_platform_reason_t reason)
+ {
+     if (p->path_mgr.paths[idx].fd < 0) return; /* already removed */
+
+     LOG_WRN("netlink: interface %s %s, closing path %d", p->path_mgr.paths[idx].iface,
+-            reason, idx);
++            drop_reason_str(reason), idx);
+
+     /* PR5: emit PLATFORM_DROP via new public API with diagnostic info.
+      * Library transitions slot to CLOSED_DROPPED; fd close is reported
+      * via mqvpn_client_on_platform_fd_closed() below. */
+     mqvpn_platform_path_event_info_t info = {0};
+     snprintf(info.iface, sizeof(info.iface), "%s", p->path_mgr.paths[idx].iface);
+-    info.reason = MQVPN_PLATFORM_REASON_RTM_DELLINK;
++    info.reason = reason;
+     mqvpn_client_on_platform_path_dropped(p->client, p->lib_path_handles[idx], &info);
+
+     /* Remove libevent watcher */
+@@ -494,6 +517,23 @@ remove_path_by_index(platform_ctx_t *p, int idx, const char *reason)
+     mqvpn_client_on_platform_fd_closed(p->client, p->lib_path_handles[idx]);
+ }
+
++/* Drop every tracked path on `ifname`. Shared by the RTM_DELADDR /
++ * RTM_DELLINK / RTM_NEWLINK drop branches so slot matching stays in one
++ * place. Returns the number of paths matched (dropped or already gone). */
++static int
++drop_paths_by_ifname(platform_ctx_t *p, const char *ifname,
++                     mqvpn_platform_reason_t reason)
++{
++    int matched = 0;
++    for (int i = 0; i < p->path_mgr.n_paths; i++) {
++        if (strcmp(p->path_mgr.paths[i].iface, ifname) == 0) {
++            remove_path_by_index(p, i, reason);
++            matched++;
++        }
++    }
++    return matched;
++}
++
+ /* Check whether `ifname` is admin-up AND has carrier (IFF_UP & IFF_RUNNING).
+  * Used by the periodic recovery timer to skip retries on a still-down link. */
+ static int
+@@ -511,20 +551,43 @@ iface_is_up_and_running(const char *ifname)
+     return ok;
+ }
+
+-/* Check if interface has an IP address (v4 or v6) */
++/* Check if the interface has a usable source address for the given
++ * family. v4: any address except 169.254/16 link-local. v6: global scope
++ * only — a link-local address cannot reach the server, and its presence
++ * used to let the re-add gate pass during the v4-less window right after
++ * link-up. Binding and challenging from an addressless iface triggers the
++ * kernel's assume-on-link output fallback with a source address borrowed
++ * from another interface, poisoning the server's view of the path 4-tuple.
++ *
++ * Returns 1 = usable address present, 0 = enumerated and found none,
++ * -1 = getifaddrs() failed (unknown). Callers must fail safe: the
++ * RTM_DELADDR drop requires a definite 0, the re-add gates a definite 1,
++ * so a transient getifaddrs failure never drops or re-adds a path. */
+ static int
+-iface_has_ip(const char *ifname)
++iface_has_usable_ip(const char *ifname, sa_family_t af)
+ {
+     struct ifaddrs *ifa_list = NULL, *ifa;
+     int found = 0;
+-    if (getifaddrs(&ifa_list) < 0) return 0;
++    if (getifaddrs(&ifa_list) < 0) return -1;
+     for (ifa = ifa_list; ifa; ifa = ifa->ifa_next) {
+         if (!ifa->ifa_addr) continue;
+         if (strcmp(ifa->ifa_name, ifname) != 0) continue;
+-        if (ifa->ifa_addr->sa_family == AF_INET || ifa->ifa_addr->sa_family == AF_INET6) {
+-            found = 1;
+-            break;
++        if (ifa->ifa_addr->sa_family != af) continue;
++        if (af == AF_INET6) {
++            const struct sockaddr_in6 *s6 =
++                (const struct sockaddr_in6 *)(const void *)ifa->ifa_addr;
++            if (IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) continue;
+         }
++        if (af == AF_INET) {
++            const struct sockaddr_in *s4 =
++                (const struct sockaddr_in *)(const void *)ifa->ifa_addr;
++            /* 169.254/16 (IPv4LL): same unusable-source class as v6
++             * link-local — present exactly when DHCP has NOT restored a
++             * real address yet. */
++            if ((ntohl(s4->sin_addr.s_addr) & 0xFFFF0000UL) == 0xA9FE0000UL) continue;
++        }
++        found = 1;
++        break;
+     }
+     freeifaddrs(ifa_list);
+     return found;
+@@ -700,6 +763,19 @@ recovery_rollback(platform_ctx_t *p, int slot, mqvpn_add_path_outcome_t outcome)
+ static int
+ try_readd_removed_path(platform_ctx_t *p, const char *ifname)
+ {
++    /* Never re-add on a down/no-carrier link, or while the interface lacks
++     * a usable source address of the server's family (see
++     * iface_has_usable_ip). RTM_NEWADDR for the right family, or the
++     * recovery timer, will retry once both hold.
++     *
++     * Note: handle_rtm_newlink / recover_dropped_paths_cb already check
++     * both conditions before calling in here — that's intentionally
++     * redundant. This function is also reachable via handle_rtm_newaddr,
++     * which must not be allowed to bypass the gate on an admin-down or
++     * carrier-less iface. */
++    if (!iface_is_up_and_running(ifname)) return 0;
++    if (iface_has_usable_ip(ifname, p->server_addr.ss_family) != 1) return 0;
++
+     mqvpn_path_info_t pinfo[MQVPN_MAX_PATHS];
+     int n = 0;
+     if (mqvpn_client_get_paths(p->client, pinfo, MQVPN_MAX_PATHS, &n) != MQVPN_OK)
+@@ -811,7 +887,7 @@ recover_dropped_paths_cb(evutil_socket_t fd, short what, void *arg)
+
+         const char *ifname = p->path_mgr.paths[i].iface;
+         if (!iface_is_up_and_running(ifname)) continue;
+-        if (!iface_has_ip(ifname)) continue;
++        if (iface_has_usable_ip(ifname, p->server_addr.ss_family) != 1) continue;
+
+         /* try_readd_removed_path scans by ifname, finds this slot via
+          * lib state, and either succeeds (resets the counter via line
+@@ -822,6 +898,13 @@ recover_dropped_paths_cb(evutil_socket_t fd, short what, void *arg)
+             LOG_INF("netlink: timer re-added path %s after carrier-up failure", ifname);
+     }
+
++    /* Netlink handlers may have created/dropped paths (queuing frames such
++     * as PATH_CHALLENGE inside xquic) — drive the engine and re-arm the
++     * tick from the engine's new wakeup request, exactly as on_socket_read
++     * does. Without this the queued frames wait for an unrelated timer. */
++    mqvpn_client_tick(p->client);
++    schedule_next_tick(p);
++
+ rearm:
+     if (p->ev_recover) {
+         struct timeval tv = {.tv_sec = RECOVER_INTERVAL_SEC};
+@@ -841,6 +924,48 @@ handle_rtm_newaddr(platform_ctx_t *p, struct nlmsghdr *nh)
+     if (!try_readd_removed_path(p, ifname)) try_reactivate_by_ifname(p, ifname);
+ }
+
++/* RTM_DELADDR: an address was removed while the link stayed up. NetworkManager
++ * `nmcli dev disconnect`, a connection-profile switch, and DHCP lease expiry
++ * all remove addresses WITHOUT toggling IFF_UP or carrier — so neither the
++ * admin-down nor the carrier-loss branch of handle_rtm_newlink fires (no link
++ * event at all), and the write-error path never triggers either: the device
++ * is still up with a route, so sends keep succeeding into a black hole until
++ * the address returns. If the removal leaves no usable source address of the
++ * server's family, drop the path so the scheduler fails over immediately;
++ * RTM_NEWADDR re-adds it when an address comes back.
++ *
++ * Only acts while the link is still up-and-running: admin down and link
++ * teardown flush addresses too, and the kernel emits those RTM_DELADDRs
++ * BEFORE the corresponding link event (`ip link del` -> v4 DELADDR before
++ * DELLINK; v6 admin down -> DELADDR before NEWLINK). Acting on them here
++ * would steal the drop from the more specific handler and misreport the
++ * public reason as ADDR_REMOVED. nmcli/DHCP address loss keeps IFF_UP and
++ * carrier set, so the gate never blocks the case this handler exists for. */
++static void
++handle_rtm_deladdr(platform_ctx_t *p, struct nlmsghdr *nh)
++{
++    struct ifaddrmsg *ifa = (struct ifaddrmsg *)NLMSG_DATA(nh);
++    if (ifa->ifa_family != p->server_addr.ss_family) return;
++    char ifname[IFNAMSIZ];
++    if (!if_indextoname(ifa->ifa_index, ifname)) return;
++
++    /* Cheap tracked-path match before the getifaddrs() enumeration: on
++     * hosts with container/veth churn every unrelated DELADDR would
++     * otherwise pay a full address-table walk inside the event loop. */
++    int tracked = 0;
++    for (int i = 0; i < p->path_mgr.n_paths; i++) {
++        if (strcmp(p->path_mgr.paths[i].iface, ifname) == 0) {
++            tracked = 1;
++            break;
++        }
++    }
++    if (!tracked) return;
++
++    if (!iface_is_up_and_running(ifname)) return; /* link event owns the drop */
++    if (iface_has_usable_ip(ifname, ifa->ifa_family) != 0) return;
++    drop_paths_by_ifname(p, ifname, MQVPN_PLATFORM_REASON_ADDR_REMOVED);
++}
++
+ /* RTM_DELLINK: interface gone. remove_path_by_index() uses drop_path
+  * semantics (not orderly close) so surviving paths aren't blocked by
+  * xquic shutdown handshakes. */
+@@ -849,25 +974,35 @@ handle_rtm_dellink(platform_ctx_t *p, struct nlmsghdr *nh)
+ {
+     const char *ifname = nlmsg_get_ifname(nh);
+     if (!ifname) return;
+-    for (int i = 0; i < p->path_mgr.n_paths; i++) {
+-        if (strcmp(p->path_mgr.paths[i].iface, ifname) == 0)
+-            remove_path_by_index(p, i, "removed");
+-    }
++    drop_paths_by_ifname(p, ifname, MQVPN_PLATFORM_REASON_RTM_DELLINK);
+ }
+
+ /* Decide whether this RTM_NEWLINK is a carrier-loss event we should drop on.
+  *
+  * Gate on IFLA_OPERSTATE rather than !IFF_RUNNING. IFF_RUNNING also clears
+  * during wifi association / dormant transitions, so an !IFF_RUNNING-based
+- * gate would burn one path_id slot per wifi roam — defeating the very
+- * XQC_MAX_PATHS_COUNT budget the drop is meant to preserve.
++ * gate would burn one path_id slot per wifi roam.
+  *
+  * Drop only on a definite operational-down report (RFC 2863): IF_OPER_DOWN
+  * (link admin/peer down) or IF_OPER_LOWERLAYERDOWN (e.g. underlying ethernet
+  * of a vlan/bridge went away). IF_OPER_DORMANT (wifi associating),
+  * IF_OPER_UNKNOWN (driver doesn't report; common on virtual interfaces) and
+  * IF_OPER_TESTING are tolerated — the carrier-up handler / recovery timer
+- * will still re-add once IFF_RUNNING + has_ip become true. */
++ * will still re-add once IFF_RUNNING + has_ip become true.
++ *
++ * The IFF_UP term below is checked for defensiveness but is redundant in
++ * practice: the caller (handle_rtm_newlink) already short-circuits on
++ * admin_down before ever consulting this function, so IFF_UP is always 1
++ * by the time we get here. It's kept only in case a future caller invokes
++ * this helper without that same admin_down pre-check. The operstate
++ * condition above is what actually protects the IFF_UP=1 flap cases (wifi
++ * DORMANT/UNKNOWN etc.) from being misread as carrier loss.
++ *
++ * Note this function does not need to special-case admin-down to preserve
++ * the fixed XQC_MAX_PATHS_COUNT (8) path_id budget — that budget is
++ * obsolete since the draft-21 dynamic path cap work (paths now grow/shrink
++ * via PATHS_BLOCKED / MAX_PATH_ID rather than a fixed array). Admin-down is
++ * instead handled explicitly and immediately by the caller. */
+ static int
+ is_carrier_loss(struct ifinfomsg *ifi, int operstate)
+ {
+@@ -875,8 +1010,8 @@ is_carrier_loss(struct ifinfomsg *ifi, int operstate)
+            (operstate == IF_OPER_DOWN || operstate == IF_OPER_LOWERLAYERDOWN);
+ }
+
+-/* RTM_NEWLINK: link state changed. Either drop on carrier loss, or attempt
+- * recovery if the link is now usable. */
++/* RTM_NEWLINK: link state changed. Either drop on admin-down/carrier loss,
++ * or attempt recovery if the link is now usable. */
+ static void
+ handle_rtm_newlink(platform_ctx_t *p, struct nlmsghdr *nh)
+ {
+@@ -884,16 +1019,16 @@ handle_rtm_newlink(platform_ctx_t *p, struct nlmsghdr *nh)
+     const char *ifname = nlmsg_get_ifname(nh);
+     if (!ifname) return;
+
+-    if (is_carrier_loss(ifi, nlmsg_get_operstate(nh))) {
+-        for (int i = 0; i < p->path_mgr.n_paths; i++) {
+-            if (strcmp(p->path_mgr.paths[i].iface, ifname) == 0)
+-                remove_path_by_index(p, i, "carrier lost");
+-        }
++    int admin_down = !(ifi->ifi_flags & IFF_UP);
++    if (admin_down || is_carrier_loss(ifi, nlmsg_get_operstate(nh))) {
++        drop_paths_by_ifname(p, ifname,
++                             admin_down ? MQVPN_PLATFORM_REASON_ADMIN_DOWN
++                                        : MQVPN_PLATFORM_REASON_CARRIER_LOST);
+         return;
+     }
+
+-    if (!(ifi->ifi_flags & IFF_UP) || !(ifi->ifi_flags & IFF_RUNNING)) return;
+-    if (!iface_has_ip(ifname)) return;
++    if (!(ifi->ifi_flags & IFF_RUNNING)) return;
++    if (iface_has_usable_ip(ifname, p->server_addr.ss_family) != 1) return;
+
+     /* First: try to re-add paths removed by RTM_DELLINK (dead fd).
+      * Otherwise: reactivate degraded/closed paths (fd still valid). */
+@@ -917,11 +1052,19 @@ on_netlink_event(evutil_socket_t fd, short what, void *arg)
+              nh = NLMSG_NEXT(nh, nlen)) {
+             switch (nh->nlmsg_type) {
+             case RTM_NEWADDR: handle_rtm_newaddr(p, nh); break;
++            case RTM_DELADDR: handle_rtm_deladdr(p, nh); break;
+             case RTM_DELLINK: handle_rtm_dellink(p, nh); break;
+             case RTM_NEWLINK: handle_rtm_newlink(p, nh); break;
+             }
+         }
+     }
++
++    /* Netlink handlers may have created/dropped paths (queuing frames such
++     * as PATH_CHALLENGE inside xquic) — drive the engine and re-arm the
++     * tick from the engine's new wakeup request, exactly as on_socket_read
++     * does. Without this the queued frames wait for an unrelated timer. */
++    mqvpn_client_tick(p->client);
++    schedule_next_tick(p);
+ }
+
+ static int

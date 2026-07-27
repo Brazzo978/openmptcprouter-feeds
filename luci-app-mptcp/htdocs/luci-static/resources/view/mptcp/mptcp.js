@@ -2,7 +2,6 @@
 'require rpc';
 'require form';
 'require fs';
-'require uci';
 'require tools.widgets as widgets';
 
 /*
@@ -16,16 +15,141 @@ var callSystemBoard = rpc.declare({
     method: 'board'
 });
 
+var NanbbrAggressivenessValue = form.Value.extend({
+	renderWidget: function(section_id, option_index, cfgvalue) {
+		var cbid = this.cbid(section_id);
+		var value = parseInt(cfgvalue != null ? cfgvalue : this.default, 10);
+		var presets = [
+			{ value: 25, label: _('Light') },
+			{ value: 50, label: _('Default') },
+			{ value: 80, label: _('Aggressive') }
+		];
+		var buttons = [];
+		var range;
+		var valueOutput;
+		var widget;
+		var controls;
+		var presetTrack;
+
+		if (isNaN(value) || value < 1 || value > 100)
+			value = 50;
+
+		range = E('input', {
+			'id': 'widget.' + cbid,
+			'name': cbid,
+			'type': 'range',
+			'class': 'cbi-input-range',
+			'min': '1',
+			'max': '100',
+			'step': '1',
+			'value': value,
+			'aria-label': _('NanBBR aggressiveness'),
+			'style': 'display:block;width:100%;height:1rem;margin:0',
+			'input': function(ev) {
+				setValue(ev.currentTarget.value, false);
+			},
+			'change': function(ev) {
+				setValue(ev.currentTarget.value, true);
+			}
+		});
+		valueOutput = E('output', {
+			'for': 'widget.' + cbid,
+			'aria-live': 'polite',
+			'style': 'display:block;min-width:3.5rem;text-align:center;font-size:.85rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1'
+		}, [
+			'%d%%'.format(value)
+		]);
+
+		function updatePresetState(currentValue) {
+			for (var i = 0; i < buttons.length; i++) {
+				var active = parseInt(buttons[i].getAttribute('data-value'), 10) == currentValue;
+				buttons[i].style.fontWeight = active ? '700' : '400';
+				buttons[i].style.opacity = active ? '1' : '.62';
+				buttons[i].style.textDecoration = active ? 'underline' : 'none';
+				buttons[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+			}
+		}
+
+		function setValue(newValue, notify) {
+			newValue = Math.max(1, Math.min(100, parseInt(newValue, 10) || 50));
+			range.value = newValue;
+			valueOutput.textContent = '%d%%'.format(newValue);
+			updatePresetState(newValue);
+			if (widget) {
+				if (notify)
+					widget.setAttribute('data-changed', 'true');
+				widget.dispatchEvent(new CustomEvent(
+					notify ? 'widget-change' : 'widget-update',
+					{ bubbles: true }));
+			}
+		}
+
+		presetTrack = E('div', {
+			'class': 'nanbbr-aggressiveness-presets',
+			'style': 'display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:center;width:100%'
+		});
+		for (var i = 0; i < presets.length; i++) {
+			var preset = presets[i];
+			var button = E('button', {
+				'type': 'button',
+				'data-value': preset.value,
+				'aria-pressed': 'false',
+				'title': _('Set NanBBR aggressiveness to %d%%').format(preset.value),
+				'style': 'appearance:none;border:0;background:transparent;color:inherit;cursor:pointer;padding:.15rem .1rem;font-size:.68rem;line-height:1;white-space:nowrap',
+				'click': function(ev) {
+					setValue(ev.currentTarget.getAttribute('data-value'), true);
+				}
+			}, [ '%s %d%%'.format(preset.label, preset.value) ]);
+			buttons.push(button);
+			presetTrack.appendChild(button);
+		}
+
+		controls = E('div', {
+			'class': 'nanbbr-aggressiveness-controls',
+			'style': 'display:grid;grid-template-columns:auto minmax(8rem,1fr) auto;align-items:center;column-gap:.6rem;width:100%'
+		}, [
+			E('span', {
+				'style': 'font-size:.66rem;font-weight:600;white-space:nowrap;opacity:.72'
+			}, [ _('STABILITY') ]),
+			E('div', {
+				'style': 'display:flex;flex-direction:column;align-items:stretch;gap:.18rem;min-width:8rem'
+			}, [
+				valueOutput,
+				range,
+				presetTrack
+			]),
+			E('span', {
+				'style': 'font-size:.66rem;font-weight:600;white-space:nowrap;opacity:.72'
+			}, [ _('PERFORMANCE') ])
+		]);
+		widget = E('div', {
+			'id': cbid,
+			'class': 'nanbbr-aggressiveness-widget',
+			'style': 'display:inline-block;width:min(100%,26rem);max-width:100%;padding:.15rem 0'
+		}, [
+			controls
+		]);
+		updatePresetState(value);
+		return widget;
+	},
+
+	formvalue: function(section_id) {
+		var widget = this.map.findElement('id', this.cbid(section_id));
+		var range = widget ? widget.querySelector('input[type="range"]') : null;
+
+		return range ? range.value : null;
+	}
+});
 
 return L.view.extend({
-    load: function() {
-	return Promise.all([
-	    L.resolveDefault(callSystemBoard(), {})
-	]);
-    },
+	    load: function() {
+		return Promise.all([
+		    L.resolveDefault(callSystemBoard(), {})
+		]);
+	    },
 
     render: function(res) {
-	var m, s, o;
+	var m, s, o, nanbbrAggressiveness;
 	var boardinfo = res[0];
 
 	m = new form.Map('network', _('MPTCP'),_('Networks MPTCP settings.'));
@@ -103,13 +227,24 @@ return L.view.extend({
 	o = s.option(form.ListValue, "congestion", _("Congestion control"),_("Selects the TCP congestion control used by MPTCP subflows. Default is bbr."));
 	o.load = function(section_id) {
 		return fs.exec_direct('/sbin/sysctl', ['-n', 'net.ipv4.tcp_available_congestion_control']).then(L.bind(function(entries) {
-			var congestioncontrol = entries.toString().split(' ');
+			var congestioncontrol = entries.toString().trim().split(/\s+/);
+			var has_bbr1 = congestioncontrol.indexOf('bbr1') >= 0;
 			for (var d in congestioncontrol) {
-				this.value(congestioncontrol[d]);
+				var cc = congestioncontrol[d];
+				if (cc)
+					this.value(cc, cc == 'bbr' && has_bbr1 ? 'bbr3' : cc);
 			};
 			return this.super('load', [section_id]);
 		}, this));
 	};
+
+	nanbbrAggressiveness = s.option(NanbbrAggressivenessValue, "nanbbr_aggressiveness", _("NanBBR aggressiveness"), _("Applied to new TCP connections and MPTCP subflows; active connections keep their current profile."));
+	nanbbrAggressiveness.datatype = "range(1,100)";
+	nanbbrAggressiveness.default = "50";
+	nanbbrAggressiveness.rmempty = false;
+	nanbbrAggressiveness.depends("congestion", "nanbbr1_var");
+	nanbbrAggressiveness.depends("congestion", "nanbbr2_var");
+	nanbbrAggressiveness.depends("congestion", "nanbbr3_var");
 
 	if (parseFloat(boardinfo.kernel.substring(0,4)) >= 6) {
 		if (boardinfo.kernel.substring(0,1) == "6") {
@@ -240,5 +375,5 @@ return L.view.extend({
 	o.default = "off";
 
 	return m.render();
-    }
+	    }
 });

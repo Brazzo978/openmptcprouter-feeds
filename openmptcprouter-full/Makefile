@@ -60,7 +60,6 @@ MY_DEPENDS := \
     !TARGET_mvebu:comgt-ncm !TARGET_mvebu:luci-proto-ncm \
     !TARGET_mvebu:luci-proto-modemmanager \
     !TARGET_mvebu:luci-proto-ppp \
-    omr-update \
     rng-tools \
     openvpn-openssl \
     mmc-utils \
@@ -79,9 +78,9 @@ MY_DEPENDS := \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-mii !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-wdm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-qmi-wwan !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-mbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-huawei-cdc-ncm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-rndis !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-ether !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-ipheth !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):usbmuxd !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):libusbmuxd \
     !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-proto-qmi !LINUX_5_4:wpad-mesh-openssl !LINUX_5_4:libopenssl-legacy LINUX_5_4:wpad-basic (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-usb-net-rtl8152 \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mqvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mqvpn 464xlat kmod-zram kmod-swconfig swconfig kmod-ipt-nat kmod-ipt-nat6 kmod-tcp-nanqinlang iptables-mod-ipopt igmpproxy ss iptraf-ng \
+    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mqvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mqvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mqvpn2 !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mqvpn2 464xlat kmod-zram kmod-swconfig swconfig kmod-ipt-nat kmod-ipt-nat6 kmod-tcp-nanqinlang iptables-mod-ipopt igmpproxy ss iptraf-ng \
     luci-app-acl block-mount blockd fstools luci-app-shutdown libwebp luci-proto-gre tcptraceroute luci-proto-mbim luci-app-ttyd luci-mod-dashboard kmod-usb2 libustream-openssl (TARGET_x86||TARGET_x86_64):kmod-ixgbevf (TARGET_x86||TARGET_x86_64):kmod-igbvf \
-    hwinfo (TARGET_x86||TARGET_x86_64):dmidecode kmod-bonding luci-proto-bonding luci-app-sysupgrade \
+    hwinfo (TARGET_x86||TARGET_x86_64):dmidecode kmod-bonding luci-proto-bonding \
     luci-theme-openwrt-2020 luci-proto-wireguard luci-app-wireguard kmod-crypto-lib-blake2s  \
     !(LINUX_5_4):mptcpd (TARGET_x86||TARGET_x86_64):kmod-igc !TARGET_mvebu:kmod-mmc-spi kmod-macsec usbutils v2ray-core LINUX_5_4:v2ray-config !LINUX_5_4:v2ray-config-nft \
     (TARGET_x86||TARGET_x86_64):kmod-mlx4-core \
@@ -115,7 +114,6 @@ MY_DEPENDS := \
 #  luci-proto-bonding luci-app-statistics luci-proto-gre
 #    softethervpn5-client softethervpn5-server luci-app-nginx-ha
 
-#    luci-app-mlvpn ubond \
 #     kmod-ath9k kmod-ath9k-htc
 
 #    (TARGET_x86||TARGET_x86_64):open-vm-tools \

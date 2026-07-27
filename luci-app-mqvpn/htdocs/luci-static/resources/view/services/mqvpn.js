@@ -14,9 +14,6 @@ return L.view.extend({
 		s.tab('general', _('General Settings'));
 		s.tab('advanced', _('Advanced Settings'));
 
-		o = s.taboption('general', form.Flag, 'enable', _('Enabled'));
-		o.default = o.disabled;
-
 		o = s.taboption('general', form.Value, 'host', _('Server'));
 		o.datatype = 'host';
 		o.rmempty = false;
@@ -38,8 +35,53 @@ return L.view.extend({
 		o = s.taboption('general', form.ListValue, 'scheduler', _('Scheduler'));
 		o.value('wlb', _('Weighted load balancing'));
 		o.value('minrtt', _('Minimum RTT'));
+		o.value('backup', _('Backup path'));
 		o.value('backup_fec', _('Backup FEC'));
+		o.value('rap', _('RAP'));
 		o.default = 'wlb';
+
+			o = s.taboption('general', form.ListValue, 'cc', _('Congestion control'));
+			o.value('bbr2', _('BBR2 (experimental)'));
+			o.value('bbr', _('BBR'));
+			o.value('cubic', _('CUBIC'));
+			o.value('new_reno', _('New Reno'));
+			o.value('copa', _('COPA'));
+			o.value('unlimited', _('Unlimited'));
+			o.default = 'cubic';
+
+			o = s.taboption('general', form.ListValue, 'mtu_profile', _('MTU profile'));
+			o.value('safe', _('Safe - 1320, PMTUD off'));
+			o.value('default', _('Default - 1400, PMTUD off'));
+			o.value('performance', _('Performance - 1380, PMTUD cap 1420'));
+			o.value('extreme', _('Extreme - 1400, PMTUD cap 1472'));
+			o.value('manual', _('Manual override'));
+			o.default = 'default';
+			o.description = _('Controls MQVPN QUIC packet sizing. 1472 is the maximum UDP payload for a 1500-byte IPv4 path MTU.');
+
+			o = s.taboption('advanced', form.Value, 'mtu', _('Tunnel MTU'));
+			o.default = '0';
+			o.placeholder = '0';
+			o.datatype = 'uinteger';
+			o.description = _('0 = automatic. Use 1280-1402 only when pinning the mqvpn tunnel MTU.');
+
+			o = s.taboption('advanced', form.Value, 'outer_packet_size', _('Outer packet size'));
+			o.default = '1400';
+			o.placeholder = '1400';
+			o.datatype = 'uinteger';
+			o.depends('mtu_profile', 'manual');
+			o.description = _('Manual mode only. QUIC/UDP payload size before IP/UDP overhead. Use 1298-1472.');
+
+			o = s.taboption('advanced', form.Flag, 'pmtud', _('Enable PMTUD probing'));
+			o.default = o.disabled;
+			o.rmempty = false;
+			o.depends('mtu_profile', 'manual');
+			o.description = _('Manual mode only. Lets xquic probe upward from the base packet size; keep disabled on unstable mobile links unless testing.');
+
+			o = s.taboption('advanced', form.Value, 'pmtud_probe_size', _('PMTUD probe limit'));
+			o.default = '1420';
+			o.placeholder = '1420';
+			o.datatype = 'uinteger';
+			o.depends({ mtu_profile: 'manual', pmtud: '1' });
 
 		o = s.taboption('advanced', form.Flag, 'paths_auto', _('Use OMR WAN interfaces as mqvpn paths'));
 		o.default = o.enabled;

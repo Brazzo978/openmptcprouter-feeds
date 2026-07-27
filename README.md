@@ -101,12 +101,6 @@ Interface to omr-tracker.
 *Description:* Set tunnel configuration by tracking tunnel configuration.
 
 
-## omr-update
-*Source:* [https://github.com/Ysurac/openmptcprouter-feeds/tree/master/omr-update](https://github.com/Ysurac/openmptcprouter-feeds/tree/master/omr-update)
-
-*Description:* Update old config with new settings.
-
-
 ## luci-app-mptcp
 *Source:* [https://github.com/Ysurac/openmptcprouter-feeds/tree/master/luci-app-mptcp](https://github.com/Ysurac/openmptcprouter-feeds/tree/master/luci-app-mptcp)
 
@@ -131,14 +125,6 @@ Interface to omr-tracker.
 *Description:* An ICMPv6 neighbour discovery tool
 
 This is used to check if there is no other IPv6 route announced on the network
-
-
-## mlvpn
-*Source:* [https://github.com/markfoodyburton/MLVPN/tree/new-reorder](https://github.com/markfoodyburton/MLVPN/tree/new-reorder)
-
-*Description:* Multi-link VPN
-
-This is an other way to aggregate same latency connections
 
 
 ## dsvpn

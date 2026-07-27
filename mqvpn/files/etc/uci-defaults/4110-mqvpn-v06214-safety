@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# BBR2 was the .13 default. Move existing installations to the conservative
+# QUIC CC for .14; users can still opt back into BBR2 for controlled testing.
+if [ "$(uci -q get mqvpn.vpn.cc)" = "bbr2" ]; then
+	uci -q set mqvpn.vpn.cc='cubic'
+	uci -q commit mqvpn
+fi
+
+exit 0

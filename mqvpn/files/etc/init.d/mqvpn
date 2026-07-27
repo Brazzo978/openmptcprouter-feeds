@@ -16,7 +16,6 @@ get_interface_device() {
 	[ -z "$ifname" ] && return 1
 	[ "$ifname" = "lo" ] && return 1
 	[ "$ifname" = "mqvpn0" ] && return 1
-	[ "$ifname" = "mlvpn0" ] && return 1
 	[ "$ifname" = "6in4-omr6in4" ] && return 1
 	echo "$ifname" | grep -Eq '^(ifb|sit|gre|ip6|teql|erspan|tun|bond)' && return 1
 	addr=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["ipv4-address"][0].address')
@@ -52,10 +51,14 @@ append_lan_route() {
 }
 
 start_service() {
-	local enable host port key dev localip remoteip scheduler insecure manage_routes paths_auto reconnect reconnect_interval log_level
+	local enable host port key dev localip remoteip scheduler cc mtu_profile mtu outer_packet_size pmtud pmtud_probe_size insecure manage_routes paths_auto reconnect reconnect_interval log_level firewall_changed network_changed
 
 	[ "$(uci -q get mqvpn.vpn.enable)" = "1" ] || return 1
 	[ -x /usr/sbin/mqvpn ] || return 1
+	if [ "$(uci -q get mqvpn2.vpn.enable)" = "1" ]; then
+		logger -t mqvpn "Refusing to start while experimental MQVPN2 is enabled"
+		return 1
+	fi
 
 	host="$(uci -q get mqvpn.vpn.host)"
 	port="$(uci -q get mqvpn.vpn.port)"
@@ -64,6 +67,12 @@ start_service() {
 	localip="$(uci -q get mqvpn.vpn.localip)"
 	remoteip="$(uci -q get mqvpn.vpn.remoteip)"
 	scheduler="$(uci -q get mqvpn.vpn.scheduler)"
+	cc="$(uci -q get mqvpn.vpn.cc)"
+	mtu_profile="$(uci -q get mqvpn.vpn.mtu_profile)"
+	mtu="$(uci -q get mqvpn.vpn.mtu)"
+	outer_packet_size="$(uci -q get mqvpn.vpn.outer_packet_size)"
+	pmtud="$(uci -q get mqvpn.vpn.pmtud)"
+	pmtud_probe_size="$(uci -q get mqvpn.vpn.pmtud_probe_size)"
 	insecure="$(uci -q get mqvpn.vpn.insecure)"
 	manage_routes="$(uci -q get mqvpn.vpn.manage_routes)"
 	paths_auto="$(uci -q get mqvpn.vpn.paths_auto)"
@@ -78,30 +87,83 @@ start_service() {
 	[ -z "$localip" ] && localip="10.255.249.2"
 	[ -z "$remoteip" ] && remoteip="10.255.249.1"
 	[ -z "$scheduler" ] && scheduler="wlb"
+	[ -z "$cc" ] && cc="cubic"
+	case "$scheduler" in
+		wlb|minrtt|backup|backup_fec|rap) ;;
+		*) scheduler="wlb" ;;
+	esac
+	case "$cc" in
+		bbr2|bbr|cubic|new_reno|copa|unlimited) ;;
+		*) cc="cubic" ;;
+	esac
+	[ -z "$mtu_profile" ] && mtu_profile="default"
+	[ -z "$mtu" ] && mtu="0"
+	[ -z "$outer_packet_size" ] && outer_packet_size="1400"
+	[ -z "$pmtud" ] && pmtud="0"
+	[ -z "$pmtud_probe_size" ] && pmtud_probe_size="1420"
 	[ -z "$insecure" ] && insecure="1"
 	[ -z "$manage_routes" ] && manage_routes="0"
 	[ -z "$paths_auto" ] && paths_auto="1"
 	[ -z "$reconnect" ] && reconnect="1"
 	[ -z "$reconnect_interval" ] && reconnect_interval="5"
 	[ -z "$log_level" ] && log_level="info"
+	case "$log_level" in
+		debug|info|warn|error) ;;
+		*) log_level="info" ;;
+	esac
 
-		uci -q batch <<-EOF_UCI >/dev/null
-			set network.omrvpn.device='$dev'
-			set network.omrvpn.proto='none'
-			set network.omrvpn.ip4table='vpn'
+	case "$mtu_profile" in
+		safe)
+			outer_packet_size="1320"
+			pmtud="0"
+			pmtud_probe_size="1320"
+			;;
+		performance)
+			outer_packet_size="1380"
+			pmtud="1"
+			pmtud_probe_size="1420"
+			;;
+		extreme)
+			outer_packet_size="1400"
+			pmtud="1"
+			pmtud_probe_size="1472"
+			;;
+		default|"")
+			outer_packet_size="1400"
+			pmtud="0"
+			pmtud_probe_size="1420"
+			;;
+	esac
+
+	network_changed=0
+	[ "$(uci -q get network.omrvpn.device)" = "$dev" ] || network_changed=1
+	[ "$(uci -q get network.omrvpn.proto)" = "none" ] || network_changed=1
+	uci -q batch <<-EOF_UCI >/dev/null
+		set network.omrvpn.device='$dev'
+		set network.omrvpn.proto='none'
+		set network.omrvpn.ip4table='vpn'
 		set network.omrvpn.multipath='off'
 		set network.omrvpn.type='tunnel'
 		set network.omrvpn.txqueuelen='100'
 		set network.omr6in4.ipaddr='$localip'
-			set network.omr6in4.peeraddr='$remoteip'
-			commit network
-	EOF_UCI
+		set network.omr6in4.peeraddr='$remoteip'
+		EOF_UCI
+	uci -q changes network | grep -q . && uci -q commit network
+	if [ "$network_changed" = "1" ] &&
+		! ubus call network reload >/dev/null 2>&1; then
+		logger -t mqvpn "Unable to apply omrvpn network configuration"
+		return 1
+	fi
 
-		uci -q del_list firewall.zone_vpn.device="$dev" >/dev/null 2>&1
+	firewall_changed=0
+	uci -q get firewall.zone_vpn.device | tr ' ' '\n' | grep -Fxq "$dev" ||
 		uci -q add_list firewall.zone_vpn.device="$dev"
-		uci -q del_list firewall.zone_vpn.network="omrvpn" >/dev/null 2>&1
+	uci -q get firewall.zone_vpn.network | tr ' ' '\n' | grep -Fxq "omrvpn" ||
 		uci -q add_list firewall.zone_vpn.network="omrvpn"
+	uci -q changes firewall | grep -q . && {
+		firewall_changed=1
 		uci -q commit firewall
+	}
 
 	mkdir -p /tmp/etc
 	umask 077
@@ -116,6 +178,7 @@ start_service() {
 		echo '[Interface]'
 		echo "TunName = $dev"
 		echo "LogLevel = $log_level"
+		echo "MTU = $mtu"
 		[ "$reconnect" = "1" ] && echo 'Reconnect = true' || echo 'Reconnect = false'
 		echo "ReconnectInterval = $reconnect_interval"
 		[ "$manage_routes" = "1" ] && echo 'ManageRoutes = true' || echo 'ManageRoutes = false'
@@ -123,6 +186,10 @@ start_service() {
 		echo
 		echo '[Multipath]'
 		echo "Scheduler = $scheduler"
+		echo "CC = $cc"
+		echo "OuterPacketSize = $outer_packet_size"
+		[ "$pmtud" = "1" ] && echo 'PMTUD = true' || echo 'PMTUD = false'
+		echo "PMTUDProbeSize = $pmtud_probe_size"
 	} > "$CONFIG_FILE"
 
 		if [ "$paths_auto" = "1" ]; then
@@ -133,12 +200,12 @@ start_service() {
 
 		procd_open_instance
 	procd_set_param command /usr/sbin/mqvpn --config "$CONFIG_FILE"
-	procd_set_param respawn 5 5 0
+	procd_set_param respawn 3600 5 5
 		procd_set_param stdout 1
 		procd_set_param stderr 1
 		procd_close_instance
 
-		/etc/init.d/firewall reload >/dev/null 2>&1 || true
+		[ "$firewall_changed" = "1" ] && /etc/init.d/firewall reload >/dev/null 2>&1
 	}
 
 reload_service() {
@@ -147,5 +214,5 @@ reload_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger mqvpn network openmptcprouter
+	procd_add_reload_trigger mqvpn
 }

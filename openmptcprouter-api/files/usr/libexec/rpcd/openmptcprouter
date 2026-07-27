@@ -233,6 +233,23 @@ function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspee
 end
 
 function default_vpn(default_vpn)
+	local supported_vpn = {
+		glorytun_tcp = true,
+		glorytun_udp = true,
+		dsvpn = true,
+		mqvpn = true,
+		mqvpn2 = true,
+		openvpn = true,
+		none = true
+	}
+	if not supported_vpn[default_vpn] then
+		return {
+			success = false,
+			error = "unsupported VPN",
+			vpn = default_vpn
+		}
+	end
+
 	-- Get VPN set by default
 	local vpn_port = ""
 	local vpn_intf = ""
@@ -263,18 +280,30 @@ function default_vpn(default_vpn)
 		ucic:set("dsvpn","vpn","remoteip","10.255.251.1")
 		ucic:set("network","omr6in4","ipaddr","10.255.251.2")
 		ucic:set("network","omr6in4","peeraddr","10.255.251.1")
-	elseif default_vpn == "mlvpn" then
-		vpn_port = 65201
-		vpn_intf = "mlvpn0"
-		ucic:set("network","omrvpn","proto","dhcp")
 	elseif default_vpn == "mqvpn" then
 		vpn_port = 65411
 		vpn_intf = "mqvpn0"
 		ucic:set("network","omrvpn","proto","none")
-		ucic:set("mqvpn","vpn","localip","10.255.249.2")
-		ucic:set("mqvpn","vpn","remoteip","10.255.249.1")
-		ucic:set("network","omr6in4","ipaddr","10.255.249.2")
-		ucic:set("network","omr6in4","peeraddr","10.255.249.1")
+		local mqvpn_localip = ucic:get("mqvpn","vpn","localip")
+		local mqvpn_remoteip = ucic:get("mqvpn","vpn","remoteip")
+		if mqvpn_localip == nil or mqvpn_localip == "" then mqvpn_localip = "10.255.249.2" end
+		if mqvpn_remoteip == nil or mqvpn_remoteip == "" then mqvpn_remoteip = "10.255.249.1" end
+		ucic:set("mqvpn","vpn","localip",mqvpn_localip)
+		ucic:set("mqvpn","vpn","remoteip",mqvpn_remoteip)
+		ucic:set("network","omr6in4","ipaddr",mqvpn_localip)
+		ucic:set("network","omr6in4","peeraddr",mqvpn_remoteip)
+	elseif default_vpn == "mqvpn2" then
+		vpn_port = 65412
+		vpn_intf = "mqvpn2"
+		ucic:set("network","omrvpn","proto","none")
+		local mqvpn2_localip = ucic:get("mqvpn2","vpn","localip")
+		local mqvpn2_remoteip = ucic:get("mqvpn2","vpn","remoteip")
+		if mqvpn2_localip == nil or mqvpn2_localip == "" then mqvpn2_localip = "10.255.248.2" end
+		if mqvpn2_remoteip == nil or mqvpn2_remoteip == "" then mqvpn2_remoteip = "10.255.248.1" end
+		ucic:set("mqvpn2","vpn","localip",mqvpn2_localip)
+		ucic:set("mqvpn2","vpn","remoteip",mqvpn2_remoteip)
+		ucic:set("network","omr6in4","ipaddr",mqvpn2_localip)
+		ucic:set("network","omr6in4","peeraddr",mqvpn2_remoteip)
 	elseif default_vpn == "openvpn" then
 		vpn_port = 65301
 		vpn_intf = "tun0"
@@ -297,22 +326,29 @@ function default_vpn(default_vpn)
 	else
 		ucic:set("dsvpn","vpn","enable",0)
 	end
-	-- Set MLVPN settings
-	if default_vpn == "mlvpn" then
-		ucic:set("mlvpn","general","enable",1)
-		ucic:set("network","omrvpn","proto","dhcp")
-	else
-		ucic:set("mlvpn","general","enable",0)
-	end
 	-- Set MQVPN settings
 	if default_vpn == "mqvpn" then
 		ucic:set("mqvpn","vpn","enable",1)
 		ucic:set("mqvpn","vpn","dev","mqvpn0")
-		ucic:set("mqvpn","vpn","port","65411")
+		if ucic:get("mqvpn","vpn","port") == nil or ucic:get("mqvpn","vpn","port") == "" then
+			ucic:set("mqvpn","vpn","port","65411")
+		end
 		ucic:set("mqvpn","vpn","manage_routes","0")
 		ucic:set("network","omrvpn","proto","none")
 	else
 		ucic:set("mqvpn","vpn","enable",0)
+	end
+	-- MQVPN and MQVPN2 are intentionally mutually exclusive.
+	if default_vpn == "mqvpn2" then
+		ucic:set("mqvpn2","vpn","enable",1)
+		ucic:set("mqvpn2","vpn","dev","mqvpn2")
+		if ucic:get("mqvpn2","vpn","port") == nil or ucic:get("mqvpn2","vpn","port") == "" then
+			ucic:set("mqvpn2","vpn","port","65412")
+		end
+		ucic:set("mqvpn2","vpn","manage_routes","0")
+		ucic:set("network","omrvpn","proto","none")
+	else
+		ucic:set("mqvpn2","vpn","enable",0)
 	end
 	if default_vpn == "openvpn" then
 		ucic:set("openvpn","omr","enabled",1)
@@ -323,10 +359,10 @@ function default_vpn(default_vpn)
 	ucic:set("openmptcprouter","settings","vpn",default_vpn)
 	ucic:save("glorytun")
 	ucic:commit("glorytun")
-	ucic:save("mlvpn")
-	ucic:commit("mlvpn")
 	ucic:save("mqvpn")
 	ucic:commit("mqvpn")
+	ucic:save("mqvpn2")
+	ucic:commit("mqvpn2")
 	ucic:save("dsvpn")
 	ucic:commit("dsvpn")
 	ucic:save("openvpn")
@@ -336,6 +372,12 @@ function default_vpn(default_vpn)
 	ucic:save("network")
 	ucic:commit("network")
 
+	sys.call("logger -p daemon.notice -t OMR-UI 'event=vpn_change vpn=" .. default_vpn .. "'")
+	return {
+		success = true,
+		vpn = default_vpn,
+		device = vpn_intf
+	}
 end
 
 function server_settings(server,server_ip,openmptcprouter_vps_key)
@@ -351,8 +393,8 @@ function server_settings(server,server_ip,openmptcprouter_vps_key)
 		ucic:set("shadowsocks-rust","sss0","server",server_ip)
 		ucic:set("glorytun","vpn","host",server_ip)
 		ucic:set("dsvpn","vpn","host",server_ip)
-		ucic:set("mlvpn","general","host",server_ip)
 		ucic:set("mqvpn","vpn","host",server_ip)
+		ucic:set("mqvpn2","vpn","host",server_ip)
 		sys.exec("uci -q del openvpn.omr.remote")
 		sys.exec("uci -q add_list openvpn.omr.remote=" .. server_ip)
 		ucic:set("qos","serverin","srchost",server_ip)
@@ -367,10 +409,10 @@ function server_settings(server,server_ip,openmptcprouter_vps_key)
 		ucic:set("xray","omrout","s_trojan_address",server_ip)
 		ucic:save("qos")
 		ucic:commit("qos")
-		ucic:save("mlvpn")
-		ucic:commit("mlvpn")
 		ucic:save("mqvpn")
 		ucic:commit("mqvpn")
+		ucic:save("mqvpn2")
+		ucic:commit("mqvpn2")
 		ucic:save("dsvpn")
 		ucic:commit("dsvpn")
 		ucic:save("v2ray")
@@ -416,29 +458,63 @@ function set_dsvpn(dsvpn_key)
 	ucic:commit("glorytun")
 end
 
-function set_mlvpn(mlvpn_password)
-	-- Set MLVPN settings
-	local mlvpn_password = luci.http.formvalue("mlvpn_password")
-	ucic:set("mlvpn","general","password",mlvpn_password)
-	ucic:set("mlvpn","general","firstport","65201")
-	ucic:set("mlvpn","general","interface_name","mlvpn0")
-	ucic:save("mlvpn")
-	ucic:commit("mlvpn")
-end
-
 function set_mqvpn(mqvpn_key)
 	-- Set MQVPN settings
 	mqvpn_key = mqvpn_key or ""
+	local function set_default(option, value)
+		local current = ucic:get("mqvpn","vpn",option)
+		if current == nil or current == "" then
+			ucic:set("mqvpn","vpn",option,value)
+		end
+	end
 	ucic:set("mqvpn","vpn","key",mqvpn_key)
-	ucic:set("mqvpn","vpn","port","65411")
-	ucic:set("mqvpn","vpn","dev","mqvpn0")
-	ucic:set("mqvpn","vpn","localip","10.255.249.2")
-	ucic:set("mqvpn","vpn","remoteip","10.255.249.1")
-	ucic:set("mqvpn","vpn","scheduler","wlb")
-	ucic:set("mqvpn","vpn","insecure","1")
-	ucic:set("mqvpn","vpn","manage_routes","0")
+	set_default("port","65411")
+	set_default("dev","mqvpn0")
+	set_default("localip","10.255.249.2")
+	set_default("remoteip","10.255.249.1")
+	set_default("scheduler","wlb")
+	set_default("cc","cubic")
+	set_default("mtu_profile","default")
+	set_default("mtu","0")
+	set_default("outer_packet_size","1400")
+	set_default("pmtud","0")
+	set_default("pmtud_probe_size","1420")
+	set_default("log_level","info")
+	set_default("insecure","1")
+	set_default("manage_routes","0")
+	set_default("paths_auto","1")
+	set_default("reconnect","1")
+	set_default("reconnect_interval","5")
 	ucic:save("mqvpn")
 	ucic:commit("mqvpn")
+end
+
+function set_mqvpn2(mqvpn2_key)
+	mqvpn2_key = mqvpn2_key or ""
+	local function set_default(option, value)
+		local current = ucic:get("mqvpn2","vpn",option)
+		if current == nil or current == "" then
+			ucic:set("mqvpn2","vpn",option,value)
+		end
+	end
+	ucic:set("mqvpn2","vpn","key",mqvpn2_key)
+	set_default("port","65412")
+	set_default("dev","mqvpn2")
+	set_default("localip","10.255.248.2")
+	set_default("remoteip","10.255.248.1")
+	set_default("scheduler","wlb")
+	set_default("cc","cubic")
+	set_default("mtu","0")
+	set_default("init_max_path_id","128")
+	set_default("reorder","0")
+	set_default("log_level","info")
+	set_default("insecure","1")
+	set_default("manage_routes","0")
+	set_default("paths_auto","1")
+	set_default("reconnect","1")
+	set_default("reconnect_interval","5")
+	ucic:save("mqvpn2")
+	ucic:commit("mqvpn2")
 end
 
 function set_openvpn(openvpn_key)
@@ -471,8 +547,8 @@ function restart_all()
 	sys.exec("/etc/init.d/shadowsocks-libev restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/glorytun restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null")
-	sys.exec("/etc/init.d/mlvpn restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/mqvpn restart >/dev/null 2>/dev/null")
+	sys.exec("/etc/init.d/mqvpn2 restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/openvpn restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/openvpnbonding restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/dsvpn restart >/dev/null 2>/dev/null")
@@ -586,22 +662,6 @@ function cpuscalinggovernor(scaling_governor)
 	ucic:commit("openmptcprouter")
 end
 
-function update_vps()
-	-- Update VPS
-	local vpsgettoken = sys.exec("/etc/init.d/openmptcprouter-vps restart >/dev/null 2>/dev/null")
-	ucic:foreach("openmptcprouter", "server", function(section)
-		local servername = section[".name"]
-		local serverips = section["ip"]
-		local serverip = serverips[1]
-		local adminport = section["port"] or "65500"
-		local token = section["token"] or ""
-		if token ~= "" then
-			local updatevps = sys.exec('curl -4 --max-time 20 -s -k -H "Authorization: Bearer ' .. token .. '" https://' .. serverip .. ":" .. adminport .. "/update")
-		end
-	end)
-	local vpsgettoken = sys.exec("/etc/init.d/openmptcprouter-vps restart >/dev/null 2>/dev/null")
-end
-
 function get_mptcp_config(interface)
 	return ucic:get("network",interface,"multipath")
 end
@@ -693,6 +753,115 @@ function get_device(interface)
 	else
 		return ""
 	end
+end
+
+function shellquote(value)
+	value = tostring(value or "")
+	return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+function read_interface_mtu(uci, interface, ifname)
+		    local mtu = ""
+		    local link_mtu = ""
+	if ifname ~= "" and ifname ~= nil then
+		if fs.access("/sys/class/net/" .. ifname) then
+			mtu = (sys.exec("cat /sys/class/net/" .. ifname .. "/mtu 2>/dev/null | tr -d '\n'") or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		end
+	end
+	if mtu == "" and interface ~= nil then
+		mtu = uci:get("openmptcprouter", interface, "mtu") or ""
+	end
+	return mtu
+end
+
+function ping_path_mtu(ifname, target, link_mtu, family)
+	if ifname == "" or ifname == nil or target == "" or target == nil then
+		return ""
+	end
+	local max_mtu = tonumber(link_mtu) or 1500
+	local min_mtu = 576
+	local overhead = 28
+	local ping_family = ""
+	if family == "6" then
+		min_mtu = 1280
+		overhead = 48
+		ping_family = "-6 "
+	end
+	if max_mtu < min_mtu then
+		return ""
+	end
+
+	local now = tonumber(sys.exec("date +%s 2>/dev/null | tr -d '\n'")) or os.time()
+	local ttl = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_cache_ttl") or "300") or 300
+	local tries = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_probe_tries") or "2") or 2
+	if tries < 1 then
+		tries = 1
+	elseif tries > 5 then
+		tries = 5
+	end
+	local cache_key = (ifname .. "_" .. target .. "_" .. family):gsub("[^%w_.-]", "_")
+	local cache_file = "/tmp/omr-pmtu-" .. cache_key
+	if fs.access(cache_file) then
+		local cached = sys.exec("cat " .. shellquote(cache_file) .. " 2>/dev/null")
+		local ts, value = cached:match("^(%d+)%s+(%d+)")
+		if ts ~= nil and value ~= nil and now - tonumber(ts) < ttl then
+			return value
+		end
+	end
+
+	-- If even the minimum DF probe is blocked, cache a link-MTU fallback.
+	-- This avoids making the status page wait for the full binary-search timeout on every refresh.
+	local min_payload = min_mtu - overhead
+	if min_payload < 0 then
+		min_payload = 0
+	end
+	local min_cmd = "ping " .. ping_family .. "-B -w 1 -W 1 -c 1 -M do -s " .. min_payload .. " -I " .. shellquote(ifname) .. " " .. shellquote(target) .. " >/dev/null 2>/dev/null"
+	local min_ok = os.execute(min_cmd)
+	if not (min_ok == true or min_ok == 0) then
+		sys.exec("printf " .. shellquote(tostring(now) .. " " .. tostring(max_mtu) .. "\\n") .. " > " .. shellquote(cache_file))
+		return tostring(max_mtu)
+	end
+
+	local low = min_mtu
+	local high = max_mtu
+	local best = 0
+	while low <= high do
+		local mid = math.floor((low + high) / 2)
+		local payload = mid - overhead
+		if payload < 0 then
+			payload = 0
+		end
+		local cmd = "ping " .. ping_family .. "-B -w 1 -W 1 -c 1 -M do -s " .. payload .. " -I " .. shellquote(ifname) .. " " .. shellquote(target) .. " >/dev/null 2>/dev/null"
+		local success = false
+		for _ = 1, tries do
+			local ok = os.execute(cmd)
+			if ok == true or ok == 0 then
+				success = true
+				break
+			end
+		end
+		if success then
+			best = mid
+			low = mid + 1
+		else
+			high = mid - 1
+		end
+	end
+
+	if best > 0 then
+		sys.exec("printf '%s %s\\n' " .. now .. " " .. best .. " > " .. shellquote(cache_file))
+		return tostring(best)
+	end
+	return ""
+end
+
+function get_status_mtu(uci, interface, ifname, target, family)
+	local link_mtu = read_interface_mtu(uci, interface, ifname)
+	local path_mtu = ping_path_mtu(ifname, target, link_mtu, family)
+	if path_mtu ~= "" then
+		return path_mtu, link_mtu
+	end
+	return link_mtu, link_mtu
 end
 
 function get_gateway(interface)
@@ -1082,7 +1251,7 @@ function interfaces_status()
 	mArray.openmptcprouter["tun_service"] = false
 	mArray.openmptcprouter["tun_state"] = "DOWN"
 	mArray.openmptcprouter["tun6_state"] = "DOWN"
-	if string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?glorytun(-udp)?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?dsvpn?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mlvpn?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mqvpn?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?openvpn?$'"), "%d+") then
+	if string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?glorytun(-udp)?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?dsvpn?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mqvpn2?$'"), "%d+") or string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?openvpn?$'"), "%d+") then
 		mArray.openmptcprouter["tun_service"] = true
 		mArray.openmptcprouter["tun_ip"] = get_ip("omrvpn")
 		local tun_dev = uci:get("network","omrvpn","device")
@@ -1146,10 +1315,10 @@ function interfaces_status()
 		if uci:get("dsvpn","vpn","enable") == "1" and current_vpn ~= "dsvpn" then
 			mArray.openmptcprouter["multi_vpn"] = true
 		end
-		if uci:get("mlvpn","general","enable") == "1" and current_vpn ~= "mlvpn" then
+		if uci:get("mqvpn","vpn","enable") == "1" and current_vpn ~= "mqvpn" then
 			mArray.openmptcprouter["multi_vpn"] = true
 		end
-		if uci:get("mqvpn","vpn","enable") == "1" and current_vpn ~= "mqvpn" then
+		if uci:get("mqvpn2","vpn","enable") == "1" and current_vpn ~= "mqvpn2" then
 			mArray.openmptcprouter["multi_vpn"] = true
 		end
 		if uci:get("openvpn","omr","enabled") == "1" and current_vpn ~= "openvpn" then
@@ -1667,6 +1836,7 @@ function interfaces_status()
 	--	    end
 	--    end
 	    local mtu = ""
+	    local link_mtu = ""
 	    local whois = ""
 	    local whois6 = ""
 	    local publicIP = ""
@@ -1721,14 +1891,15 @@ function interfaces_status()
 				mArray.openmptcprouter["direct_output"] = true
 			    end
 		    end
-		    if ifname ~= "" and ifname ~= nil then
-			    if fs.access("/sys/class/net/" .. ifname) then
-				    mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				    if mtu == "" and interface ~= nil then
-					    mtu = uci:get("openmptcprouter",interface,"mtu") or ""
+			    if ifname ~= "" and ifname ~= nil then
+				    if fs.access("/sys/class/net/" .. ifname) then
+					    local mtu_target = mArray.openmptcprouter["service_addr_ip"] or mArray.openmptcprouter["service_addr"] or ""
+					    if mtu_target == "127.0.0.1" then
+						    mtu_target = mArray.openmptcprouter["wan_addr"] or ""
+					    end
+					    mtu, link_mtu = get_status_mtu(uci, interface, ifname, mtu_target, "4")
 				    end
 			    end
-		    end
 		    loop = false
 		    if uci:get("openmptcprouter", interface, "loop") == "1" then
 			    loop = true
@@ -1760,6 +1931,7 @@ function interfaces_status()
 		wanip6 = publicIP6,
 		latency = latency,
 		mtu = mtu,
+		link_mtu = link_mtu,
 		whois = whois or "unknown",
 		whois6 = whois6 or "unknown",
 		qos = section["trafficcontrol"],
@@ -1788,8 +1960,6 @@ function interfaces_status()
 		loop = loop,
 	    }
 	    if ifname ~= nil and ifname:match("^tun.*") then
-		    table.insert(mArray.tunnels, data);
-	    elseif ifname ~= nil and ifname:match("^mlvpn.*") then
 		    table.insert(mArray.tunnels, data);
 	    elseif ifname ~= nil and ifname:match("^mqvpn.*") then
 		    table.insert(mArray.tunnels, data);
@@ -2185,14 +2355,15 @@ function interfaces_only_status()
 				mArray.openmptcprouter["direct_output"] = true
 			    end
 		    end
-		    if ifname ~= "" and ifname ~= nil then
-			    if fs.access("/sys/class/net/" .. ifname) then
-				    mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				    if mtu == "" and interface ~= nil then
-					    mtu = uci:get("openmptcprouter",interface,"mtu") or ""
+			    if ifname ~= "" and ifname ~= nil then
+				    if fs.access("/sys/class/net/" .. ifname) then
+					    local mtu_target = mArray.openmptcprouter["service_addr_ip"] or mArray.openmptcprouter["service_addr"] or ""
+					    if mtu_target == "127.0.0.1" then
+						    mtu_target = mArray.openmptcprouter["wan_addr"] or ""
+					    end
+					    mtu, link_mtu = get_status_mtu(uci, interface, ifname, mtu_target, "4")
 				    end
 			    end
-		    end
 		    loop = false
 		    if uci:get("openmptcprouter", interface, "loop") == "1" then
 			    loop = true
@@ -2224,6 +2395,7 @@ function interfaces_only_status()
 		wanip6 = publicIP6,
 		latency = latency,
 		mtu = mtu,
+		link_mtu = link_mtu,
 		whois = whois or "unknown",
 		whois6 = whois6 or "unknown",
 		qos = section["trafficcontrol"],
@@ -2285,11 +2457,6 @@ local methods = {
 		args = { disable = 0 },
 		call = function(args)
 			set_ipv6_state(args.disable)
-		end
-	},
-	updateVPS = {
-		call = function()
-			update_vps()
 		end
 	},
 	redirectports = {
@@ -2403,7 +2570,7 @@ local methods = {
 	defaultvpn = {
 		args = { vpn = "glorytun_tcp" },
 		call = function(args)
-			default_vpn(args.vpn)
+			return default_vpn(args.vpn)
 		end
 	},
 	setserver = {
@@ -2436,16 +2603,16 @@ local methods = {
 			set_dsvpn(args.key)
 		end
 	},
-	setmlvpn = {
-		args = { key = "" },
-		call = function(args)
-			set_mlvpn(args.key)
-		end
-	},
 	setmqvpn = {
 		args = { key = "" },
 		call = function(args)
 			set_mqvpn(args.key)
+		end
+	},
+	setmqvpn2 = {
+		args = { key = "" },
+		call = function(args)
+			set_mqvpn2(args.key)
 		end
 	},
 	setopenvpn = {

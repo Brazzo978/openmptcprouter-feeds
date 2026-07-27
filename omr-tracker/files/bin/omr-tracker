@@ -374,6 +374,8 @@ while true; do
 						OMR_TRACKER_DEVICE_GATEWAY=$(uci -q get glorytun-udp.vpn.remoteip)
 					elif [ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && [ "$(uci -q get mqvpn.vpn.enable)" = "1" ]; then
 						OMR_TRACKER_DEVICE_GATEWAY=$(uci -q get mqvpn.vpn.remoteip)
+					elif [ "$OMR_TRACKER_INTERFACE" = "omrvpn" ] && [ "$(uci -q get mqvpn2.vpn.enable)" = "1" ]; then
+						OMR_TRACKER_DEVICE_GATEWAY=$(uci -q get mqvpn2.vpn.remoteip)
 					else
 						OMR_TRACKER_DEVICE_GATEWAY=""
 					fi

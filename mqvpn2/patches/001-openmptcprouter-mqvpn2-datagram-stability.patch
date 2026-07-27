@@ -1,0 +1,184 @@
+diff --git a/src/config.c b/src/config.c
+index f45d0c6..1121f18 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -1249,7 +1249,7 @@ mqvpn_config_defaults(mqvpn_file_config_t *cfg)
+     snprintf(cfg->cert_file, sizeof(cfg->cert_file), "server.crt");
+     snprintf(cfg->key_file, sizeof(cfg->key_file), "server.key");
+     snprintf(cfg->scheduler, sizeof(cfg->scheduler), "wlb");
+-    snprintf(cfg->cc, sizeof(cfg->cc), "bbr2");
++    snprintf(cfg->cc, sizeof(cfg->cc), "cubic");
+     cfg->max_clients = 64;
+     cfg->reconnect = 1;
+     cfg->reconnect_interval = 5;
+diff --git a/src/config.h b/src/config.h
+index 35f5cbc..6a3e1c4 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -66,7 +66,7 @@ typedef struct mqvpn_file_config_s {
+     char paths[MQVPN_CONFIG_MAX_PATHS][32];
+     int n_paths;
+     char scheduler[16];
+-    char cc[16]; /* congestion control: bbr2 (default), bbr, cubic, none */
++    char cc[16]; /* congestion control: cubic (default), bbr, bbr2, none */
+
+     /* draft-21 §4.6 initial Maximum Path Identifier TP, 0 = use xquic default 8 */
+     unsigned long long init_max_path_id;
+diff --git a/src/main.c b/src/main.c
+index ad0ae47..fb678d9 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -71,7 +71,7 @@ usage(const char *prog)
+         "  --status                  Query server status via control API and exit\n"
+         "                            (uses --control-port, or [Control] Listen from "
+         "--config)\n"
+-        "  --cc bbr2|bbr|cubic|none  Congestion control algorithm (default bbr2)\n"
++        "  --cc bbr2|bbr|cubic|none  Congestion control algorithm (default cubic)\n"
+         "  --scheduler minrtt|wlb|wlb_udp_pin|backup_fec\n"
+         "                            Multipath scheduler (default wlb)\n"
+         "  --init-max-path-id N      MP-QUIC draft-21 test knob: initial path-id "
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+index 7ae7edb..e86e7e6 100644
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -3747,6 +3747,7 @@ mqvpn_client_tick(mqvpn_client_t *c)
+     ASSERT_TICK_THREAD(c);
+
+     tick_handshake_watchdog(c);
++    c->next_wake_us = 0;
+     if (c->engine) xqc_engine_main_logic(c->engine);
+     tick_path_recovery(c);
+     tick_reconnect(c);
+@@ -3963,7 +3964,8 @@ mqvpn_client_get_interest(const mqvpn_client_t *c, mqvpn_interest_t *out)
+     }
+ #endif
+
+-    out->next_timer_ms = ms > 0 ? ms : 1;
++    out->next_timer_ms =
++        ms > 0 ? ms : (c->state == MQVPN_STATE_ESTABLISHED ? 100 : 1000);
+     out->tun_readable = (c->tun_active && !c->backpressure) ? 1 : 0;
+     out->is_idle = (c->state != MQVPN_STATE_ESTABLISHED) ? 1 : 0;
+     return MQVPN_OK;
+diff --git a/src/mqvpn_config.c b/src/mqvpn_config.c
+index 6682708..31739da 100644
+--- a/src/mqvpn_config.c
++++ b/src/mqvpn_config.c
+@@ -119,6 +119,7 @@ mqvpn_config_new(void)
+     /* Defaults */
+     cfg->server_port = 443;
+     cfg->scheduler = MQVPN_SCHED_WLB;
++    cfg->cc = MQVPN_CC_CUBIC;
+     cfg->log_level = MQVPN_LOG_INFO;
+     cfg->multipath = 1;
+     cfg->reconnect_enable = 1;
+@@ -315,7 +316,7 @@ mqvpn_config_load_json(mqvpn_config_t *cfg, const char *json_text)
+
+     v = json_find_key(json_text, "cc");
+     if (v && json_read_string(v, tmp, sizeof(tmp)) == MQVPN_OK) {
+-        mqvpn_cc_t cc = MQVPN_CC_BBR2;
++        mqvpn_cc_t cc = MQVPN_CC_CUBIC;
+         if (parse_cc_name(tmp, &cc) != MQVPN_OK) {
+             return MQVPN_ERR_INVALID_ARG;
+         }
+diff --git a/src/mqvpn_conn_settings.c b/src/mqvpn_conn_settings.c
+index aa88063..5282ecd 100644
+--- a/src/mqvpn_conn_settings.c
++++ b/src/mqvpn_conn_settings.c
+@@ -80,17 +80,17 @@ mqvpn_build_conn_settings(const mqvpn_conn_settings_input_t *in, xqc_conn_settin
+     out->init_idle_time_out = 10000;
+
+     /* --- congestion control ---
+-     * Invalid/out-of-range values fall back to BBR2, matching the old
+-     * `default:` case. Normalized up front so the switch can drop
++     * Invalid/out-of-range values fall back to CUBIC. Normalized up front
++     * so the switch can drop
+      * `default:` and get -Wswitch coverage (same treatment as
+      * mqvpn_apply_scheduler above). */
+     mqvpn_cc_t cc = in->cc;
+-    if (!mqvpn_cc_is_valid(cc)) cc = MQVPN_CC_BBR2;
++    if (!mqvpn_cc_is_valid(cc)) cc = MQVPN_CC_CUBIC;
+ #ifndef XQC_ENABLE_UNLIMITED
+-    /* Built without UNLIMITED — NONE degrades to BBR2, as the old
++    /* Built without UNLIMITED — NONE degrades to CUBIC.
+      * default: case did (main.c's CLI gate rejects "none" up front; this
+      * only protects direct API callers). */
+-    if (cc == MQVPN_CC_NONE) cc = MQVPN_CC_BBR2;
++    if (cc == MQVPN_CC_NONE) cc = MQVPN_CC_CUBIC;
+ #endif
+     switch (cc) {
+     case MQVPN_CC_BBR: out->cong_ctrl_callback = xqc_bbr_cb; break;
+diff --git a/src/mqvpn_server.c b/src/mqvpn_server.c
+index 3467a3e..97d27e1 100644
+--- a/src/mqvpn_server.c
++++ b/src/mqvpn_server.c
+@@ -2218,6 +2218,7 @@ mqvpn_server_tick(mqvpn_server_t *s)
+     if (!s) return MQVPN_ERR_INVALID_ARG;
+     ASSERT_TICK_THREAD(s);
+
++    s->next_wake_us = 0;
+     if (s->engine) xqc_engine_main_logic(s->engine);
+
+     /* §5/§11.1: drive reorder RX gap timeouts + idle eviction for every active
+@@ -2636,7 +2637,7 @@ mqvpn_server_get_interest(const mqvpn_server_t *s, mqvpn_interest_t *out)
+     out->struct_size = sizeof(*out);
+
+     int ms = (int)(s->next_wake_us / 1000);
+-    out->next_timer_ms = ms > 0 ? ms : 1;
++    out->next_timer_ms = ms > 0 ? ms : (s->n_sessions == 0 ? 1000 : 100);
+ #ifdef MQVPN_HYBRID_TCP_EGRESS_ENABLED
+     /* next_wake_us above comes solely from xquic's event timer, which knows
+      * nothing about the egress deadlines (connect timeout -> 504, ACTIVE
+diff --git a/tests/test_config.c b/tests/test_config.c
+index 512f881..a5d5b14 100644
+--- a/tests/test_config.c
++++ b/tests/test_config.c
+@@ -93,7 +93,7 @@ test_defaults(void)
+     ASSERT_EQ_INT(cfg.n_paths, 0, "default n_paths");
+     ASSERT_EQ_INT(cfg.n_dns, 0, "default n_dns");
+     ASSERT_EQ_STR(cfg.scheduler, "wlb", "default scheduler");
+-    ASSERT_EQ_STR(cfg.cc, "bbr2", "default cc");
++    ASSERT_EQ_STR(cfg.cc, "cubic", "default cc");
+     ASSERT_EQ_INT(cfg.is_server, 0, "default is_server");
+     ASSERT_EQ_STR(cfg.server_addr, "", "default server_addr");
+     ASSERT_EQ_STR(cfg.auth_key, "", "default auth_key");
+diff --git a/third_party/xquic/src/congestion_control/xqc_bbr2.c b/third_party/xquic/src/congestion_control/xqc_bbr2.c
+index 3778669..8d6f74e 100644
+--- a/third_party/xquic/src/congestion_control/xqc_bbr2.c
++++ b/third_party/xquic/src/congestion_control/xqc_bbr2.c
+@@ -13,6 +13,9 @@
+ #include "src/transport/xqc_send_ctl.h"
+ #include "src/transport/xqc_packet.h"
+
++_Static_assert(sizeof(((xqc_bbr2_t *)0)->loss_round_delivered) == sizeof(uint64_t),
++    "BBR2 loss round counter must not wrap after 4 GiB");
++
+ #define XQC_BBR2_MAX_DATAGRAM_SIZE XQC_MSS
+ #define XQC_BBR2_MIN_WINDOW (4 * XQC_BBR2_MAX_DATAGRAM_SIZE)
+ /* The RECOMMENDED value is the minimum of 10 * kMaxDatagramSize and max(2* kMaxDatagramSize, 14720)). */
+@@ -1628,4 +1631,4 @@ const xqc_cong_ctrl_callback_t xqc_bbr2_cb = {
+     .xqc_cong_ctl_info_cb                = &xqc_bbr2_info_cb,
+     .xqc_cong_ctl_in_recovery            = xqc_bbr2_in_recovery,
+     .xqc_cong_ctl_in_slow_start          = xqc_bbr2_in_slow_start,
+-};
+\ No newline at end of file
++};
+diff --git a/third_party/xquic/src/congestion_control/xqc_bbr2.h b/third_party/xquic/src/congestion_control/xqc_bbr2.h
+index e1dfc70..657bd58 100644
+--- a/third_party/xquic/src/congestion_control/xqc_bbr2.h
++++ b/third_party/xquic/src/congestion_control/xqc_bbr2.h
+@@ -138,7 +138,7 @@ typedef struct xqc_bbr2_s {
+     /* packet loss in this cycle? */
+     bool                loss_in_cycle;
+     /* scb->tx.delivered ending loss round */
+-    uint32_t            loss_round_delivered;
++    uint64_t            loss_round_delivered;
+     /* bw_lo before latest losses */
+     uint32_t            undo_bw_lo;
+     /* inflight_lo before latest losses */
+@@ -217,4 +217,4 @@ typedef struct xqc_bbr2_context_s {
+
+ extern const xqc_cong_ctrl_callback_t xqc_bbr2_cb;
+
+-#endif
+\ No newline at end of file
++#endif

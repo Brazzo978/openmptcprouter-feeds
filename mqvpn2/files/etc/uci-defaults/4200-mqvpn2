@@ -1,0 +1,35 @@
+#!/bin/sh
+
+uci -q batch <<-EOF_UCI >/dev/null
+	delete ucitrack.@mqvpn2[-1]
+	add ucitrack mqvpn2
+	set ucitrack.@mqvpn2[-1].init=mqvpn2
+	commit ucitrack
+EOF_UCI
+
+if ! uci -q get ucitrack.@network[-1].affects | tr ' ' '\n' |
+	grep -Fxq 'mqvpn2'; then
+	uci -q batch <<-EOF_UCI >/dev/null
+		add_list ucitrack.@network[-1].affects='mqvpn2'
+		commit ucitrack
+	EOF_UCI
+fi
+
+if ! uci -q get firewall.zone_vpn.network | tr ' ' '\n' |
+	grep -Fxq 'omrvpn'; then
+	uci -q batch <<-EOF_UCI >/dev/null
+		add_list firewall.zone_vpn.network='omrvpn'
+		commit firewall
+	EOF_UCI
+fi
+
+if ! uci -q get firewall.zone_vpn.device | tr ' ' '\n' |
+	grep -Fxq 'mqvpn2'; then
+	uci -q batch <<-EOF_UCI >/dev/null
+		add_list firewall.zone_vpn.device='mqvpn2'
+		commit firewall
+	EOF_UCI
+fi
+
+rm -f /tmp/luci-indexcache
+exit 0

@@ -1,0 +1,202 @@
+#!/bin/sh /etc/rc.common
+
+START=89
+USE_PROCD=1
+
+CONFIG_FILE=/tmp/etc/mqvpn2.conf
+
+get_interface_device() {
+	local config="$1"
+	local ifname addr
+
+	config_get ifname "$config" device
+	[ -z "$ifname" ] && config_get ifname "$config" ifname
+	[ -z "$ifname" ] &&
+		ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["l3_device"]')
+	[ -n "$(echo "$ifname" | grep '@')" ] &&
+		ifname=$(ifstatus "$config" 2>/dev/null | jsonfilter -q -e '@["device"]')
+	[ -z "$ifname" ] && return 1
+	case "$ifname" in
+		lo|mqvpn0|mqvpn2|6in4-omr6in4) return 1 ;;
+	esac
+	echo "$ifname" | grep -Eq '^(ifb|sit|gre|ip6|teql|erspan|tun|bond)' && return 1
+	addr=$(ifstatus "$config" 2>/dev/null |
+		jsonfilter -q -e '@["ipv4-address"][0].address')
+	[ -z "$addr" ] && return 1
+	echo "$ifname"
+}
+
+append_auto_path() {
+	local config="$1"
+	local mode ifname
+
+	config_get mode "$config" multipath ""
+	[ -z "$mode" ] && mode="$(uci -q get openmptcprouter.$config.multipath)"
+	[ -z "$mode" ] && return 0
+	[ "$mode" = "off" ] && return 0
+
+	ifname=$(get_interface_device "$config") || return 0
+	grep -qx "Path = $ifname" "$CONFIG_FILE" 2>/dev/null && return 0
+	printf 'Path = %s\n' "$ifname" >> "$CONFIG_FILE"
+}
+
+start_service() {
+	local enable host port key dev localip remoteip scheduler cc mtu
+	local init_max_path_id reorder insecure manage_routes paths_auto
+	local reconnect reconnect_interval log_level firewall_changed network_changed
+
+	enable="$(uci -q get mqvpn2.vpn.enable)"
+	[ "$enable" = "1" ] || return 1
+	[ -x /usr/sbin/mqvpn2 ] || return 1
+	if [ "$(uci -q get mqvpn.vpn.enable)" = "1" ]; then
+		logger -t mqvpn2 "Refusing to start while stable MQVPN is enabled"
+		return 1
+	fi
+
+	host="$(uci -q get mqvpn2.vpn.host)"
+	port="$(uci -q get mqvpn2.vpn.port)"
+	key="$(uci -q get mqvpn2.vpn.key)"
+	dev="$(uci -q get mqvpn2.vpn.dev)"
+	localip="$(uci -q get mqvpn2.vpn.localip)"
+	remoteip="$(uci -q get mqvpn2.vpn.remoteip)"
+	scheduler="$(uci -q get mqvpn2.vpn.scheduler)"
+	cc="$(uci -q get mqvpn2.vpn.cc)"
+	mtu="$(uci -q get mqvpn2.vpn.mtu)"
+	init_max_path_id="$(uci -q get mqvpn2.vpn.init_max_path_id)"
+	reorder="$(uci -q get mqvpn2.vpn.reorder)"
+	insecure="$(uci -q get mqvpn2.vpn.insecure)"
+	manage_routes="$(uci -q get mqvpn2.vpn.manage_routes)"
+	paths_auto="$(uci -q get mqvpn2.vpn.paths_auto)"
+	reconnect="$(uci -q get mqvpn2.vpn.reconnect)"
+	reconnect_interval="$(uci -q get mqvpn2.vpn.reconnect_interval)"
+	log_level="$(uci -q get mqvpn2.vpn.log_level)"
+
+	[ -n "$host" ] || return 1
+	[ -n "$key" ] || return 1
+	[ -n "$port" ] || port="65412"
+	[ -n "$dev" ] || dev="mqvpn2"
+	[ -n "$localip" ] || localip="10.255.248.2"
+	[ -n "$remoteip" ] || remoteip="10.255.248.1"
+	[ -n "$scheduler" ] || scheduler="wlb"
+	[ -n "$cc" ] || cc="cubic"
+	[ -n "$mtu" ] || mtu="0"
+	[ -n "$init_max_path_id" ] || init_max_path_id="128"
+	[ -n "$reorder" ] || reorder="0"
+	[ -n "$insecure" ] || insecure="1"
+	[ -n "$manage_routes" ] || manage_routes="0"
+	[ -n "$paths_auto" ] || paths_auto="1"
+	[ -n "$reconnect" ] || reconnect="1"
+	[ -n "$reconnect_interval" ] || reconnect_interval="5"
+	[ -n "$log_level" ] || log_level="info"
+
+	case "$scheduler" in
+		wlb|minrtt|wlb_udp_pin|backup_fec) ;;
+		*) scheduler="wlb" ;;
+	esac
+	case "$cc" in
+		bbr2|bbr|cubic) ;;
+		*) cc="cubic" ;;
+	esac
+	case "$mtu" in
+		''|*[!0-9]*) mtu="0" ;;
+	esac
+	[ "$mtu" -ne 0 ] && { [ "$mtu" -lt 1280 ] || [ "$mtu" -gt 9000 ]; } && mtu="0"
+	case "$init_max_path_id" in
+		''|*[!0-9]*) init_max_path_id="128" ;;
+	esac
+	if [ "$init_max_path_id" -lt 1 ] || [ "$init_max_path_id" -gt 128 ]; then
+		init_max_path_id="128"
+	fi
+	case "$log_level" in
+		debug|info|warn|error) ;;
+		*) log_level="info" ;;
+	esac
+
+	network_changed=0
+	[ "$(uci -q get network.omrvpn.device)" = "$dev" ] || network_changed=1
+	[ "$(uci -q get network.omrvpn.proto)" = "none" ] || network_changed=1
+	uci -q batch <<-EOF_UCI >/dev/null
+		set network.omrvpn.device='$dev'
+		set network.omrvpn.proto='none'
+		set network.omrvpn.ip4table='vpn'
+		set network.omrvpn.multipath='off'
+		set network.omrvpn.type='tunnel'
+		set network.omrvpn.txqueuelen='100'
+		set network.omr6in4.ipaddr='$localip'
+		set network.omr6in4.peeraddr='$remoteip'
+		EOF_UCI
+	uci -q changes network | grep -q . && uci -q commit network
+	if [ "$network_changed" = "1" ] &&
+		! ubus call network reload >/dev/null 2>&1; then
+		logger -t mqvpn2 "Unable to apply omrvpn network configuration"
+		return 1
+	fi
+
+	firewall_changed=0
+	uci -q get firewall.zone_vpn.device | tr ' ' '\n' | grep -Fxq "$dev" ||
+		uci -q add_list firewall.zone_vpn.device="$dev"
+	uci -q get firewall.zone_vpn.network | tr ' ' '\n' | grep -Fxq "omrvpn" ||
+		uci -q add_list firewall.zone_vpn.network="omrvpn"
+	uci -q changes firewall | grep -q . && {
+		firewall_changed=1
+		uci -q commit firewall
+	}
+
+	mkdir -p /tmp/etc
+	umask 077
+	{
+		echo '[Server]'
+		echo "Address = $host:$port"
+		[ "$insecure" = "1" ] && echo 'Insecure = true' || echo 'Insecure = false'
+		echo
+		echo '[Auth]'
+		echo "Key = $key"
+		echo
+		echo '[Interface]'
+		echo "TunName = $dev"
+		echo "LogLevel = $log_level"
+		echo "MTU = $mtu"
+		[ "$reconnect" = "1" ] && echo 'Reconnect = true' || echo 'Reconnect = false'
+		echo "ReconnectInterval = $reconnect_interval"
+		[ "$manage_routes" = "1" ] &&
+			echo 'ManageRoutes = true' || echo 'ManageRoutes = false'
+		echo
+		echo '[Multipath]'
+		echo "Scheduler = $scheduler"
+		echo "CC = $cc"
+		echo "InitMaxPathId = $init_max_path_id"
+	} > "$CONFIG_FILE"
+
+	if [ "$paths_auto" = "1" ]; then
+		config_load network
+		config_foreach append_auto_path interface
+	fi
+
+	{
+		echo
+		echo '[Reorder]'
+		[ "$reorder" = "1" ] && echo 'Enabled = on' || echo 'Enabled = off'
+		echo
+		echo '[Hybrid]'
+		echo 'Enabled = false'
+	} >> "$CONFIG_FILE"
+
+	procd_open_instance
+	procd_set_param command /usr/sbin/mqvpn2 --config "$CONFIG_FILE"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+
+	[ "$firewall_changed" = "1" ] &&
+		/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger mqvpn2
+}

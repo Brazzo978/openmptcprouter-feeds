@@ -56,7 +56,6 @@ MY_DEPENDS := \
     !TARGET_mvebu:comgt-ncm !TARGET_mvebu:luci-proto-ncm \
     !TARGET_mvebu:luci-proto-modemmanager \
     !TARGET_mvebu:luci-proto-ppp \
-    omr-update \
     rng-tools \
     openvpn-openssl \
     mmc-utils \

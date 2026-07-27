@@ -9,8 +9,85 @@ USE_PROCD=1
 . /usr/lib/unbound/iptools.sh
 . /lib/functions/network.sh
 
+apply_congestion_control() {
+	local congestion="$1"
+	local nanbbr_aggressiveness="$2"
+	local module=""
+	local parameter=""
+	local available=""
+	local applied=""
+	local previous=""
+	local previous_parameter=""
+
+	case "$congestion" in
+		nanbbr1_var) module="tcp_nanbbr1_var" ;;
+		nanbbr2_var) module="tcp_nanbbr2_var" ;;
+		nanbbr3_var) module="tcp_nanbbr3_var" ;;
+	esac
+
+	if [ -n "$module" ]; then
+		case "$nanbbr_aggressiveness" in
+			''|*[!0-9]*)
+				logger -t "MPTCP" "Invalid NanBBR aggressiveness: ${nanbbr_aggressiveness:-empty}"
+				return 1
+				;;
+		esac
+		if [ "$nanbbr_aggressiveness" -lt 1 ] || [ "$nanbbr_aggressiveness" -gt 100 ]; then
+			logger -t "MPTCP" "NanBBR aggressiveness must be between 1 and 100"
+			return 1
+		fi
+
+		if [ ! -d "/sys/module/$module" ] && ! modprobe "$module" >/dev/null 2>&1; then
+			logger -t "MPTCP" "Unable to load congestion control module $module"
+			return 1
+		fi
+
+		available="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null)"
+		if ! echo "$available" | grep -qw -- "$congestion"; then
+			logger -t "MPTCP" "Congestion control $congestion is not available after loading $module"
+			return 1
+		fi
+
+		parameter="/sys/module/$module/parameters/aggressiveness"
+		if [ ! -w "$parameter" ]; then
+			logger -t "MPTCP" "NanBBR parameter is not writable: $parameter"
+			return 1
+		fi
+		if ! previous_parameter="$(cat "$parameter" 2>/dev/null)" || [ -z "$previous_parameter" ]; then
+			logger -t "MPTCP" "Unable to read current NanBBR aggressiveness from $parameter"
+			return 1
+		fi
+		if ! printf '%s\n' "$nanbbr_aggressiveness" > "$parameter"; then
+			printf '%s\n' "$previous_parameter" > "$parameter" 2>/dev/null
+			logger -t "MPTCP" "Unable to set $congestion aggressiveness"
+			return 1
+		fi
+		applied="$(cat "$parameter" 2>/dev/null)"
+		if [ "$applied" != "$nanbbr_aggressiveness" ]; then
+			[ -n "$previous_parameter" ] && printf '%s\n' "$previous_parameter" > "$parameter" 2>/dev/null
+			logger -t "MPTCP" "NanBBR aggressiveness readback failed: requested $nanbbr_aggressiveness, got ${applied:-empty}"
+			return 1
+		fi
+	fi
+
+	previous="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+	if ! sysctl -qew net.ipv4.tcp_congestion_control="$congestion"; then
+		[ -n "$parameter" ] && [ -n "$previous_parameter" ] && printf '%s\n' "$previous_parameter" > "$parameter" 2>/dev/null
+		logger -t "MPTCP" "Unable to select congestion control $congestion"
+		return 1
+	fi
+	applied="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+	if [ "$applied" != "$congestion" ]; then
+		[ -n "$previous" ] && sysctl -qew net.ipv4.tcp_congestion_control="$previous" >/dev/null 2>&1
+		[ -n "$parameter" ] && [ -n "$previous_parameter" ] && printf '%s\n' "$previous_parameter" > "$parameter" 2>/dev/null
+		logger -t "MPTCP" "Congestion control readback failed: requested $congestion, got ${applied:-empty}"
+		return 1
+	fi
+	return 0
+}
+
 global_multipath_settings() {
-	local multipath mptcp_path_manager mptcp_scheduler mptcp_subflows mptcp_debug mptcp_add_addr_accepted congestion mptcp_checksum mptcp_syn_retries mptcp_fullmesh_num_subflows mptcp_fullmesh_create_on_err mptcp_ndiffports_num_subflows mptcp_rr_cwnd_limited mptcp_rr_num_segments
+	local multipath mptcp_path_manager mptcp_scheduler mptcp_subflows mptcp_debug mptcp_add_addr_accepted congestion nanbbr_aggressiveness mptcp_checksum mptcp_syn_retries mptcp_fullmesh_num_subflows mptcp_fullmesh_create_on_err mptcp_ndiffports_num_subflows mptcp_rr_cwnd_limited mptcp_rr_num_segments
 	local multipath_status=0
 	config_load network
 	config_get multipath globals multipath
@@ -21,6 +98,7 @@ global_multipath_settings() {
 	config_get mptcp_add_addr_timeout globals mptcp_add_addr_timeout "120"
 	config_get mptcp_debug globals mptcp_debug
 	config_get congestion globals congestion
+	config_get nanbbr_aggressiveness globals nanbbr_aggressiveness "50"
 	config_get mptcp_checksum globals mptcp_checksum
 	config_get mptcp_syn_retries globals mptcp_syn_retries
 	config_get mptcp_fullmesh_num_subflows globals mptcp_fullmesh_num_subflows
@@ -75,7 +153,7 @@ global_multipath_settings() {
 			sysctl -qew net.mptcp.scheduler="$(echo $mptcp_scheduler | sed -e 's/mptcp_//' -e 's/.o//')" >/dev/null 2>&1
 		fi
 	fi
-	[ -z "$congestion" ] || sysctl -qew net.ipv4.tcp_congestion_control="$congestion"
+	[ -z "$congestion" ] || apply_congestion_control "$congestion" "$nanbbr_aggressiveness"
 }
 
 interface_macaddr_count() {
@@ -154,21 +232,11 @@ interface_multipath_settings() {
 	ip4table=$metric
 	ip6table=6$metric
 	[ -n "$iface" ] && {
-		gro=$(uci -q get network.${config}.gro)
-		[ "$gro" = "1" ] && ethtool -K $iface gro on >/dev/null 2>&1
-		[ "$gro" = "0" ] && ethtool -K $iface gro on >/dev/null 2>&1
-		gso=$(uci -q get network.${config}.gso)
-		[ "$gso" = "1" ] && ethtool -K $iface gso on >/dev/null 2>&1
-		[ "$gso" = "0" ] && ethtool -K $iface gso on >/dev/null 2>&1
-		lro=$(uci -q get network.${config}.lro)
-		[ "$lro" = "1" ] && ethtool -K $iface lro on >/dev/null 2>&1
-		[ "$lro" = "0" ] && ethtool -K $iface lro on >/dev/null 2>&1
-		ufo=$(uci -q get network.${config}.ufo)
-		[ "$ufo" = "1" ] && ethtool -K $iface ufo on >/dev/null 2>&1
-		[ "$ufo" = "0" ] && ethtool -K $iface ufo on >/dev/null 2>&1
-		tso=$(uci -q get network.${config}.tso)
-		[ "$tso" = "1" ] && ethtool -K $iface tso on >/dev/null 2>&1
-		[ "$tso" = "0" ] && ethtool -K $iface tso on >/dev/null 2>&1
+		for offload in gro gso lro ufo tso; do
+			value=$(uci -q get network.${config}.${offload})
+			[ "$value" = "1" ] && ethtool -K "$iface" "$offload" on >/dev/null 2>&1
+			[ "$value" = "0" ] && ethtool -K "$iface" "$offload" off >/dev/null 2>&1
+		done
 	}
 	[ "$mode" = "" ] && {
 		mode="$(uci -q get openmptcprouter.${config}.multipath)"
@@ -184,6 +252,11 @@ interface_multipath_settings() {
 		uci -q set openmptcprouter.${config}.multipath="$mode"
 	}
 	[ "$mode" != "off" ] && {
+		[ -n "$iface" ] && {
+			for offload in lro tso ufo; do
+				ethtool -K "$iface" "$offload" off >/dev/null 2>&1
+			done
+		}
 		[ -n "$mptcpintf" ] && mptcpintf="$mptcpintf $iface"
 		[ -z "$mptcpintf" ] && mptcpintf="$iface"
 		[ -z "$mptcpmintf" ] && mptcpmintf="$config"

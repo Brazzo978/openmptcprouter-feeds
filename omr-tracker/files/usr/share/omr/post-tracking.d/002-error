@@ -179,7 +179,6 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 		config_load openmptcprouter
 		config_foreach del_server_route server
 		config_foreach del_server_route6 server
-		#if [ "$(uci -q get openmptcprouter.settings.master)" = "balancing" ] && [ "$(uci -q get openmptcprouter.settings.vpn)" != "mlvpn" ]; then
 
 		if [ -n "$OMR_TRACKER_INTERFACE" ]; then
 			default_gw=$(ip route get 1.1.1.1 | grep via | awk '{print $3}')
@@ -262,14 +261,6 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			_log "DSVPN down, restart it"
 			/etc/init.d/dsvpn restart >/dev/null 2>&1
 		fi
-		if [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
-			_log "MLVPN down, restart it"
-			/etc/init.d/mlvpn restart >/dev/null 2>&1
-		fi
-		if [ "$(uci -q get mqvpn.vpn.enable)" = "1" ]; then
-			_log "MQVPN down, restart it"
-			/etc/init.d/mqvpn restart >/dev/null 2>&1
-		fi
 		if [ "$(uci -q get glorytun.vpn.enable)" = "1" ]; then
 			_log "Glorytun VPN down, restart it"
 			/etc/init.d/glorytun restart >/dev/null 2>&1
@@ -278,13 +269,19 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ] || { [ "$OMR_TRACKER_INTERFACE" != "omrvp
 			_log "Glorytun UDP VPN down, restart it"
 			/etc/init.d/glorytun-udp restart >/dev/null 2>&1
 		fi
+		if [ "$(uci -q get openmptcprouter.settings.vpn)" = "mqvpn" ] && [ "$(uci -q get mqvpn.vpn.enable)" = "1" ] && [ -n "$(uci -q get mqvpn.vpn.key)" ] && [ -f /etc/init.d/mqvpn ] && ! pgrep '^/usr/sbin/mqvpn( |$)' >/dev/null 2>&1; then
+			_log "MQVPN down, restart it"
+			/etc/init.d/mqvpn restart >/dev/null 2>&1
+		fi
+		if [ "$(uci -q get openmptcprouter.settings.vpn)" = "mqvpn2" ] && [ "$(uci -q get mqvpn2.vpn.enable)" = "1" ] && [ -n "$(uci -q get mqvpn2.vpn.key)" ] && [ -f /etc/init.d/mqvpn2 ] && ! pgrep '^/usr/sbin/mqvpn2( |$)' >/dev/null 2>&1; then
+			_log "MQVPN2 down, restart it"
+			/etc/init.d/mqvpn2 restart >/dev/null 2>&1
+		fi
 		if [ "$(uci -q get openvpn.omr.enabled)" = "1" ]; then
 			_log "OpenVPN down, restart it"
 			/etc/init.d/openvpn restart omr >/dev/null 2>&1
 		fi
 		config_load openmptcprouter
-		[ "$(uci -q get openmptcprouter.settings.pihole_auto_conf)" != "0" ] && config_foreach disable_pihole server
-		#if [ "$(uci -q get openmptcprouter.settings.master)" != "balancing" ] || [ "$(uci -q get openmptcprouter.settings.vpn)" = "mlvpn" ]; then
 		if [ "$(uci -q get openmptcprouter.settings.master)" != "balancing" ]; then
 			config_foreach set_server_default_route server
 			config_foreach set_server_default_route6 server

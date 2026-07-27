@@ -127,14 +127,6 @@ if [ "$OMR_TRACKER_INTERFACE" = "glorytun" ] || [ "$OMR_TRACKER_INTERFACE" = "om
 		#fi
 	fi
 	[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
-	nbserver=0
-	piholeenabled=0
-	if [ "$(uci -q get openmptcprouter.settings.pihole_auto_conf)" != "0" ]; then
-		config_load openmptcprouter
-		config_foreach enable_pihole server
-		#config_foreach delete_server_default_route server
-		[ "$nbserver" = "$piholeenabled" ] && /etc/init.d/openmptcprouter-vps set_pihole >/dev/null 2>&1
-	fi
 	#ubus call network reload
 	exit 0
 fi

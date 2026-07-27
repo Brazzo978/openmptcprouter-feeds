@@ -1,42 +1,692 @@
 <%+header%>
 
-<script type="text/javascript" src="<%=resource%>/cbi.js?v=git-18.193.28471-ee087a1"></script>
+<style>
+.omr-mptcp-monitor {
+	--omr-bg: #f5f7fb;
+	--omr-surface: #ffffff;
+	--omr-ink: #0f172a;
+	--omr-muted: #64748b;
+	--omr-line: #e2e8f0;
+	--omr-blue: #2563eb;
+	--omr-teal: #0f766e;
+	--omr-green: #15803d;
+	--omr-amber: #b45309;
+	--omr-red: #b91c1c;
+	--omr-shadow: 0 16px 38px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.05);
+	display: grid;
+	gap: 1rem;
+	color: var(--omr-ink);
+}
+.omr-mptcp-hero,
+.omr-mptcp-panel,
+.omr-mptcp-card,
+.omr-mptcp-help {
+	border: 1px solid var(--omr-line);
+	border-radius: 20px;
+	background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+	box-shadow: var(--omr-shadow);
+}
+.omr-mptcp-hero {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 1.1rem 1.2rem;
+	background:
+		radial-gradient(circle at 8% 10%, rgba(37, 99, 235, 0.14), transparent 30%),
+		linear-gradient(135deg, #ffffff 0%, #eff6ff 52%, #f0fdfa 100%);
+}
+.omr-mptcp-hero h2 {
+	margin: 0;
+	font-size: 24px;
+	font-weight: 900;
+	letter-spacing: -0.03em;
+}
+.omr-mptcp-hero p,
+.omr-mptcp-help p,
+.omr-mptcp-card p,
+.omr-mptcp-muted {
+	margin: 0.28rem 0 0;
+	color: var(--omr-muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+.omr-mptcp-badge,
+.omr-mptcp-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	border-radius: 999px;
+	padding: 0.28rem 0.62rem;
+	background: #e2e8f0;
+	color: #334155;
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+.omr-mptcp-badge.ok,
+.omr-mptcp-chip.ok { background: #dcfce7; color: var(--omr-green); }
+.omr-mptcp-badge.warn,
+.omr-mptcp-chip.warn { background: #fef3c7; color: var(--omr-amber); }
+.omr-mptcp-badge.err,
+.omr-mptcp-chip.err { background: #fee2e2; color: var(--omr-red); }
+.omr-mptcp-badge.info,
+.omr-mptcp-chip.info { background: #dbeafe; color: #1d4ed8; }
+.omr-mptcp-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+	gap: 0.8rem;
+}
+.omr-mptcp-card {
+	padding: 0.95rem 1rem;
+	min-height: 96px;
+}
+.omr-mptcp-label {
+	color: var(--omr-muted);
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+.omr-mptcp-value {
+	margin-top: 0.34rem;
+	font-size: 22px;
+	font-weight: 900;
+	letter-spacing: -0.02em;
+	line-height: 1.15;
+	word-break: break-word;
+}
+.omr-mptcp-help-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	gap: 0.7rem;
+}
+.omr-mptcp-help {
+	padding: 0.85rem 0.95rem;
+	box-shadow: none;
+}
+.omr-mptcp-help strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 900;
+}
+.omr-mptcp-panel {
+	padding: 1rem;
+}
+.omr-mptcp-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 0.75rem;
+}
+.omr-mptcp-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 900;
+	letter-spacing: -0.01em;
+}
+.omr-mptcp-alerts {
+	display: grid;
+	gap: 0.55rem;
+}
+.omr-mptcp-alert {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.65rem;
+	padding: 0.75rem 0.85rem;
+	border: 1px solid var(--omr-line);
+	border-radius: 16px;
+	background: #ffffff;
+}
+.omr-mptcp-alert strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 900;
+}
+.omr-mptcp-alert span:last-child {
+	color: var(--omr-muted);
+	font-size: 12px;
+}
+.omr-mptcp-table-wrap {
+	overflow-x: auto;
+}
+.omr-mptcp-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	border: 1px solid var(--omr-line);
+	border-radius: 16px;
+	overflow: hidden;
+	background: var(--omr-surface);
+}
+.omr-mptcp-table th,
+.omr-mptcp-table td {
+	padding: 0.62rem 0.72rem;
+	border-bottom: 1px solid #edf2f7;
+	text-align: left;
+	vertical-align: top;
+	font-size: 12px;
+}
+.omr-mptcp-table th {
+	background: #f8fafc;
+	color: #475569;
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+}
+.omr-mptcp-table tr:last-child td {
+	border-bottom: 0;
+}
+.omr-mptcp-table small {
+	display: block;
+	margin-top: 0.2rem;
+	color: var(--omr-muted);
+	line-height: 1.35;
+}
+.omr-mptcp-empty {
+	padding: 1rem;
+	border: 1px dashed #cbd5e1;
+	border-radius: 16px;
+	color: var(--omr-muted);
+	background: #f8fafc;
+}
+.omr-mptcp-raw summary {
+	cursor: pointer;
+	color: #334155;
+	font-weight: 900;
+}
+.omr-mptcp-raw pre {
+	max-height: 420px;
+	overflow: auto;
+	margin: 0.7rem 0 0;
+	padding: 0.85rem;
+	border-radius: 14px;
+	background: #0f172a;
+	color: #e2e8f0;
+	font-size: 12px;
+	line-height: 1.45;
+}
+@media (max-width: 760px) {
+	.omr-mptcp-hero,
+	.omr-mptcp-head,
+	.omr-mptcp-alert { flex-direction: column; }
+}
+</style>
+
 <script type="text/javascript">//<![CDATA[
-    var stxhr = new XHR();
+(function() {
+	var monitorUrl = '<%=url('admin/network/mptcp')%>/mptcp_monitor_data/';
+	var token = '<%=token%>';
+	var pollTimer = null;
+	var busy = false;
+	var previousCounters = null;
 
-    function update_monitor()
-    {
-	var fm = document.getElementById('monitor');
+	var counterInfo = {
+		MPTcpExtMPCurrEstab: ['Active sessions', 'MPTCP sessions currently established.'],
+		MPTcpExtMPCapableSYNTX: ['MPTCP attempts', 'New outgoing connections that tried to use MPTCP.'],
+		MPTcpExtMPCapableSYNACKRX: ['MPTCP accepted', 'Remote peers accepted MPTCP capability.'],
+		MPTcpExtMPCapableFallbackACK: ['TCP fallback', 'Connections that fell back from MPTCP to normal TCP.'],
+		MPTcpExtMPCapableFallbackSYNACK: ['TCP fallback', 'Server-side fallback during MPTCP handshake.'],
+		MPTcpExtMPTCPRetrans: ['MPTCP retransmits', 'Retransmissions at MPTCP level. Rising values usually mean loss or path instability.'],
+		MPTcpExtMPJoinSynAckRx: ['Joined subflows', 'Additional subflows accepted by the peer.'],
+		MPTcpExtMPJoinNoTokenFound: ['Join rejected', 'Subflow join failed because the connection token was not found.'],
+		MPTcpExtMPJoinSynAckHMacFailure: ['Join auth errors', 'Subflow join failed authentication. This should normally stay at zero.'],
+		MPTcpExtMPJoinAckHMacFailure: ['Join auth errors', 'Subflow join ACK failed authentication. This should normally stay at zero.'],
+		MPTcpExtAddAddr: ['ADD_ADDR received', 'Peer announced an additional address for MPTCP.'],
+		MPTcpExtAddAddrTx: ['ADD_ADDR sent', 'Router announced an additional address to the peer.'],
+		MPTcpExtAddAddrDrop: ['ADD_ADDR dropped', 'Additional address was ignored or rejected.'],
+		MPTcpExtRmAddr: ['Address removed', 'Peer removed one advertised address.'],
+		MPTcpExtRmSubflow: ['Subflow removed', 'A subflow was removed from an MPTCP connection.'],
+		MPTcpExtSubflowStale: ['Stale subflow', 'A path stopped carrying useful traffic and was marked stale.'],
+		MPTcpExtSubflowRecover: ['Subflow recovered', 'A previously stale path became usable again.'],
+		MPTcpExtMPRstTx: ['MPTCP reset sent', 'Router closed/reset an MPTCP connection.'],
+		MPTcpExtMPRstRx: ['MPTCP reset received', 'Peer closed/reset an MPTCP connection.'],
+		MPTcpExtMPFastcloseTx: ['Fast close sent', 'Router requested immediate MPTCP connection close.'],
+		MPTcpExtMPFastcloseRx: ['Fast close received', 'Peer requested immediate MPTCP connection close.'],
+		MPTcpExtDataCsumErr: ['Checksum errors', 'Data checksum mismatch. This should stay at zero.'],
+		MPTcpExtDSSCorruptionFallback: ['DSS corruption fallback', 'MPTCP data mapping corruption caused TCP fallback.'],
+		MPTcpExtDSSCorruptionReset: ['DSS corruption reset', 'MPTCP data mapping corruption caused a reset.'],
+		MPTcpExtDuplicateData: ['Duplicate data', 'Duplicate data received across paths. Some value is possible with lossy links.'],
+		MPTcpExtOFOQueue: ['Out-of-order data', 'Data arrived out of order. Common with multiple links of different latency.'],
+		MPTcpExtOFOMerge: ['Reorder merges', 'Out-of-order packets were merged back into the receive queue.'],
+		MPTcpExtRcvWndConflict: ['Receive window conflict', 'Receive-window mismatch between subflows. Rising values can indicate path imbalance.']
+	};
 
-	if (fm)
-	{
-	    fm.innerHTML =
-		'<img src="<%=resource%>/icons/loading.gif" alt="<%:Loading%>" style="vertical-align:middle" /> ' + '<%:Waiting for command to complete...%>'
-	    ;
+	var counterOrder = [
+		'MPTcpExtMPCurrEstab', 'MPTcpExtMPCapableSYNTX', 'MPTcpExtMPCapableSYNACKRX',
+		'MPTcpExtMPTCPRetrans', 'MPTcpExtSubflowStale', 'MPTcpExtSubflowRecover',
+		'MPTcpExtMPJoinSynAckRx', 'MPTcpExtAddAddr', 'MPTcpExtAddAddrTx', 'MPTcpExtAddAddrDrop',
+		'MPTcpExtMPCapableFallbackACK', 'MPTcpExtMPCapableFallbackSYNACK',
+		'MPTcpExtMPRstTx', 'MPTcpExtMPRstRx', 'MPTcpExtMPFastcloseTx', 'MPTcpExtMPFastcloseRx',
+		'MPTcpExtDataCsumErr', 'MPTcpExtDSSCorruptionFallback', 'MPTcpExtDSSCorruptionReset',
+		'MPTcpExtDuplicateData', 'MPTcpExtOFOQueue', 'MPTcpExtOFOMerge', 'MPTcpExtRcvWndConflict'
+	];
 
-	    stxhr.post('<%=url('admin/network/mptcp')%>/mptcp_monitor_data/', { token: '<%=token%>' },
-		function(x)
-		{
-		    if (x.responseText)
-		    {
-			fm.innerHTML = String.format('<pre>%s</pre>', x.responseText );
-		    } else {
-			fm.innerHTML = '<pre><%:Error%></pre>';
-		    }
-		}
-	    );
+	function htmlEscape(value) {
+		return String(value == null ? '' : value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
 	}
-    }
-    setInterval(function () {
-	update_monitor();
-    }, 10000);
+
+	function setHtml(id, value) {
+		var node = document.getElementById(id);
+		if (node) node.innerHTML = value;
+	}
+
+	function setText(id, value) {
+		setHtml(id, htmlEscape(value || '-'));
+	}
+
+	function fmtBytes(value) {
+		var n = Number(value);
+		var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		var i = 0;
+		if (!isFinite(n) || n < 0) return '-';
+		while (n >= 1000 && i < units.length - 1) {
+			n = n / 1000;
+			i++;
+		}
+		return n.toFixed(i ? 2 : 0) + ' ' + units[i];
+	}
+
+	function fmtAgeMs(value) {
+		var n = Number(value);
+		if (!isFinite(n) || n < 0) return '-';
+		if (n < 1000) return n.toFixed(0) + ' ms';
+		if (n < 60000) return (n / 1000).toFixed(1) + ' s';
+		return (n / 60000).toFixed(1) + ' min';
+	}
+
+	function fmtCounter(value) {
+		var n = Number(value);
+		if (!isFinite(n)) return '-';
+		return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+	}
+
+	function badge(text, cls) {
+		return '<span class="omr-mptcp-chip ' + htmlEscape(cls || '') + '">' + htmlEscape(text) + '</span>';
+	}
+
+	function yesNo(value) {
+		if (value === '1' || value === 1 || value === true) return '<%:Enabled%>';
+		if (value === '0' || value === 0 || value === false) return '<%:Disabled%>';
+		return value || '-';
+	}
+
+	function pmName(value) {
+		if (value === '0' || value === 0) return '<%:Kernel%>';
+		if (value === '1' || value === 1) return '<%:Userspace%>';
+		return value || '-';
+	}
+
+	function roleDescription(role) {
+		if (role == 'master') return '<%:Primary path. OMR should prefer this interface when possible.%>';
+		if (role == 'on') return '<%:Active MPTCP path. It can be used together with the master.%>';
+		if (role == 'backup') return '<%:Backup path. It should be used mainly when primary paths are not enough or fail.%>';
+		if (role == 'handover') return '<%:Handover path. It is used for failover-style switching.%>';
+		return '<%:Not used by MPTCP.%>';
+	}
+
+	function endpointText(endpoint) {
+		if (!endpoint) return '-';
+		return htmlEscape(endpoint.address || '-') + '<small>ID ' + htmlEscape(endpoint.id || '-') + '</small>';
+	}
+
+	function flagsText(endpoint) {
+		var flags = endpoint && endpoint.flags ? endpoint.flags : [];
+		if (!flags.length) return '-';
+		var html = '';
+		for (var i = 0; i < flags.length; i++)
+			html += badge(flags[i], flags[i] == 'backup' ? 'warn' : 'info') + ' ';
+		return html;
+	}
+
+	function counterMap(payload) {
+		var map = payload.counter_map || {};
+		var counters = payload.counters || [];
+		for (var i = 0; i < counters.length; i++)
+			map[counters[i].name] = counters[i].value;
+		return map;
+	}
+
+	function counterDelta(map, name) {
+		if (!previousCounters) return null;
+		var now = Number(map[name] || 0);
+		var before = Number(previousCounters[name] || 0);
+		if (!isFinite(now) || !isFinite(before)) return null;
+		return now - before;
+	}
+
+	function renderCards(payload) {
+		var kernel = payload.kernel || {};
+		var metrics = payload.metrics || {};
+		var subflows = Number(metrics.mptcp_subflow_count || metrics.tcp_subflow_count || 0);
+		var health = 'OK';
+		var healthClass = 'ok';
+
+		if (kernel.enabled != '1') {
+			health = '<%:Disabled%>';
+			healthClass = 'err';
+		} else if (Number(metrics.active_path_count || 0) < 2 || Number(metrics.endpoint_count || 0) < 2) {
+			health = '<%:Check paths%>';
+			healthClass = 'warn';
+		} else if (Number(metrics.mptcp_connection_count || 0) > 0 && subflows < 2) {
+			health = '<%:Single path%>';
+			healthClass = 'warn';
+		}
+
+		setText('mptcp_health_value', health);
+		setHtml('mptcp_health_sub', badge(healthClass == 'ok' ? '<%:Healthy%>' : '<%:Needs attention%>', healthClass));
+		setText('mptcp_paths_value', String(metrics.endpoint_count || 0) + ' / ' + String(metrics.active_path_count || 0));
+		setText('mptcp_paths_sub', '<%:kernel endpoints / configured paths%>');
+		setText('mptcp_conn_value', String(metrics.mptcp_connection_count || 0));
+		setText('mptcp_conn_sub', '<%:active MPTCP sessions%>');
+		setText('mptcp_subflow_value', String(subflows || 0));
+		setText('mptcp_subflow_sub', '<%:active subflows across paths%>');
+		setText('mptcp_scheduler_value', kernel.scheduler || '-');
+		setText('mptcp_scheduler_sub', (kernel.available_schedulers ? '<%:available%>: ' + kernel.available_schedulers : '<%:current packet selector%>'));
+		setText('mptcp_cc_value', kernel.congestion || '-');
+		setText('mptcp_cc_sub', '<%:TCP congestion control%>');
+		setText('mptcp_pm_value', pmName(kernel.pm_type || kernel.path_manager));
+		setText('mptcp_pm_sub', '<%:path manager%>');
+		setText('mptcp_checksum_value', yesNo(kernel.checksum));
+		setText('mptcp_checksum_sub', '<%:MPTCP checksum%>');
+	}
+
+	function renderAlerts(payload, map) {
+		var kernel = payload.kernel || {};
+		var metrics = payload.metrics || {};
+		var alerts = [];
+		var activePaths = Number(metrics.active_path_count || 0);
+		var endpoints = Number(metrics.endpoint_count || 0);
+		var sessions = Number(metrics.mptcp_connection_count || 0);
+		var subflows = Number(metrics.mptcp_subflow_count || metrics.tcp_subflow_count || 0);
+		var hardCounters = ['MPTcpExtDataCsumErr', 'MPTcpExtDSSCorruptionReset', 'MPTcpExtMPJoinSynAckHMacFailure', 'MPTcpExtMPJoinAckHMacFailure'];
+		var warnCounters = ['MPTcpExtMPTCPRetrans', 'MPTcpExtSubflowStale', 'MPTcpExtMPRstTx', 'MPTcpExtMPRstRx', 'MPTcpExtMPFastcloseTx', 'MPTcpExtMPFastcloseRx'];
+
+		if (kernel.enabled != '1')
+			alerts.push(['err', '<%:MPTCP is disabled%>', '<%:The router cannot aggregate paths until MPTCP is enabled.%>']);
+		if (activePaths < 2)
+			alerts.push(['warn', '<%:Less than two MPTCP paths configured%>', '<%:Aggregation needs at least two WAN paths marked master, enabled, backup, or handover.%>']);
+		if (activePaths > 0 && endpoints < activePaths)
+			alerts.push(['warn', '<%:Kernel endpoint mismatch%>', '<%:One configured MPTCP interface is not visible as a kernel endpoint.%>']);
+		if (sessions > 0 && subflows < 2)
+			alerts.push(['warn', '<%:MPTCP session is using one path%>', '<%:The connection is established, but it is not currently spreading over multiple subflows.%>']);
+		if (sessions === 0)
+			alerts.push(['info', '<%:No active MPTCP session right now%>', '<%:This is normal when the router is idle. Start traffic through OMR to see live sessions.%>']);
+
+		for (var i = 0; i < hardCounters.length; i++) {
+			var d = counterDelta(map, hardCounters[i]);
+			if (d != null && d > 0) alerts.push(['err', counterInfo[hardCounters[i]][0], counterInfo[hardCounters[i]][1] + ' Delta: +' + d + '.']);
+		}
+		for (var j = 0; j < warnCounters.length; j++) {
+			var wd = counterDelta(map, warnCounters[j]);
+			if (wd != null && wd > 0) alerts.push(['warn', counterInfo[warnCounters[j]][0], counterInfo[warnCounters[j]][1] + ' Delta: +' + wd + '.']);
+		}
+
+		if (!alerts.length)
+			alerts.push(['ok', '<%:MPTCP looks healthy%>', '<%:Configured paths, kernel endpoints and active counters do not show immediate issues.%>']);
+
+		var html = '';
+		for (var k = 0; k < alerts.length; k++) {
+			html += '<div class="omr-mptcp-alert"><span>' + badge(alerts[k][0].toUpperCase(), alerts[k][0]) + '</span><span><strong>' + htmlEscape(alerts[k][1]) + '</strong><span>' + htmlEscape(alerts[k][2]) + '</span></span></div>';
+		}
+		setHtml('mptcp_alerts', html);
+	}
+
+	function renderInterfaces(interfaces) {
+		if (!interfaces || !interfaces.length) {
+			setHtml('mptcp_interfaces', '<div class="omr-mptcp-empty"><%:No network interface was reported by UCI.%></div>');
+			return;
+		}
+		var html = '<div class="omr-mptcp-table-wrap"><table class="omr-mptcp-table"><tr><th><%:Interface%></th><th><%:Role%></th><th><%:State%></th><th><%:Address%></th><th><%:Kernel endpoint%></th><th><%:Flags%></th></tr>';
+		for (var i = 0; i < interfaces.length; i++) {
+			var iface = interfaces[i];
+			var role = iface.multipath || 'off';
+			var state = iface.up ? badge('<%:Up%>', 'ok') : badge('<%:Down%>', 'warn');
+			var roleClass = role == 'off' ? '' : (role == 'backup' || role == 'handover' ? 'warn' : 'ok');
+			html += '<tr>' +
+				'<td><strong>' + htmlEscape(iface.name || '-') + '</strong><small>' + htmlEscape(iface.device || iface.proto || '-') + '</small></td>' +
+				'<td>' + badge(role, roleClass) + '<small>' + htmlEscape(roleDescription(role)) + '</small></td>' +
+				'<td>' + state + '<small>' + htmlEscape(iface.proto || '-') + '</small></td>' +
+				'<td>' + htmlEscape((iface.addresses || []).join(', ') || '-') + '</td>' +
+				'<td>' + (iface.has_endpoint ? endpointText(iface.endpoint) : (role == 'off' ? badge('<%:Not used%>', '') : badge('<%:Missing%>', 'warn'))) + '</td>' +
+				'<td>' + flagsText(iface.endpoint) + '</td>' +
+				'</tr>';
+		}
+		html += '</table></div>';
+		setHtml('mptcp_interfaces', html);
+	}
+
+	function renderConnections(connections) {
+		var rows = [];
+		for (var i = 0; i < (connections || []).length; i++) {
+			if (connections[i].is_mptcp) rows.push(connections[i]);
+		}
+		if (!rows.length) {
+			setHtml('mptcp_connections', '<div class="omr-mptcp-empty"><%:No established MPTCP meta-connection detected right now.%><br /><%:Generate traffic through the router to populate this table.%></div>');
+			return;
+		}
+		var html = '<div class="omr-mptcp-table-wrap"><table class="omr-mptcp-table"><tr><th><%:Connection%></th><th><%:Subflows%></th><th><%:Traffic%></th><th><%:Last activity%></th><th><%:Meaning%></th></tr>';
+		for (var j = 0; j < rows.length; j++) {
+			var c = rows[j];
+			var subflows = c.subflows_total || c.subflows || '-';
+			var max = c.subflows_max ? ' / ' + c.subflows_max : '';
+			html += '<tr>' +
+				'<td><strong>' + htmlEscape(c.local_addr || '-') + '</strong><small>' + htmlEscape(c.peer_addr || '-') + '</small><small>token ' + htmlEscape(c.token || '-') + '</small></td>' +
+				'<td>' + badge(String(subflows) + max, Number(subflows) > 1 ? 'ok' : 'warn') + '<small><%:More than one subflow means the session can use multiple WAN paths.%></small></td>' +
+				'<td><%:Sent%>: ' + fmtBytes(c.bytes_sent) + '<br /><%:Received%>: ' + fmtBytes(c.bytes_received) + '<br /><%:Acked%>: ' + fmtBytes(c.bytes_acked) + '</td>' +
+				'<td><%:TX%>: ' + fmtAgeMs(c.last_data_sent) + '<br /><%:RX%>: ' + fmtAgeMs(c.last_data_recv) + '<br /><%:ACK%>: ' + fmtAgeMs(c.last_ack_recv) + '</td>' +
+				'<td><%:This is the logical MPTCP connection. TCP subflows below are the real paths used under it.%></td>' +
+				'</tr>';
+		}
+		html += '</table></div>';
+		setHtml('mptcp_connections', html);
+	}
+
+	function renderSubflows(connections) {
+		var rows = [];
+		for (var i = 0; i < (connections || []).length; i++) {
+			if (connections[i].is_subflow) rows.push(connections[i]);
+		}
+		if (!rows.length) {
+			setHtml('mptcp_subflows', '<div class="omr-mptcp-empty"><%:No individual TCP subflow is visible right now.%></div>');
+			return;
+		}
+		var html = '<div class="omr-mptcp-table-wrap"><table class="omr-mptcp-table"><tr><th><%:Path%></th><th><%:Queue%></th><th><%:RTT / BBR%></th><th><%:Window%></th><th><%:Meaning%></th></tr>';
+		for (var j = 0; j < rows.length; j++) {
+			var c = rows[j];
+			var bbr = c.bbr_bw ? '<%:BBR bw%>: ' + htmlEscape(c.bbr_bw) + '<br /><%:BBR min RTT%>: ' + htmlEscape(c.bbr_mrtt || '-') : '-';
+			html += '<tr>' +
+				'<td><strong>' + htmlEscape(c.local_addr || '-') + '</strong><small>' + htmlEscape(c.peer_addr || '-') + '</small></td>' +
+				'<td><%:Recv%>: ' + htmlEscape(c.recvq || '0') + '<br /><%:Send%>: ' + htmlEscape(c.sendq || '0') + '</td>' +
+				'<td><%:RTT%>: ' + htmlEscape(c.rtt || '-') + ' ms<br />' + bbr + '</td>' +
+				'<td>cwnd ' + htmlEscape(c.cwnd || '-') + '<br />mss ' + htmlEscape(c.mss || '-') + '<br />pmtu ' + htmlEscape(c.pmtu || '-') + '</td>' +
+				'<td><%:Lower RTT and stable BBR bandwidth usually indicate the better path.%></td>' +
+				'</tr>';
+		}
+		html += '</table></div>';
+		setHtml('mptcp_subflows', html);
+	}
+
+	function renderCounters(payload, map) {
+		var seen = {};
+		var rows = [];
+		var counters = payload.counters || [];
+		for (var i = 0; i < counterOrder.length; i++) {
+			var name = counterOrder[i];
+			if (map[name] !== undefined) {
+				rows.push({ name: name, value: map[name] });
+				seen[name] = true;
+			}
+		}
+		for (var j = 0; j < counters.length; j++) {
+			if (!seen[counters[j].name] && Number(counters[j].value || 0) > 0) {
+				rows.push(counters[j]);
+				seen[counters[j].name] = true;
+			}
+		}
+		if (!rows.length) {
+			setHtml('mptcp_counters', '<div class="omr-mptcp-empty"><%:No MPTCP counter was reported.%></div>');
+			return;
+		}
+		var html = '<div class="omr-mptcp-table-wrap"><table class="omr-mptcp-table"><tr><th><%:Counter%></th><th><%:Value%></th><th><%:Delta%></th><th><%:Description%></th></tr>';
+		for (var k = 0; k < rows.length; k++) {
+			var item = rows[k];
+			var info = counterInfo[item.name] || [item.name, '<%:Kernel MPTCP diagnostic counter.%>'];
+			var delta = counterDelta(map, item.name);
+			var deltaText = delta == null ? '-' : (delta > 0 ? '+' + fmtCounter(delta) : '0');
+			var deltaClass = delta != null && delta > 0 ? 'warn' : '';
+			html += '<tr>' +
+				'<td><strong>' + htmlEscape(info[0]) + '</strong><small>' + htmlEscape(item.name) + '</small></td>' +
+				'<td>' + fmtCounter(item.value) + '</td>' +
+				'<td>' + badge(deltaText, deltaClass) + '</td>' +
+				'<td>' + htmlEscape(info[1]) + '</td>' +
+				'</tr>';
+		}
+		html += '</table></div>';
+		setHtml('mptcp_counters', html);
+	}
+
+	function renderRaw(payload) {
+		var raw = payload.raw || {};
+		var text = 'ip mptcp endpoint show\n' + (raw.endpoints || '-') + '\n\nss -Mtin\n' + (raw.ss || '-') + '\n\nnstat -az MPTcpExt\n' + (raw.nstat || '-') + '\n\nmultipath -m\n' + (raw.monitor || '-');
+		setHtml('mptcp_raw', '<details class="omr-mptcp-raw"><summary><%:Raw diagnostics for advanced troubleshooting%></summary><pre>' + htmlEscape(text) + '</pre></details>');
+	}
+
+	function render(payload) {
+		var map = counterMap(payload);
+		var generated = payload.generated ? new Date(Number(payload.generated) * 1000) : null;
+		var badgeNode = document.getElementById('mptcp_live_badge');
+
+		if (badgeNode) {
+			badgeNode.className = 'omr-mptcp-badge ok';
+			badgeNode.innerHTML = '<%:Live%>';
+		}
+		setText('mptcp_updated', generated ? generated.toLocaleTimeString() : '<%:now%>');
+		renderCards(payload);
+		renderAlerts(payload, map);
+		renderInterfaces(payload.interfaces || []);
+		renderConnections(payload.connections || []);
+		renderSubflows(payload.connections || []);
+		renderCounters(payload, map);
+		renderRaw(payload);
+		previousCounters = map;
+	}
+
+	function showError(message) {
+		var badgeNode = document.getElementById('mptcp_live_badge');
+		if (badgeNode) {
+			badgeNode.className = 'omr-mptcp-badge err';
+			badgeNode.innerHTML = '<%:Error%>';
+		}
+		setHtml('mptcp_alerts', '<div class="omr-mptcp-alert"><span>' + badge('ERR', 'err') + '</span><span><strong><%:Unable to read MPTCP monitoring data%></strong><span>' + htmlEscape(message) + '</span></span></div>');
+	}
+
+	function poll() {
+		if (busy) return;
+		busy = true;
+		var xhr = new XMLHttpRequest();
+		xhr.open('POST', monitorUrl, true);
+		xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState != 4) return;
+			busy = false;
+			try {
+				if (xhr.status < 200 || xhr.status >= 300)
+					throw new Error('HTTP ' + xhr.status);
+				render(JSON.parse(xhr.responseText || '{}'));
+			}
+			catch (e) {
+				showError(e.message);
+			}
+		};
+		xhr.send('token=' + encodeURIComponent(token));
+	}
+
+	window.addEventListener('load', function() {
+		poll();
+		pollTimer = window.setInterval(poll, 5000);
+	});
+	window.addEventListener('unload', function() {
+		if (pollTimer) window.clearInterval(pollTimer);
+	});
+})();
 //]]></script>
 
-<% if stderr and #stderr > 0 then %><pre class="error"><%=pcdata(stderr)%></pre><% end %>
-<div class="cbi-section">
-    <span id="monitor"></span>
-    <script type="text/javascript">//<![CDATA[
-	update_monitor();
-    //]]></script>
+<div class="omr-mptcp-monitor">
+	<div class="omr-mptcp-hero">
+		<div>
+			<h2><a id="content" name="content"><%:MPTCP monitoring%></a></h2>
+			<p><%:Readable live view of Multipath TCP. It shows if OMR is really using multiple WAN paths, which paths are active, and which kernel counters are moving.%></p>
+			<p><%:Last update%>: <span id="mptcp_updated">-</span></p>
+		</div>
+		<span id="mptcp_live_badge" class="omr-mptcp-badge info"><%:Loading%></span>
+	</div>
+
+	<div class="omr-mptcp-help-grid">
+		<div class="omr-mptcp-help"><strong><%:MPTCP%></strong><p><%:MPTCP can split one connection into multiple TCP subflows, one for each usable WAN path.%></p></div>
+		<div class="omr-mptcp-help"><strong><%:Endpoint%></strong><p><%:An endpoint is an IP address that the kernel can use to create or receive extra MPTCP paths.%></p></div>
+		<div class="omr-mptcp-help"><strong><%:Subflow%></strong><p><%:A subflow is the real TCP path under an MPTCP connection. More subflows usually means more aggregation or redundancy.%></p></div>
+		<div class="omr-mptcp-help"><strong><%:Scheduler%></strong><p><%:The scheduler decides which path sends each packet. It affects speed, latency and failover behavior.%></p></div>
+	</div>
+
+	<div class="omr-mptcp-grid">
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Health%></div><div id="mptcp_health_value" class="omr-mptcp-value">-</div><p id="mptcp_health_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Paths%></div><div id="mptcp_paths_value" class="omr-mptcp-value">-</div><p id="mptcp_paths_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Connections%></div><div id="mptcp_conn_value" class="omr-mptcp-value">-</div><p id="mptcp_conn_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Subflows%></div><div id="mptcp_subflow_value" class="omr-mptcp-value">-</div><p id="mptcp_subflow_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Scheduler%></div><div id="mptcp_scheduler_value" class="omr-mptcp-value">-</div><p id="mptcp_scheduler_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Congestion%></div><div id="mptcp_cc_value" class="omr-mptcp-value">-</div><p id="mptcp_cc_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Path manager%></div><div id="mptcp_pm_value" class="omr-mptcp-value">-</div><p id="mptcp_pm_sub">-</p></div>
+		<div class="omr-mptcp-card"><div class="omr-mptcp-label"><%:Checksum%></div><div id="mptcp_checksum_value" class="omr-mptcp-value">-</div><p id="mptcp_checksum_sub">-</p></div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<div><h3 class="omr-mptcp-title"><%:What needs attention%></h3><p class="omr-mptcp-muted"><%:Simple checks derived from kernel state, configured paths and moving MPTCP counters.%></p></div>
+		</div>
+		<div id="mptcp_alerts" class="omr-mptcp-alerts"><div class="omr-mptcp-empty"><%:Loading%>...</div></div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<div><h3 class="omr-mptcp-title"><%:WAN paths and kernel endpoints%></h3><p class="omr-mptcp-muted"><%:This table compares the OMR interface role with what the Linux MPTCP kernel actually exposes.%></p></div>
+		</div>
+		<div id="mptcp_interfaces" class="omr-mptcp-empty"><%:Loading%>...</div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<div><h3 class="omr-mptcp-title"><%:Active MPTCP connections%></h3><p class="omr-mptcp-muted"><%:Logical MPTCP sessions. They should show two or more subflows when aggregation is active.%></p></div>
+		</div>
+		<div id="mptcp_connections" class="omr-mptcp-empty"><%:Loading%>...</div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<div><h3 class="omr-mptcp-title"><%:TCP subflows and path quality%></h3><p class="omr-mptcp-muted"><%:Technical view of the real TCP paths below MPTCP, including RTT, BBR bandwidth and congestion window when available.%></p></div>
+		</div>
+		<div id="mptcp_subflows" class="omr-mptcp-empty"><%:Loading%>...</div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div class="omr-mptcp-head">
+			<div><h3 class="omr-mptcp-title"><%:MPTCP event counters%></h3><p class="omr-mptcp-muted"><%:Counters are cumulative since boot. Delta shows what changed since the previous refresh, which is the useful part for troubleshooting.%></p></div>
+		</div>
+		<div id="mptcp_counters" class="omr-mptcp-empty"><%:Loading%>...</div>
+	</div>
+
+	<div class="omr-mptcp-panel">
+		<div id="mptcp_raw"></div>
+	</div>
 </div>
+
 <%+footer%>

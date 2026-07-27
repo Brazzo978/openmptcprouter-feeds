@@ -689,29 +689,6 @@ del_server_route6() {
 	fi
 }
 
-enable_pihole() {
-	local server=$1
-	nbserver=$((nbserver+1))
-	if [ -n "$server" ] && [ "$(uci -q get openmptcprouter.${server}.pihole)" = "1" ] && [ "$(uci -q get dhcp.@dnsmasq[0].server | grep '127.0.0.1#5353')" != "" ]; then
-		piholeenabled=$((piholeenabled+1))
-	fi
-}
-
-disable_pihole() {
-	local server=$1
-	if [ -n "$(uci -q get dhcp.@dnsmasq[0].server | grep '#53' | grep '10.255.25')" ]; then
-		_log "Disable Pi-Hole..."
-		uci -q del_list dhcp.@dnsmasq[0].server="$(uci -q get dhcp.@dnsmasq[0].server | tr ' ' '\n' | grep '#53' | grep '10.255.25')"
-		if [ -z "$(uci -q get dhcp.@dnsmasq[0].server | grep '127.0.0.1#5353')" ]; then
-			uci -q batch <<-EOF >/dev/null
-				add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
-				commit dhcp
-			EOF
-		fi
-		/etc/init.d/dnsmasq restart >/dev/null 2>&1
-	fi
-}
-
 dns_flush() {
 	unbound-control flush-negative >/dev/null 2>&1
 	unbound-control flush-bogus >/dev/null 2>&1
@@ -735,4 +712,3 @@ set_vpn_balancing_routes() {
 	_log "allvpnroutes: $allvpnroutes"
 	[ -n "$allvpnroutes" ] && ip route replace default scope global${allvpnroutes} >/dev/null 2>&1
 }
-

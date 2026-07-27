@@ -486,10 +486,11 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 					{
 						master++;
 					}
-					var zonewan = mArray.wans[i].zonewan;
-					var latency = mArray.wans[i].latency;
-					var mtu = mArray.wans[i].mtu;
-					var operator = mArray.wans[i].operator;
+						var zonewan = mArray.wans[i].zonewan;
+						var latency = mArray.wans[i].latency;
+						var mtu = mArray.wans[i].mtu;
+						var link_mtu = mArray.wans[i].link_mtu || '';
+						var operator = mArray.wans[i].operator;
 					var phonenumber = mArray.wans[i].phonenumber;
 					var donglestate = mArray.wans[i].donglestate;
 					var networktype = mArray.wans[i].networktype;
@@ -564,10 +565,11 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 					{
 						content += String.format('%s %s ms<br />','<%:latency:%>', latency);
 					}
-					if(mtu !== '')
-					{
-						content += String.format('%s %s<br />','<%:mtu:%>', mtu);
-					}
+						if(mtu !== '')
+						{
+							var mtu_details = (link_mtu !== '' && link_mtu !== mtu) ? String.format(' <small>(link mtu %s)</small>', link_mtu) : '';
+							content += String.format('%s %s%s<br />','PMTU:', mtu, mtu_details);
+						}
 					if (operator !== '')
 					{
 						content += String.format('%s %s<br />','<%:operator:%>', operator);
@@ -747,14 +749,15 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 						ipaddr=replaceLastNChars(ipaddr,"x",6);
 					}
 					var whois   = mArray.tunnels[i].whois;
-					var multipath = mArray.tunnels[i].multipath;
+						var multipath = mArray.tunnels[i].multipath;
 					if(multipath == 'master')
 					{
 						master++;
 					}
-					var latency = mArray.tunnels[i].latency;
-					var mtu = mArray.tunnels[i].mtu;
-					var gateway = mArray.tunnels[i].gateway;
+						var latency = mArray.tunnels[i].latency;
+						var mtu = mArray.tunnels[i].mtu;
+						var link_mtu = mArray.tunnels[i].link_mtu || '';
+						var gateway = mArray.tunnels[i].gateway;
 					if (anonymize == "true" && testPrivateIP(gateway) == false)
 					{
 						gateway=replaceLastNChars(gateway,"x",6);
@@ -797,10 +800,11 @@ local statuslogo = ucic:get("openmptcprouter","settings","statuslogo") or "openm
 					{
 						content += String.format('%s %s ms<br />','<%:latency:%>', latency);
 					}
-					if(mtu !== '')
-					{
-						content += String.format('%s %s<br />','<%:mtu:%>', mtu);
-					}
+						if(mtu !== '')
+						{
+							var mtu_details = (link_mtu !== '' && link_mtu !== mtu) ? String.format(' <small>(link mtu %s)</small>', link_mtu) : '';
+							content += String.format('%s %s%s<br />','PMTU:', mtu, mtu_details);
+						}
 					if(ipaddr == '')
 					{
 						statusMessage += '<%:No IP defined%>' + '<br />'

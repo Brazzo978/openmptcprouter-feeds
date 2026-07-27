@@ -1,0 +1,11 @@
+{
+	"luci-app-mqvpn2": {
+		"description": "Grant UCI access for luci-app-mqvpn2",
+		"read": {
+			"uci": [ "mqvpn2" ]
+		},
+		"write": {
+			"uci": [ "mqvpn2" ]
+		}
+	}
+}
