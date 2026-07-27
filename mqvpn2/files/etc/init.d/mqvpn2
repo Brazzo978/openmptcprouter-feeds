@@ -40,6 +40,19 @@ append_auto_path() {
 	printf 'Path = %s\n' "$ifname" >> "$CONFIG_FILE"
 }
 
+append_lan_route() {
+	local lan_dev lan_route
+
+	lan_dev="$(ifstatus lan 2>/dev/null | jsonfilter -q -e '@["l3_device"]')"
+	[ -z "$lan_dev" ] && lan_dev="$(uci -q get network.lan.device)"
+	[ -z "$lan_dev" ] && lan_dev="$(uci -q get network.lan.ifname)"
+	[ -z "$lan_dev" ] && return 0
+
+	lan_route="$(ip -4 route show dev "$lan_dev" scope link 2>/dev/null | awk '{print $1; exit}')"
+	echo "$lan_route" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || return 0
+	printf '\n[Routes]\nRoute = %s\n' "$lan_route" >> "$CONFIG_FILE"
+}
+
 start_service() {
 	local enable host port key dev localip remoteip scheduler cc mtu
 	local init_max_path_id reorder insecure manage_routes paths_auto
@@ -171,6 +184,7 @@ start_service() {
 		config_load network
 		config_foreach append_auto_path interface
 	fi
+	append_lan_route
 
 	{
 		echo
