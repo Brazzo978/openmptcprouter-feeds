@@ -50,6 +50,7 @@ MY_DEPENDS := \
     !TARGET_mvebu:speedtestcpp \
     iftop \
     htop \
+    (TARGET_x86||TARGET_x86_64):btop \
     nano \
     tcpdump \
     ethtool \
