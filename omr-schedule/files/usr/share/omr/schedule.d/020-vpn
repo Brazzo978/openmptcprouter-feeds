@@ -13,8 +13,6 @@ if [ -z "$configured_vpn" ]; then
 		configured_vpn="glorytun_tcp"
 	elif [ "$(uci -q get glorytun-udp.vpn.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/glorytun-udp ]; then
 		configured_vpn="glorytun_udp"
-	elif [ "$(uci -q get mlvpn.general.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/mlvpn ]; then
-		configured_vpn="mlvpn"
 	elif [ "$(uci -q get mqvpn.settings.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/mqvpn ]; then
 		configured_vpn="mqvpn"
 	elif [ "$(uci -q get dsvpn.vpn.enable 2>/dev/null)" = "1" ] && [ -f /etc/init.d/dsvpn ]; then
@@ -67,7 +65,7 @@ _set_openvpn_state() {
 
 	[ ! -f /etc/init.d/openvpn ] && return
 
-	if [ "$configured_vpn" = "openvpn" ] || [ "$configured_vpn" = "openvpn_bonding" ]; then
+	if [ "$configured_vpn" = "openvpn" ]; then
 		want=1
 	else
 		want=0
@@ -89,7 +87,6 @@ _set_openvpn_state() {
 
 _set_vpn_state "glorytun_tcp"  glorytun     vpn              enable  glorytun
 _set_vpn_state "glorytun_udp"  glorytun-udp vpn              enable  glorytun-udp
-_set_vpn_state "mlvpn"         mlvpn        general          enable  mlvpn
 _set_vpn_state "mqvpn"         mqvpn        settings         enable  mqvpn
 _set_vpn_state "dsvpn"         dsvpn        vpn              enable  dsvpn
 _set_vpn_state "softethervpn"  softethervpn openmptcprouter  enable  softethervpnclient

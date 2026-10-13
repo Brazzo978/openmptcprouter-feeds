@@ -12,7 +12,7 @@ var callSettingsAdd = rpc.declare({
 		'redirect_ports',
 		'tcp_keepalive_time', 'tcp_fin_timeout', 'tcp_syn_retries', 'tcp_fastopen',
 		'tcp_retries1', 'tcp_retries2', 'ip_default_ttl',
-		'disable_ipv6', 'disable_6in4', 'disable_modemmanager', 'banudpip',
+		'disable_ipv6', 'disable_6in4', 'banudpip',
 		'externalcheck', 'openvpnlb', 'restricttolan', 'debug', 'savevnstat',
 		'disablegwping', 'status_vps_timeout', 'status_getip_timeout', 'status_whois_timeout',
 		'disableloopdetection', 'disableserverhttptest', 'disableintfrename',
@@ -312,9 +312,6 @@ return view.extend({
 			_('Disable interfaces auto rename'),
 			_('Disable renaming interfaces'));
 
-		o = s.taboption('other', form.Flag, 'disable_modemmanager',
-			_('Disable ModemManager'));
-
 		o = s.taboption('other', form.Flag, 'shadowsocksudp',
 			_('Shadowsocks UDP'),
 			_('When proxy shadowsocks is used, use it for UDP if VPN down'));
@@ -467,7 +464,6 @@ return view.extend({
 				get('ip_default_ttl'),
 				get('disable_ipv6'),
 				get('disable_6in4'),
-				get('disable_modemmanager'),
 				get('banudpip'),
 				get('external_check'),
 				get('openvpn_lb'),

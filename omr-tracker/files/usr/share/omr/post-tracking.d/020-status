@@ -253,25 +253,6 @@ if [ -n "$OMR_TRACKER_INTERFACE" ] && { [ -z "$_lc" ] || [ "$(uci -q get openmpt
 	# No shadowsocks ping here: when external_check=0 the branch above already
 	# set lc=$_now unconditionally, so a per-WAN ping to the proxy server could
 	# only ever rewrite the value it just wrote.
-	proto="$(uci -q get network.$OMR_TRACKER_INTERFACE.proto)"
-	#if [ "$proto" = "qmi" ]; then
-	#	intfdata="$(omr-qmi $OMR_TRACKER_DEVICE all | tr -d '\n')"
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.operator=$(echo $intfdata | awk -F";" '{print $2}')
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.number=$(echo $intfdata | awk -F";" '{print $3}')
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.state=$(echo $intfdata | awk -F";" '{print $4}')
-	#elif [ "$proto" = "modemmanager" ]; then
-	#	intfdata="$(omr-modemmanager $OMR_TRACKER_DEVICE all)"
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.operator=$(echo $intfdata | awk -F";" '{print $2}')
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.number=$(echo $intfdata | awk -F";" '{print $3}')
-	#	uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.state=$(echo $intfdata | awk -F";" '{print $4}')
-	#else
-	if [ "$proto" != "qmi" ] && [ "$proto" != "modemmanager" ]; then
-		if [ -n "$OMR_TRACKER_DEVICE_GATEWAY" ] && [ -n "$OMR_TRACKER_DEVICE_IP" ] && [ "$(curl --interface $OMR_TRACKER_DEVICE_IP -s -w %{http_code} -m 2 http://$OMR_TRACKER_DEVICE_GATEWAY/api/webserver/SesTokInfo -o /dev/null)" = "200" ]; then
-			uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.manufacturer='huawei'
-		else
-			uci -q delete openmptcprouter.$OMR_TRACKER_INTERFACE.manufacturer
-		fi
-	fi
 	_lc_after=$(uci -q get openmptcprouter.$OMR_TRACKER_INTERFACE.lc)
 	if [ -z "$_lc_after" ] || [ $((_now - _lc_after)) -gt 3600 ]; then
 		uci -q set openmptcprouter.$OMR_TRACKER_INTERFACE.lc=$((_now - 3400))

@@ -297,7 +297,7 @@ _ping() {
 	[ -z "$host" ] && return
 	local device="$2"
 	local localip="$3"
-	if [ -n "$OMR_TRACKER_INTERFACE" ] && { [ "$OMR_TRACKER_NO_BIND" = "1" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "3g" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "qmi" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "ncm" ]; }; then
+	if [ -n "$OMR_TRACKER_INTERFACE" ] && { [ "$OMR_TRACKER_NO_BIND" = "1" ] ]; }; then
 		ret=$(ping -I "${device}" \
 			-w "$OMR_TRACKER_TIMEOUT" \
 			-c "$OMR_TRACKER_COUNT" \
@@ -382,18 +382,6 @@ _restart
 OMR_TRACKER_INTERFACE_PROTO="$(uci -q get network.${OMR_TRACKER_INTERFACE}.proto)"
 OMR_TRACKER_PREV_STATUS=""
 # The modem may still be initializing: wait for netifd to report the
-# interface up instead of sleeping blindly, with the configured delay
-# (default 120s) as the cap. Tracking — and with it MPTCP endpoint setup —
-# then starts as soon as the connection is established.
-[ "$OMR_TRACKER_INTERFACE_PROTO" = "modemmanager" ] && {
-	_mm_delay=$(uci -q get network.${OMR_TRACKER_INTERFACE}.delay || echo '120')
-	while [ "$_mm_delay" -gt 0 ]; do
-		[ "$(ubus call network.interface."$OMR_TRACKER_INTERFACE" status 2>/dev/null | jsonfilter -q -e '@.up')" = "true" ] && break
-		sleep 2
-		_mm_delay=$((_mm_delay - 2))
-	done
-}
-
 # Whether this interface's "gateway" is actually a remote endpoint, which
 # decides if the liveness ping below is worth measuring (see _ping's third
 # argument and _apply_ping_metrics). For a WAN it is not: the gateway is one
@@ -694,16 +682,7 @@ while true; do
 							fi
 							[ -n "$_host4_resolved" ] && OMR_TRACKER_HOST="$_host4_resolved"
 							if [ -n "$OMR_TRACKER_HOST" ]; then
-								if [ "$OMR_TRACKER_INTERFACE_PROTO" = "3g" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "qmi" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "ncm" ]; then
-									# Check if route is not used
-									while ! ip route add $OMR_TRACKER_HOST via $OMR_TRACKER_DEVICE_GATEWAY dev $OMR_TRACKER_DEVICE src $OMR_TRACKER_DEVICE_IP > /dev/null 2>&1
-									do
-										logger -t "omr-tracker" "Can't create route to $OMR_TRACKER_HOST via $OMR_TRACKER_DEVICE_GATEWAY dev $OMR_TRACKER_DEVICE src $OMR_TRACKER_DEVICE_IP. waiting..."
-										sleep 2
-										ip route del "$OMR_TRACKER_HOST" via "$OMR_TRACKER_DEVICE_GATEWAY" dev "$OMR_TRACKER_DEVICE" src "$OMR_TRACKER_DEVICE_IP" > /dev/null 2>&1
-										_restart
-									done
-								fi
+
 								if [ "$OMR_TRACKER_TYPE" = "ping" ]; then
 									_ping "$OMR_TRACKER_HOST" "$OMR_TRACKER_DEVICE" "$host_localip"
 									statusb=$?
@@ -817,16 +796,7 @@ while true; do
 							fi
 							[ -n "$_host6_resolved" ] && OMR_TRACKER_HOST6="$_host6_resolved"
 							if [ -n "$OMR_TRACKER_HOST6" ]; then
-								if [ "$OMR_TRACKER_INTERFACE_PROTO" = "3g" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "qmi" ] || [ "$OMR_TRACKER_INTERFACE_PROTO" = "ncm" ]; then
-									# Check if route is not used
-									while ! ip -6 route add $OMR_TRACKER_HOST6 via $OMR_TRACKER_DEVICE_GATEWAY6 dev $OMR_TRACKER_DEVICE src $OMR_TRACKER_DEVICE_IP6 > /dev/null 2>&1
-									do
-										logger -t "omr-tracker" "Can't create route to $OMR_TRACKER_HOST6 via $OMR_TRACKER_DEVICE_GATEWAY6 dev $OMR_TRACKER_DEVICE src $OMR_TRACKER_DEVICE_IP6. waiting..."
-										sleep 2
-										ip -6 route del "$OMR_TRACKER_HOST6" via "$OMR_TRACKER_DEVICE_GATEWAY6" dev "$OMR_TRACKER_DEVICE" src "$OMR_TRACKER_DEVICE_IP6" > /dev/null 2>&1
-										_restart
-									done
-								fi
+
 								if [ "$OMR_TRACKER_TYPE" = "ping" ]; then
 									_ping "$OMR_TRACKER_HOST6" "$OMR_TRACKER_DEVICE" "$host_localip"
 									statusb=$?

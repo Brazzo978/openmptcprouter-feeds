@@ -1,0 +1,12 @@
+--- a/doc/Makefile.am
++++ b/doc/Makefile.am
+@@ -107,7 +107,9 @@ endif
+ 
+ if WIN32
+ else
++if HAVE_PYDOCUTILS
+ dist_man_MANS = $(build_man_pages)
++endif
+ endif
+ 
+ dist-hook : $(build_man_pages) $(build_html_pages)

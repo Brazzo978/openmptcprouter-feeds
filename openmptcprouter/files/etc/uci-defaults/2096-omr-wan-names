@@ -61,8 +61,8 @@ for _omr_w in $_omr_real_wans; do
 done
 [ -z "$_omr_avail" ] && exit 0
 
-# The uci "device" of a modemmanager/qmi link is a /sys or /dev path, not a
-# network device, and a wifi station interface carries none at all. Fall back
+# A uci "device" may be a /sys or /dev path rather than a network device,
+# and a wifi station interface can have none at all. Fall back
 # to the l3 device ubus knows when the interface is already up (installing a
 # package re-runs this script on a live system), and hand back nothing rather
 # than a path no qdisc can attach to.

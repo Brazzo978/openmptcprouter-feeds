@@ -26,6 +26,17 @@
 		"order": 12,
 		"action": {
 			"type": "view",
+			"path": "mptcp/mptcp_paths"
+		},
+		"depends": {
+			"acl": [ "luci-app-mptcp" ]
+		}
+	},
+	"admin/network/mptcp/mptcp_kernel_diagnostics": {
+		"title": "Kernel diagnostics",
+		"order": 13,
+		"action": {
+			"type": "view",
 			"path": "mptcp/mptcp_diagnostics"
 		},
 		"depends": {

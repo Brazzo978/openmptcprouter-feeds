@@ -349,6 +349,10 @@ return view.extend({
 			_('Forward a port (not a range) from server using V2Ray/XRay proxy (if enabled) instead of VPN'));
 		o.modalonly = true;
 
+		o = s.taboption('advanced', form.Flag, 'force_xray_pf', _('Force XRay for this TCP port forward'),
+			_('Use a dedicated XRay reverse connection for one TCP port even when another proxy or VPN is active. UDP continues through the normal VPN. DMZ and source filters are not supported for forced TCP forwards.'));
+		o.modalonly = true;
+
 		if (!L.hasSystemFeature('firewall4')) {
 			o = s.taboption('advanced', form.Value, 'extra', _('Extra arguments'),
 				_('Passes additional arguments to iptables. Use with care!'));

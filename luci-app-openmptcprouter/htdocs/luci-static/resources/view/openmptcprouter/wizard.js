@@ -29,7 +29,7 @@ var callOMRWizardAdd = rpc.declare({
 		'shadowsocks_key', 'shadowsocks2022_key',
 		'glorytun_key', 'dsvpn_key',
 		'mqvpn_key', 'mqvpn_scheduler', 'mqvpn_port',
-		'mlvpn_password', 'softethervpn_password', 'ubond_password',
+		'softethervpn_password', 'ubond_password',
 		'v2ray_user', 'xray_user', 'xray_transport',
 		'v2rayudp', 'forceretrieve',
 		'mptcpovervpn_vpn', 'country', 'dns64',
@@ -60,7 +60,7 @@ function callOMRWizardAddCompat(payload) {
 		payload.mqvpn_key,
 		payload.mqvpn_scheduler,
 		payload.mqvpn_port,
-		payload.mlvpn_password,
+
 		payload.softethervpn_password,
 		payload.ubond_password,
 		payload.v2ray_user,
@@ -105,7 +105,6 @@ function callOMRWizardAddCompat(payload) {
 				mqvpn_key: payload.mqvpn_key,
 				mqvpn_scheduler: payload.mqvpn_scheduler,
 				mqvpn_port: payload.mqvpn_port,
-				mlvpn_password: payload.mlvpn_password,
 				softethervpn_password: payload.softethervpn_password,
 				ubond_password: payload.ubond_password,
 				v2ray_user: payload.v2ray_user,
@@ -166,7 +165,7 @@ function uniqueValues(list) {
 	});
 }
 
-var excludeRe = /^(lo|6in4-omr6in4|mlvpn0|ifb|sit|gre|ip6|teql|erspan|tun|bond|vxlan|omrvxlan)/;
+var excludeRe = /^(lo|6in4-omr6in4|ifb|sit|gre|ip6|teql|erspan|tun|bond|vxlan|omrvxlan)/;
 
 function ensureWizardCSSLoaded() {
 	if (document.getElementById('omr-wizard-css'))
@@ -190,7 +189,7 @@ return view.extend({
 			uci.load('xray').catch(function(){}),
 			uci.load('glorytun').catch(function(){}),
 			uci.load('dsvpn').catch(function(){}),
-			uci.load('mlvpn').catch(function(){}),
+			Promise.resolve(), /* unused legacy load slot */
 			uci.load('ubond').catch(function(){}),
 			uci.load('softethervpn').catch(function(){}),
 			uci.load('sqm').catch(function(){}),
@@ -204,20 +203,17 @@ return view.extend({
 			fileExists('/usr/sbin/glorytun'),
 			fileExists('/usr/sbin/glorytun-udp'),
 			fileExists('/usr/sbin/dsvpn'),
-			fileExists('/usr/sbin/mlvpn'),
+			Promise.resolve(false), /* unused legacy VPN slot */
 			fileExists('/usr/sbin/ubond'),
 			fileExists('/etc/init.d/openvpn'),
-			fileExists('/etc/init.d/openvpnbonding'),
+			Promise.resolve(false), /* unused legacy VPN slot */
 			fileExists('/etc/init.d/softethervpnclient'),
 			fileExists('/usr/bin/wg'),
 			callFileExec('/bin/sh', ['/usr/share/openmptcprouter/detect-pkg.sh', 'luci-app-sqm']),
 			callFileExec('/bin/sh', ['/usr/share/openmptcprouter/detect-pkg.sh', 'luci-app-qos']),
 			callFileExec('/bin/sh', ['-c', 'grep -q aes /proc/cpuinfo && echo -n 1 || echo -n 0']),
-			callFileExec('/bin/sh', ['/usr/share/openmptcprouter/list-serial.sh', 'ttyUSB']),
-			callFileExec('/bin/sh', ['/usr/share/openmptcprouter/list-serial.sh', 'cdc-wdm']),
-			callFileExec('/bin/sh', ['-c', 'timeout 1 /usr/bin/mmcli -L 2>/dev/null || true']),
-		uci.load('mqvpn').catch(function(){}),
-		fileExists('/usr/sbin/mqvpn')
+			uci.load('mqvpn').catch(function(){}),
+			fileExists('/usr/sbin/mqvpn')
 		]);
 	},
 
@@ -226,22 +222,13 @@ return view.extend({
 		var has = {
 			ssLibev: data[16], ssRust: data[17], v2ray: data[18], xray: data[19],
 			glorytun: data[20], glorytunUdp: data[21], dsvpn: data[22],
-			mlvpn: data[23], ubond: data[24], openvpn: data[25],
-			openvpnBond: data[26], softether: data[27], wg: data[28],
+			ubond: data[24], openvpn: data[25],
+			softether: data[27], wg: data[28],
 			sqm: (data[29]||'').trim() === '1',
 			qos: (data[30]||'').trim() === '1',
 			aes: (data[31]||'').trim() === '1',
-			mqvpn: data[36]
+			mqvpn: data[33]
 		};
-		var ttyUSB = (data[32]||'').trim().split('\n').filter(Boolean);
-		var ttyCdc = (data[33]||'').trim().split('\n').filter(Boolean);
-		var ttyAll = ttyUSB.concat(ttyCdc);
-		var alltty = [];
-		(data[34]||'').split('\n').forEach(function(l) {
-			var mt = l.match(/\/(\d+)\s/);
-			if (mt) alltty.push('/sys/devices/modem' + mt[1]);
-		});
-
 		var physDevs = [];
 		(devs || []).forEach(function(d) {
 			var n = d.getName();
@@ -306,9 +293,6 @@ return view.extend({
 					masterintf: uci.get('network', intf, 'masterintf') || '',
 					ifname: dev.ifname,
 					vlan: dev.vlan,
-					device_ncm: proto === 'ncm' ? device : '',
-					device_qmi: proto === 'qmi' ? device : '',
-					device_modemmanager: proto === 'modemmanager' ? device : '',
 					ipaddr: uci.get('network', intf, 'ipaddr') || '',
 					ip6addr: uci.get('network', intf, 'ip6addr') || '',
 					netmask: uci.get('network', intf, 'netmask') || '',
@@ -316,13 +300,9 @@ return view.extend({
 					ip6gw: uci.get('network', intf, 'ip6gw') || '',
 					ipv6: uci.get('openmptcprouter', intf, 'ipv6') ||
 						(proto === 'dhcp' ? '0' : (uci.get('network', intf, 'ipv6') || '0')),
-					apn: uci.get('network', intf, 'apn') || '',
-					pincode: uci.get('network', intf, 'pincode') || '',
-					delay: uci.get('network', intf, 'delay') || '',
 					username: uci.get('network', intf, 'username') || '',
 					password: uci.get('network', intf, 'password') || '',
 					auth: uci.get('network', intf, 'auth') || '',
-					mode: uci.get('network', intf, 'mode') || '',
 					sqmenabled: uci.get('sqm', intf, 'enabled') || '0',
 					sqmautorate: uci.get('sqm', intf, 'autorate') || '0',
 					qosenabled: uci.get('qos', intf, 'enabled') || '0',
@@ -382,7 +362,6 @@ return view.extend({
 				mqvpn_key: uci.get('mqvpn', 'auth', 'key') || '',
 				mqvpn_scheduler: uci.get('mqvpn', 'multipath', 'scheduler') || '',
 				mqvpn_port: uci.get('mqvpn', 'server', 'port') || '',
-				mlvpn_password: uci.get('mlvpn', 'general', 'password') || '',
 				softethervpn_password: uci.get('softethervpn', 'openmptcprouter', 'password') || '',
 				ubond_password: uci.get('ubond', 'general', 'password') || '',
 				v2ray_user: uci.get('v2ray', 'omrout', 's_vmess_user_id') || '',
@@ -416,7 +395,6 @@ return view.extend({
 		if (has.glorytun || has.glorytunUdp) m.chain('glorytun');
 		if (has.dsvpn)   m.chain('dsvpn');
 		if (has.mqvpn)   m.chain('mqvpn');
-		if (has.mlvpn)   m.chain('mlvpn');
 		if (has.ubond)   m.chain('ubond');
 		if (has.softether) m.chain('softethervpn');
 		if (has.sqm) m.chain('sqm');
@@ -705,7 +683,6 @@ return view.extend({
 			[has.glorytun||has.glorytunUdp, '_glorytun_key', _('Glorytun key'),          'glorytun',      'vpn',              'key'],
 			[has.dsvpn,                     '_dsvpn_key',    _('A Dead Simple VPN key'), 'dsvpn',         'vpn',              'key'],
 			[has.mqvpn,                     '_mqvpn_key',    _('MQVPN key'),             'mqvpn',         'auth',             'key'],
-			[has.mlvpn,                     '_mlvpn_pw',     _('MLVPN password'),        'mlvpn',         'general',          'password'],
 			[has.ubond,                     '_ubond_pw',     _('UBOND password'),        'ubond',         'general',          'password'],
 			[has.softether,                 '_softether_pw', _('SoftEther VPN password'),'softethervpn',  'openmptcprouter',  'password']
 		];
@@ -741,10 +718,8 @@ return view.extend({
 			'glorytun_udp':    ['Glorytun UDP',      has.glorytunUdp],
 			'dsvpn':           ['A Dead Simple VPN',  has.dsvpn],
 			'mqvpn':           ['MQVPN',             has.mqvpn],
-			'mlvpn':           ['MLVPN',             has.mlvpn],
 			'ubond':           ['UBOND',             has.ubond],
 			'openvpn':         ['OpenVPN TCP',       has.openvpn],
-			'openvpn_bonding': ['OpenVPN Bonding',   has.openvpnBond],
 			'softether':       ['SoftEther VPN',     has.softether]
 		};
 		var availVpn = L.toArray(uci.get('openmptcprouter', 'vps', 'available_vpn'));
@@ -913,11 +888,7 @@ return view.extend({
 		o.value('static', _('Static address'));
 		o.value('dhcp', _('DHCP'));
 		o.value('dhcpv6', _('DHCPv6'));
-		o.value('modemmanager', _('ModemManager'));
-		o.value('ncm', _('NCM'));
 		o.value('pppoe', _('PPPoE'));
-		o.value('qmi', _('QMI'));
-		o.value('other', _('Other'));
 		o.default = 'static';
 		o.depends('_type', 'normal');
 		o.depends('_type', 'bridge');
@@ -1003,87 +974,24 @@ return view.extend({
 		o.write = function(sid, val) { uci.set('openmptcprouter', sid, 'ipv6', val); };
 		o.remove = function(sid) { uci.unset('openmptcprouter', sid, 'ipv6'); };
 
-		// Device NCM — proto=ncm
-		o = s.option(form.ListValue, '_device_ncm', _('Device'));
-		o.rmempty = true;
-		ttyAll.forEach(function(d) { o.value(d); });
-		o.depends('proto', 'ncm');
-		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
-		o.write = function(sid, val) { uci.set('network', sid, 'device', val); };
-
-		// Device QMI — proto=qmi
-		o = s.option(form.ListValue, '_device_qmi', _('Device'));
-		o.rmempty = true;
-		ttyCdc.forEach(function(d) { o.value(d); });
-		o.depends('proto', 'qmi');
-		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
-		o.write = function(sid, val) { uci.set('network', sid, 'device', val); };
-
-		// Device ModemManager — proto=modemmanager
-		o = s.option(form.ListValue, '_device_mm', _('Device'));
-		o.rmempty = true;
-		alltty.forEach(function(d) { o.value(d); });
-		o.depends('proto', 'modemmanager');
-		o.cfgvalue = function(sid) { return uci.get('network', sid, 'device'); };
-		o.write = function(sid, val) { uci.set('network', sid, 'device', val); };
-
-		// APN — proto=ncm|qmi|modemmanager only
-		o = s.option(form.Value, 'apn', _('APN'));
-		o.rmempty = true;
-		o.depends('proto', 'ncm');
-		o.depends('proto', 'qmi');
-		o.depends('proto', 'modemmanager');
-
-		// PIN code — proto=ncm|qmi|modemmanager only
-		o = s.option(form.Value, 'pincode', _('PIN code'));
-		o.rmempty = true;
-		o.depends('proto', 'ncm');
-		o.depends('proto', 'qmi');
-		o.depends('proto', 'modemmanager');
-
-		// Service type — proto=ncm only
-		o = s.option(form.ListValue, 'mode', _('Service Type'));
-		o.rmempty = true;
-		o.value('', _('Modem default'));
-		o.value('preferlte', _('Prefer LTE'));
-		o.value('preferumts', _('Prefer UMTS'));
-		o.value('lte', _('LTE'));
-		o.value('umts', _('UMTS/GPRS'));
-		o.value('gsm', _('GPRS only'));
-		o.value('auto', _('auto'));
-		o.depends('proto', 'ncm');
-
-		// Authentication — proto=qmi|pppoe only
+		// Authentication — proto=pppoe only
 		o = s.option(form.ListValue, 'auth', _('Authentication Type'));
 		o.value('none', _('NONE'));
 		o.value('pap', _('PAP'));
 		o.value('chap', _('CHAP'));
 		o.value('both', _('PAP/CHAP'));
 		o.default = 'none';
-		o.depends('proto', 'qmi');
 		o.depends('proto', 'pppoe');
 
-		// PAP/CHAP — proto=ncm|qmi|pppoe only
+		// PAP/CHAP — proto=pppoe only
 		o = s.option(form.Value, 'username', _('PAP/CHAP username'));
 		o.rmempty = true;
-		o.depends('proto', 'ncm');
-		o.depends('proto', 'qmi');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'password', _('PAP/CHAP password'));
 		o.rmempty = true;
 		o.password = true;
-		o.depends('proto', 'ncm');
-		o.depends('proto', 'qmi');
 		o.depends('proto', 'pppoe');
-
-		// Modem init timeout — proto=ncm|qmi only
-		o = s.option(form.Value, 'delay', _('Modem init timeout'));
-		o.rmempty = true;
-		o.datatype = 'uinteger';
-		o.optional = true;
-		o.depends('proto', 'ncm');
-		o.depends('proto', 'qmi');
 
 		// ── Always visible WAN fields ──
 
@@ -1109,7 +1017,7 @@ return view.extend({
 		o.rmempty = true;
 		o.datatype = 'uinteger';
 		o.optional = true;
-		o.description = _('65 often solves LTE tethering detection.');
+		o.description = _('Override the outgoing IPv4 TTL for this WAN.');
 		o.cfgvalue = function(sid) { return uci.get('network', sid + '_dev', 'ttl'); };
 		o.write = function(sid, val) {
 			if (val) uci.set('network', sid + '_dev', 'ttl', val);
@@ -1129,6 +1037,12 @@ return view.extend({
 			o.cfgvalue = function(sid) { return uci.get('sqm', sid, 'enabled') || '0'; };
 			o.write = function(sid, val) { uci.set('sqm', sid, 'enabled', val); };
 			o.remove = function(sid) { uci.set('sqm', sid, 'enabled', '0'); };
+
+			o = s.option(form.Flag, '_sqm_autorate', _('Automatic SQM rate adjustment'));
+			o.default = '0';
+			o.cfgvalue = function(sid) { return uci.get('sqm', sid, 'autorate') || '0'; };
+			o.write = function(sid, val) { uci.set('sqm', sid, 'autorate', val); };
+			o.remove = function(sid) { uci.set('sqm', sid, 'autorate', '0'); };
 		}
 
 		if (has.qos) {
