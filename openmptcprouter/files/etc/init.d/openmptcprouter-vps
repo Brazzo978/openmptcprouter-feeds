@@ -1423,10 +1423,15 @@ _set_mptcp_vps() {
 	[ -z "$congestion" ] && congestion="bbr"
 	case "$nanbbr_aggressiveness" in
 		''|*[!0-9]*) nanbbr_aggressiveness="50" ;;
+		*)
+			# Use a canonical JSON integer even if UCI was edited as "008".
+			nanbbr_aggressiveness="$(printf '%s' "$nanbbr_aggressiveness" | sed 's/^0*//')"
+			case "$nanbbr_aggressiveness" in
+				[1-9]|[1-9][0-9]|100) ;;
+				*) nanbbr_aggressiveness="50" ;;
+			esac
+			;;
 	esac
-	if [ "$nanbbr_aggressiveness" -lt 1 ] || [ "$nanbbr_aggressiveness" -gt 100 ]; then
-		nanbbr_aggressiveness="50"
-	fi
 	# Variable profiles require the value even before their module is loaded.
 	# Other algorithms omit it unless a capable server already reports a value.
 	nanbbr_json=""
