@@ -11,3 +11,5 @@ Client modem management, MLVPN and OpenVPN bonding paths are removed. Ordinary O
 MQVPN retains official 0.16.2; private changes to its old engine are outside this port. The paired VPS retains legacy client support.
 
 Validation includes diagnostic fixtures, scheduler hook cases, SQM ratio cases, NanBBR init validation and rollback, API tests and real TLS XRay reverse forwarding. The firmware boots in an isolated VM and the eight schedulers load and select. Multi-WAN and the complete remote WireGuard path require a deployment test.
+
+The inherited multi-target GitHub Actions workflow clones Ysurac repositories and cannot resolve this fork's branch name. It excludes omr-v0.64.2-3K. Build the frozen x86_64/6.18 release through the matching build repository and run-build-3k.sh; final firmware, BIOS/UEFI, TCP and BPF validation reports are recorded there. This workflow-only exclusion does not change the pinned release feed code b5f28146bc807d90c2bda0da8d83111c2bf34f71.
