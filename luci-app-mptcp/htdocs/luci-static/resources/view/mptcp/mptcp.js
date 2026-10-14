@@ -308,9 +308,9 @@ return L.view.extend({
 	o = s.option(form.ListValue, "congestion", _("Congestion Control"),_("Default is BBRv3 (bbr)"));
 	o.load = function(section_id) {
 		return fs.exec_direct('/sbin/sysctl', ['-n', 'net.ipv4.tcp_available_congestion_control']).then(L.bind(function(entries) {
-			var congestioncontrol = entries.toString().split(' ');
+			var congestioncontrol = entries.toString().trim().split(/\s+/);
 			for (var d in congestioncontrol) {
-				this.value(congestioncontrol[d]);
+				this.value(congestioncontrol[d], congestioncontrol[d] === "bbr" ? _("BBRv3 (bbr)") : congestioncontrol[d]);
 			};
 			return this.super('load', [section_id]);
 		}, this));
