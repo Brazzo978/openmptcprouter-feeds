@@ -31,6 +31,8 @@ define Package/$(PKG_NAME)/conffiles
 /etc/config/$(PKG_NAME)
 /etc/vnstat_backup.tar.gz
 /etc/firewall.user
+/etc/omr-test-speed-hosts.list
+/etc/omr-test-speed-hosts6.list
 endef
 
 define Build/Compile

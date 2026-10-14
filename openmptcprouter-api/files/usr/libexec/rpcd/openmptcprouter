@@ -776,6 +776,115 @@ local function shell_quote(value)
 	return "'" .. s:gsub("'", "'\"'\"'") .. "'"
 end
 
+
+-- Status PMTU mirrors the .62 path probe: IPv4 DF ping towards the VPS on
+-- each WAN/tunnel, binary search up to the link MTU, with a short-lived cache.
+local function read_status_link_mtu(uci, interface, ifname)
+	local mtu = ""
+	if type(ifname) == "string" and ifname:match("^[%w_.:@-]+$") then
+		local path = "/sys/class/net/" .. ifname .. "/mtu"
+		if fs.access(path) then
+			mtu = (fs.readfile(path) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		end
+	end
+	if mtu == "" and interface then
+		mtu = uci:get("openmptcprouter", interface, "mtu") or ""
+	end
+	return tostring(mtu)
+end
+
+local function status_path_mtu(ifname, target, link_mtu, family, can_probe)
+	if type(ifname) ~= "string" or ifname == "" or type(target) ~= "string" or target == "" then
+		return ""
+	end
+	if not ifname:match("^[%w_.:@-]+$") then
+		return ""
+	end
+	local max_mtu = tonumber(link_mtu) or 1500
+	local min_mtu, overhead, ping_family = 576, 28, ""
+	if family == "6" then
+		min_mtu, overhead, ping_family = 1280, 48, "-6 "
+	end
+	if max_mtu < min_mtu then return "" end
+
+	local now = os.time()
+	local ttl = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_cache_ttl") or "300") or 300
+	local tries = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_probe_tries") or "2") or 2
+	tries = math.max(1, math.min(5, tries))
+	local key = (ifname .. "_" .. target .. "_" .. family):gsub("[^%w_.-]", "_")
+	local cache_file = "/tmp/omr-pmtu-" .. key
+	local cached = io.open(cache_file, "r")
+	if cached then
+		local contents = cached:read("*a") or ""
+		cached:close()
+		local ts, value = contents:match("^(%d+)%s+(%d+)")
+		if ts and value and now - tonumber(ts) < ttl then
+			return value
+		end
+	end
+
+	local function cache(value)
+		local f = io.open(cache_file, "w")
+		if f then
+			f:write(tostring(now), " ", tostring(value), "\n")
+			f:close()
+		end
+	end
+	local function probe(mtu)
+		local payload = math.max(0, mtu - overhead)
+		local cmd = "ping " .. ping_family .. "-B -w 1 -W 1 -c 1 -M do -s " ..
+			payload .. " -I " .. shell_quote(ifname) .. " " .. shell_quote(target) ..
+			" >/dev/null 2>/dev/null"
+		local ok = os.execute(cmd)
+		return ok == true or ok == 0
+	end
+
+	-- Honor the 0.64 status RPC deadline; cached values remain available when
+	-- probes are skipped, while a new probe never holds the page past its budget.
+	if not can_probe() then return "" end
+	if not probe(min_mtu) then
+		cache(max_mtu)
+		return tostring(max_mtu)
+	end
+	local low, high, best = min_mtu, max_mtu, 0
+	while low <= high do
+		if not can_probe() then return "" end
+		local mid = math.floor((low + high) / 2)
+		local success = false
+		for _ = 1, tries do
+			if not can_probe() then return "" end
+			if probe(mid) then
+				success = true
+				break
+			end
+		end
+		if success then
+			best, low = mid, mid + 1
+		else
+			high = mid - 1
+		end
+	end
+	if best > 0 then
+		cache(best)
+		return tostring(best)
+	end
+	return ""
+end
+
+local function status_mtu_target(omr)
+	local target = omr.service_addr_ip
+	if not target or target == "" then target = omr.service_addr or "" end
+	if target == "127.0.0.1" then target = omr.wan_addr or "" end
+	return target
+end
+
+local function get_status_mtu(uci, interface, ifname, target, family, can_probe)
+	local link_mtu = read_status_link_mtu(uci, interface, ifname)
+	local path_mtu = status_path_mtu(ifname, target, link_mtu, family, can_probe)
+	if path_mtu ~= "" then return path_mtu, link_mtu end
+	return link_mtu, link_mtu
+end
+
 local function curl_auth_header(token)
 	return shell_quote("Authorization: Bearer " .. _as_string(token, ""))
 end
@@ -2722,7 +2831,7 @@ function interfaces_status()
 		end
 
 		local ipv6_discover = "NONE"
-		local mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", ""
+		local mtu, link_mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", "", ""
 
 		if connectivity ~= "ERROR" then
 			if ifname ~= nil and (ifname:match("^tun.*") and interface:match("^ovpn.*")) then
@@ -2777,9 +2886,9 @@ function interfaces_status()
 					end
 				end
 			end
-			if ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
-				mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				if mtu == "" then mtu = uci:get("openmptcprouter",interface,"mtu") or "" end
+			if ifname and ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
+				mtu, link_mtu = get_status_mtu(uci, interface, ifname,
+					status_mtu_target(mArray.openmptcprouter), "4", status_budget_left)
 			end
 			loop = uci:get("openmptcprouter",interface,"loop") == "1"
 		end
@@ -2832,7 +2941,7 @@ function interfaces_status()
 			multipath = section["multipath"],
 			status = connectivity,
 			wanip = publicIP, wanip6 = publicIP6,
-			latency = latency, mtu = mtu,
+			latency = latency, mtu = mtu, link_mtu = link_mtu,
 			whois = whois or "unknown", whois6 = whois6 or "unknown",
 			qos = section["trafficcontrol"],
 			download = section["download"], upload = section["upload"],
@@ -3073,12 +3182,12 @@ function interfaces_only_status()
 		end
 
 		local ipv6_discover = "NONE"
-		local mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", ""
+		local mtu, link_mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", "", ""
 
 		if connectivity ~= "ERROR" then
-			if ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
-				mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				if mtu == "" then mtu = uci:get("openmptcprouter",interface,"mtu") or "" end
+			if ifname and ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
+				mtu, link_mtu = get_status_mtu(uci, interface, ifname,
+					status_mtu_target(mArray.openmptcprouter), "4", status_budget_left)
 			end
 			loop = uci:get("openmptcprouter",interface,"loop") == "1"
 		end
@@ -3131,7 +3240,7 @@ function interfaces_only_status()
 			multipath = section["multipath"],
 			status = connectivity,
 			wanip = publicIP, wanip6 = publicIP6,
-			latency = latency, mtu = mtu,
+			latency = latency, mtu = mtu, link_mtu = link_mtu,
 			whois = whois or "unknown", whois6 = whois6 or "unknown",
 			qos = section["trafficcontrol"],
 			download = section["download"], upload = section["upload"],

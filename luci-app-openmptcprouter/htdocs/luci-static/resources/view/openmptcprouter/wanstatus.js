@@ -142,6 +142,13 @@ return view.extend({
 		if (wan.ifname && wan.ifname !== wan.label) details += _('interface:') + ' ' + this.esc(wan.ifname) + '<br />';
 		if (gateway) details += _('gateway:') + ' <strong>' + this.esc(gateway) + '</strong><br />';
 		if (wan.latency) details += _('latency:') + ' ' + this.esc(wan.latency) + ' ms<br />';
+		if (wan.mtu !== '' && wan.mtu != null) {
+			var linkMTU = wan.link_mtu == null ? '' : String(wan.link_mtu);
+			details += 'PMTU: ' + this.esc(wan.mtu);
+			if (linkMTU !== '' && linkMTU !== String(wan.mtu))
+				details += ' <small>(link mtu ' + this.esc(linkMTU) + ')</small>';
+			details += '<br />';
+		}
 		details += _('multipath:') + ' ' + this.esc(wan.multipath || 'off') + '<br />';
 		if (wan.whois && wan.whois !== 'unknown') details += _('ASN:') + ' ' + this.esc(wan.whois) + '<br />';
 
