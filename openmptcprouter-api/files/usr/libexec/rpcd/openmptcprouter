@@ -3025,6 +3025,14 @@ function interfaces_only_status()
 	local uci = require "luci.model.uci".cursor()
 	local mArray = {}
 
+	-- Keep path-MTU probes within one deadline shared by all interfaces.
+	-- status_time_budget=0 disables new probes; cached PMTU remains readable.
+	local status_budget = tonumber(integer_string(uci:get("openmptcprouter","settings","status_time_budget") or "15", "15", 0, 300))
+	local status_deadline = os.time() + status_budget
+	local function status_budget_left()
+		return os.time() < status_deadline
+	end
+
 	mArray.openmptcprouter = {}
 	mArray.openmptcprouter["external_check"] = false
 	mArray.openmptcprouter["dns"] = false
