@@ -54,9 +54,20 @@
 	    "acl": ["luci-app-openmptcprouter"]
 	}
     },
+    "admin/system/openmptcprouter/logs": {
+	"title": "Diagnostic logs",
+	"order": 5,
+	"action": {
+	    "type": "view",
+	    "path": "openmptcprouter/logs"
+	},
+	"depends": {
+	    "acl": ["luci-app-openmptcprouter-diagnostic"]
+	}
+    },
     "admin/system/openmptcprouter/debug": {
 	"title": "Show all settings",
-	"order": 5,
+	"order": 6,
 	"action": {
 	    "type": "view",
 	    "path": "openmptcprouter/debug"

@@ -6,7 +6,7 @@ START=85
 
 USE_PROCD=1
 
-EXTRA_COMMANDS="set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
+EXTRA_COMMANDS="diagnostic_logs set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
 
@@ -121,7 +121,7 @@ _get_json() {
 			fi
 			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
 		fi
-		echo $result
+		printf '%s\n' "$result"
 	} || {
 		echo ''
 	}
@@ -3724,6 +3724,52 @@ _set_pihole_server() {
 set_pihole() {
 	config_load openmptcprouter
 	config_foreach _set_pihole_server server
+}
+
+# Read-only proxy for the authenticated VPS diagnostic endpoint.
+_diagnostic_pick() {
+	local candidate="$1"
+	[ "$(uci -q get openmptcprouter."$candidate".disabled)" = "1" ] && return
+	[ -z "$(uci -q get openmptcprouter."$candidate".port)" ] && return
+	[ -z "$diagnostic_selected" ] && diagnostic_selected="$candidate"
+	if [ "$(uci -q get openmptcprouter."$candidate".current)" = "1" ] ||
+	   [ "$(uci -q get openmptcprouter."$candidate".master)" = "1" ]; then
+		diagnostic_selected="$candidate"
+	fi
+}
+
+_diagnostic_fetch_ip() {
+	[ -n "$diagnostic_payload" ] && return
+	server="$1"
+	diagnostic_payload=$(_get_json "diagnostic/logs?limit=$diagnostic_limit")
+}
+
+diagnostic_logs() {
+	diagnostic_limit="$1"
+	[ -z "$diagnostic_limit" ] && diagnostic_limit=300
+	case "$diagnostic_limit" in
+		''|*[!0-9]*) printf '{"entries":[],"error":"Invalid limit"}\n'; return 1 ;;
+	esac
+	if [ "$diagnostic_limit" -lt 1 ] || [ "$diagnostic_limit" -gt 1000 ]; then
+		printf '{"entries":[],"error":"Invalid limit"}\n'
+		return 1
+	fi
+	diagnostic_selected=""
+	diagnostic_payload=""
+	config_load openmptcprouter
+	config_foreach _diagnostic_pick server
+	if [ -n "$diagnostic_selected" ]; then
+		servername="$diagnostic_selected"
+		serverport="$(uci -q get openmptcprouter."$servername".port)"
+		token="$(uci -q get openmptcprouter."$servername".token)"
+		config_list_foreach "$servername" ip _diagnostic_fetch_ip
+	fi
+	[ -n "$diagnostic_payload" ] && {
+		printf '%s\n' "$diagnostic_payload"
+		return 0
+	}
+	printf '{"entries":[],"error":"VPS diagnostics unavailable"}\n'
+	return 1
 }
 
 token() {

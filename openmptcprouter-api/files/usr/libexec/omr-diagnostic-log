@@ -1,0 +1,37 @@
+#!/bin/sh
+# logd-compatible bounded diagnostic collector; no logread -F/-S options.
+set -u
+
+case "$(uci -q get openmptcprouter.settings.diagnostic_log_storage)" in
+	ram) LOG_DIR=/tmp/omr-diagnostic-log ;;
+	*) LOG_DIR=/etc/openmptcprouter-logs ;;
+esac
+LOG_FILE="$LOG_DIR/diagnostic.log"
+MAX_BYTES=1048576
+umask 077
+mkdir -p "$LOG_DIR" || exit 1
+chmod 700 "$LOG_DIR"
+touch "$LOG_FILE" || exit 1
+chmod 600 "$LOG_FILE"
+
+store_line() {
+	line="$1"
+	case "$line" in
+		*OMR*|*omr-*|*openmptcprouter*|*mqvpn*|*xquic*|*glorytun*|*MPTCP*|*mptcp*|*nanbbr*|*netifd*|*firewall*|*dropbear*|*OpenVPN*|*openvpn*|*dsvpn*|*wireguard*|*WireGuard*|*wg-quick*|*ubond*|*softether*|*shadowsocks*) ;;
+		*) return ;;
+	esac
+	# Discard anomalously long records, bounding both disk use and report size.
+	[ "$(printf '%s' "$line" | wc -c)" -gt 4096 ] && return
+	size=$(wc -c < "$LOG_FILE" 2>/dev/null) || size=0
+	[ "$size" -ge "$MAX_BYTES" ] && {
+		mv -f "$LOG_FILE" "$LOG_FILE.old" || return
+		: > "$LOG_FILE"
+		chmod 600 "$LOG_FILE"
+	}
+	printf '%s\n' "$line" >> "$LOG_FILE"
+}
+
+# Preserve the current ring before following new events. Query-side dedup
+# handles the small overlap between these two logread calls.
+logread -l 1000 2>/dev/null | while IFS= read -r line; do store_line "$line"; done
+logread -f 2>/dev/null | while IFS= read -r line; do store_line "$line"; done

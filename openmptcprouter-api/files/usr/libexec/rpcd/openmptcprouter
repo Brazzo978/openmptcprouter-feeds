@@ -3280,7 +3280,16 @@ function interfaces_only_status()
 end
 
 
+local diagnostic = dofile("/usr/share/omr/diagnostic.lua")
+
 local methods = {
+	diagnostic_logs = {
+		args = { limit = 500, scope = "all" },
+		call = function(args) return diagnostic.collect(args.limit or 500, args.scope or "all", false) end
+	},
+	support_report = {
+		call = function() return diagnostic.collect(500, "all", true) end
+	},
 	getrootfs = {
 		call = function() return get_rootfs() end
 	},
