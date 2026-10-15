@@ -210,5 +210,8 @@ return view.extend({
 		}).catch(L.bind(function() {
 			this.root.querySelector('#omr-log-status').textContent = _('Unable to download support report');
 		}, this)).then(function() { button.disabled = false; });
-	}
+	},
+	handleSaveApply: null,
+	handleSave: null,
+	handleReset: null
 });
