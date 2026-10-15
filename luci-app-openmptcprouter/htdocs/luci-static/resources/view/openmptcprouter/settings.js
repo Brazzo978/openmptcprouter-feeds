@@ -32,6 +32,15 @@ var callUpdateVPS = rpc.declare({
 	expect: { '': {} }
 });
 
+var callWireguardRemoteAccessStatus = rpc.declare({
+	object: 'openmptcprouter', method: 'wireguardRemoteAccessStatus',
+	params: ['server'], expect: { '': {} }
+});
+
+var callWireguardRemoteAccessSet = rpc.declare({
+	object: 'openmptcprouter', method: 'wireguardRemoteAccessSet',
+	params: ['server', 'lan_access'], expect: { '': {} }
+});
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -64,12 +73,25 @@ return view.extend({
 				kern ? L.resolveDefault(fs.stat('/lib/modules/' + kern + '/shortcut-fe.ko'), null)
 				     : Promise.resolve(null)
 			]);
+		}).then(function(data) {
+			var servers = uci.sections('openmptcprouter', 'server') || [];
+			return Promise.all(servers.map(function(srv) {
+				return L.resolveDefault(callWireguardRemoteAccessStatus(srv['.name']), {
+					supported: false, error: _('VPS unavailable')
+				});
+			})).then(function(states) {
+				var byServer = {};
+				servers.forEach(function(srv, i) { byServer[srv['.name']] = states[i]; });
+				data.push(byServer);
+				return data;
+			});
 		});
 	},
 
 	render: function(data) {
 		var res     = data[0];
 		var sfeStat = data[1];
+		var wireguardStates = data[2] || {};
 		var m, s, o;
 		var self = this;
 
@@ -158,6 +180,32 @@ return view.extend({
 		o = s.option(form.Flag, 'nofwredirect',
 			_('Disable ports redirection defined in firewall from server to this router'));
 
+		/* The VPS is authoritative. A missing endpoint leaves this control
+		 * unavailable; opening or saving the page never enables it. */
+		this._wireguardStates = wireguardStates;
+		o = s.option(form.Flag, '_wireguard_remote_lan',
+			_('Allow remote WireGuard access to LAN'),
+			_('Permit this server\'s WireGuard clients to reach the router LAN. Add the LAN subnet to the client AllowedIPs (or use 0/0). Internet access remains available; router HTTP and HTTPS at its VPN address remain available for recovery.'));
+		o.rmempty = false;
+		o.cfgvalue = function(section_id) {
+			var state = wireguardStates[section_id];
+			return state && state.supported === true && state.lan_access === true ? '1' : '0';
+		};
+		o.write = function() {};
+		o.remove = function() {};
+		var originalRenderWidget = o.renderWidget;
+		o.renderWidget = function(section_id, option_index, cfgvalue) {
+			var widget = originalRenderWidget.call(this, section_id, option_index, cfgvalue);
+			var state = wireguardStates[section_id];
+			if (!state || state.supported !== true || typeof state.lan_access !== 'boolean') {
+				var input = widget && widget.querySelector && widget.querySelector('input');
+				if (input) input.disabled = true;
+				if (widget && widget.setAttribute)
+					widget.setAttribute('title', state && state.error ? String(state.error) : _('Unavailable on this VPS'));
+			}
+			return widget;
+		};
+		this._wireguardOption = o;
 		/* ── Tabbed settings section ───────────────────────────────── */
 		s = m.section(form.NamedSection, 'settings', 'settings', _('Settings'));
 		s.addremove = false;
@@ -500,9 +548,25 @@ return view.extend({
 				get('vxlan_bridge_if'),
 				get('status_time_budget')
 			).then(function() {
+				var changes = [];
+				(uci.sections('openmptcprouter', 'server') || []).forEach(function(srv) {
+					var name = srv['.name'];
+					var state = self._wireguardStates[name];
+					if (!state || state.supported !== true || typeof state.lan_access !== 'boolean') return;
+					var selected = self._wireguardOption.formvalue(name) === '1';
+					if (selected === state.lan_access) return;
+					changes.push(callWireguardRemoteAccessSet(name, selected).then(function(result) {
+						if (!result || result.supported !== true || result.lan_access !== selected)
+							throw new Error(name + ': ' + (result && result.error || _('VPS rejected the change')));
+						state.lan_access = selected;
+					}));
+				});
+				return Promise.all(changes);
+			}).then(function() {
 				ui.addNotification(null, _('Settings saved and applied successfully.'), 'info');
 			}).catch(function(err) {
 				ui.addNotification(null, _('Failed to save settings: ') + String(err), 'error');
+				throw err;
 			});
 		});
 	},

@@ -1923,6 +1923,36 @@ function cpuscalinggovernor(scaling_governor)
 	ucic:commit("openmptcprouter")
 end
 
+-- Keep the VPS access decision on the VPS. This method only proxies an
+-- explicit action for a configured server; it never persists a local flag.
+local function wireguard_remote_access(server, action)
+	if type(server) ~= "string" or not server:match("^[%w_-]+$") or
+	   ucic:get("openmptcprouter", server) ~= "server" then
+		return { supported = false, error = "Invalid server" }
+	end
+	if action ~= "status" and action ~= "allow" and action ~= "deny" then
+		return { supported = false, error = "Invalid action" }
+	end
+	local cmd = "/etc/init.d/openmptcprouter-vps wireguard_remote_access " ..
+		shell_quote(action) .. " " .. shell_quote(server) .. " 2>/dev/null"
+	if timeout_cmd then cmd = timeout_cmd .. " 35 " .. cmd end
+	local pipe = io.popen(cmd)
+	if not pipe then return { supported = false, error = "VPS unavailable" } end
+	local payload = pipe:read(4097) or ""
+	local ok = pipe:close()
+	if #payload > 4096 or payload == "" then
+		return { supported = false, error = "VPS unavailable" }
+	end
+	local parsed, response = pcall(jsonc.parse, payload)
+	if type(response) ~= "table" then
+		return { supported = false, error = "Invalid VPS response" }
+	end
+	if ok and response.supported == true and type(response.lan_access) == "boolean" then
+		return { supported = true, lan_access = response.lan_access }
+	end
+	local reason = response.error or response.detail
+	return { supported = false, error = type(reason) == "string" and reason or "VPS does not support this setting" }
+end
 function update_vps()
 	sys.exec("/etc/init.d/openmptcprouter-vps restart >/dev/null 2>/dev/null")
 	ucic:foreach("openmptcprouter", "server", function(section)
@@ -3332,6 +3362,16 @@ local methods = {
 		args = { disable = 0 },
 		call = function(args)
 			disableipv6(args.disable)
+		end
+	},
+	wireguardRemoteAccessStatus = {
+		args = { server = "" },
+		call = function(args) return wireguard_remote_access(args.server, "status") end
+	},
+	wireguardRemoteAccessSet = {
+		args = { server = "", lan_access = false },
+		call = function(args)
+			return wireguard_remote_access(args.server, args.lan_access and "allow" or "deny")
 		end
 	},
 	updateVPS = {

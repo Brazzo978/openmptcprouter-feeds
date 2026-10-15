@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# The router image ships this native-routing build of mqvpn. A normal APK
+# upgrade must not replace it with the upstream build while the generated
+# client configuration contains [Routes] ClientRoute entries.
+#
+# Pin only the exact build delivered by this package. A later 3K release can
+# replace this line with its own version, and an administrator can change the
+# world constraint explicitly when deliberately installing another build.
+world=/etc/apk/world
+version=0.16.2-r3
+[ -f "$world" ] || exit 0
+command -v apk >/dev/null 2>&1 || exit 0
+installed="$(apk list --installed --manifest 2>/dev/null | awk '$1 == "mqvpn" { print $2; exit }')"
+[ "$installed" = "$version" ] || exit 0
+
+tmp="$(mktemp /etc/apk/.mqvpn-world.XXXXXX)" || exit 1
+trap 'rm -f "$tmp"' EXIT
+awk -v pin="mqvpn=$version" '
+	/^mqvpn([@<>=~]|$)/ { if (!seen++) print pin; next }
+	{ print }
+	END { if (!seen) print pin }
+' "$world" > "$tmp" || exit 1
+chmod 0644 "$tmp" || exit 1
+if ! cmp -s "$world" "$tmp"; then
+	mv "$tmp" "$world" || exit 1
+fi
+
+exit 0

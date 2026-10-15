@@ -20,6 +20,71 @@ PLACEHOLDER_KEY='mPyVpoQWcp/5gr404xvS19aRC03o0XS2mrb2tZJ1Ii4='
 
 _bool() { [ "$1" = "1" ] && echo "true" || echo "false"; }
 
+# Advertise only currently active interfaces explicitly assigned to the LAN
+# firewall zone. Never accept a user-supplied generic route list here.
+. /lib/functions/network.sh
+
+_client_routes_overlap() {
+	awk -v first="$1" -v second="$2" '
+		function address(cidr, parts, oct) {
+			split(cidr, parts, "/")
+			split(parts[1], oct, "[.]")
+			return ((oct[1] * 256 + oct[2]) * 256 + oct[3]) * 256 + oct[4]
+		}
+		BEGIN {
+			split(first, a, "/")
+			split(second, b, "/")
+			prefix = a[2] < b[2] ? a[2] : b[2]
+			block = 2 ^ (32 - prefix)
+			exit (int(address(first) / block) == int(address(second) / block)) ? 0 : 1
+		}'
+}
+_append_client_lan_route() {
+	local logical="$1" subnet canonical
+	network_get_subnet subnet "$logical" 2>/dev/null || return 0
+	canonical="$(printf '%s' "$subnet" | awk -F/ '
+		NF != 2 || $2 !~ /^[0-9]+$/ { exit }
+		{
+			p = $2 + 0
+			if (p < 8 || p > 32) exit
+			n = split($1, oct, "[.]")
+			if (n != 4) exit
+			for (i = 1; i <= 4; i++)
+				if (oct[i] !~ /^[0-9]+$/ || oct[i] > 255) exit
+			ip = ((oct[1] * 256 + oct[2]) * 256 + oct[3]) * 256 + oct[4]
+			size = 2 ^ (32 - p)
+			base = int(ip / size) * size
+			a = int(base / 16777216)
+			b = int(base / 65536) % 256
+			c = int(base / 256) % 256
+			d = base % 256
+			private = (a == 10 && p >= 8) ||
+				(a == 172 && b >= 16 && b <= 31 && p >= 12) ||
+				(a == 192 && b == 168 && p >= 16)
+			vpn_lo = 10 * 16777216 + 255 * 65536
+			vpn_hi = vpn_lo + 65535
+			if (!private || (base <= vpn_hi && base + size - 1 >= vpn_lo)) exit
+			print a "." b "." c "." d "/" p
+		}')"
+	[ -n "$canonical" ] || return 0
+	case " $client_routes " in *" $canonical "*) return 0 ;; esac
+	local existing
+	for existing in $client_routes; do
+		_client_routes_overlap "$canonical" "$existing" && return 0
+	done
+	[ "$client_route_count" -lt 16 ] || return 0
+	client_routes="$client_routes $canonical"
+	client_route_count=$((client_route_count + 1))
+}
+
+_collect_client_lan_routes() {
+	client_routes=''
+	client_route_count=0
+	config_load firewall
+	config_list_foreach zone_lan network _append_client_lan_route
+	config_load mqvpn
+}
+
 generate_config() {
 	local enable address ip port server_address server_name insecure key user
 	local tun_name log_level mtu kill_switch reconnect reconnect_interval route_via_server no_routes
@@ -117,6 +182,7 @@ generate_config() {
 	# so this is usually not the only symptom.
 	[ "$key" = "$PLACEHOLDER_KEY" ] && { logger -t mqvpn "Auth key is still the placeholder shipped in /etc/config/mqvpn: the VPS configuration has not been retrieved yet, so the server would reject every tunnel with 403. Not starting. Re-run the setup wizard or check the VPS API (logread -e OMR-VPS)."; return 1; }
 
+	_collect_client_lan_routes
 	mkdir -p /var/run
 
 	{
@@ -181,6 +247,14 @@ generate_config() {
 
 		config_load mqvpn
 		config_foreach _write_reorder_rule reorder_rule
+
+		if [ -n "$client_routes" ]; then
+			echo ''
+			echo '[Routes]'
+			for route in $client_routes; do
+				echo "ClientRoute = $route"
+			done
+		fi
 
 		if [ -n "$recv_rate_limit" ] && [ "$recv_rate_limit" != "0" ]; then
 			echo ''

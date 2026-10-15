@@ -9,14 +9,14 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mqvpn
 PKG_VERSION:=0.16.2
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_LICENSE:=Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/Ysurac/mqvpn.git
 PKG_SOURCE_VERSION:=ee78205d3db491ca7727b974bda0c91ae1523236
-PKG_MIRROR_HASH:=skip
+PKG_MIRROR_HASH:=3864a72f92d0d1c567c2dc21030121e195883a4415aea86a48323b90e8d8d680
 
 PKG_BUILD_PARALLEL:=1
 PKG_USE_MIPS16:=0
@@ -33,7 +33,7 @@ include $(INCLUDE_DIR)/cmake.mk
 XQUIC_DIR  := $(PKG_BUILD_DIR)/third_party/xquic
 XQUIC_BUILD:= $(XQUIC_DIR)/build
 
-# BoringSSL built in-tree (not a submodule — cloned during Build/Prepare)
+# BoringSSL is bundled in the pinned mqvpn source archive.
 BSSL_DIR   := $(XQUIC_DIR)/third_party/boringssl
 BSSL_BUILD := $(BSSL_DIR)/build
 
@@ -86,11 +86,11 @@ endef
 
 define Build/Prepare
 	$(call Build/Prepare/Default)
-	# xquic is already in the tarball (OpenWrt submodule handling)
-	# BoringSSL is not a submodule of xquic — clone it
-	if [ ! -f "$(BSSL_DIR)/CMakeLists.txt" ]; then \
-		git clone --depth 1 https://github.com/google/boringssl.git "$(BSSL_DIR)"; \
-	fi
+	# Both xquic and BoringSSL are in the verified source archive.
+	@test -f "$(BSSL_DIR)/CMakeLists.txt" || { \
+		echo "mqvpn: pinned source archive lacks bundled BoringSSL" >&2; \
+		exit 1; \
+	}
 endef
 
 # Override cmake.mk's Build/Configure and Build/Install — we run cmake directly
@@ -145,6 +145,7 @@ define Package/mqvpn/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(MQVPN_BUILD)/mqvpn $(1)/usr/sbin/mqvpn
 	$(CP) ./files/* $(1)/
+	$(INSTALL_BIN) ./files/etc/uci-defaults/4103-mqvpn-world-hold $(1)/etc/uci-defaults/4103-mqvpn-world-hold
 endef
 
 $(eval $(call BuildPackage,mqvpn))

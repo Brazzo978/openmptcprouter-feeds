@@ -6,7 +6,7 @@ START=85
 
 USE_PROCD=1
 
-EXTRA_COMMANDS="diagnostic_logs set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
+EXTRA_COMMANDS="wireguard_remote_access diagnostic_logs set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
 
@@ -3772,6 +3772,39 @@ diagnostic_logs() {
 	return 1
 }
 
+_wireguard_remote_access_ip() {
+	[ -n "$wireguard_remote_result" ] && return
+	server="$1"
+	if [ "$wireguard_remote_action" = "status" ]; then
+		wireguard_remote_result=$(_get_json "wireguard/remote-access")
+	else
+		[ "$wireguard_remote_action" = "allow" ] && wireguard_remote_value=true || wireguard_remote_value=false
+		wireguard_remote_result=$(_set_json "wireguard/remote-access" "{\"lan_access\":${wireguard_remote_value}}")
+	fi
+}
+
+# Explicit action and UCI section only; this command is called by rpcd.
+wireguard_remote_access() {
+	wireguard_remote_action="$1"
+	servername="$2"
+	case "$wireguard_remote_action" in status|allow|deny) ;; *) printf '{"error":"Invalid action"}\n'; return 1 ;; esac
+	case "$servername" in ''|*[!a-zA-Z0-9_-]*) printf '{"error":"Invalid server"}\n'; return 1 ;; esac
+	[ "$(uci -q get openmptcprouter."$servername")" = "server" ] || {
+		printf '{"error":"Server not found"}\n'; return 1;
+	}
+	[ "$(uci -q get openmptcprouter."$servername".disabled)" != "1" ] || {
+		printf '{"error":"Server disabled"}\n'; return 1;
+	}
+	serverport="$(uci -q get openmptcprouter."$servername".port)"
+	[ -n "$serverport" ] || { printf '{"error":"Server port unavailable"}\n'; return 1; }
+	token="$(uci -q get openmptcprouter."$servername".token)"
+	wireguard_remote_result=""
+	config_load openmptcprouter
+	config_list_foreach "$servername" ip _wireguard_remote_access_ip
+	[ -n "$wireguard_remote_result" ] || { printf '{"error":"VPS unavailable"}\n'; return 1; }
+	[ "${#wireguard_remote_result}" -le 4096 ] || { printf '{"error":"VPS response too large"}\n'; return 1; }
+	printf '%s\n' "$wireguard_remote_result"
+}
 token() {
 	config_load openmptcprouter
 	config_foreach _get_token server

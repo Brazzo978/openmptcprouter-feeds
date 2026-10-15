@@ -23,6 +23,7 @@
                     "wizardadd",
                     "settingsadd",
                     "updateVPS",
+                    "wireguardRemoteAccessStatus",
                     "backuplist",
                     "backupget",
                     "backupsend"
@@ -173,6 +174,8 @@
                     "wizardadd",
                     "settingsadd",
                     "updateVPS",
+                    "wireguardRemoteAccessStatus",
+                    "wireguardRemoteAccessSet",
                     "backuplist",
                     "backupget",
                     "backupsend"

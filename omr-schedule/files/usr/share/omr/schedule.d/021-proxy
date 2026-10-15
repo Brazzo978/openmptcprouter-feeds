@@ -139,7 +139,12 @@ if [ -f /etc/init.d/xray ] && [ "$(uci -q get xray.main.enabled)" != "$xray_enab
 	if [ "$xray_enabled" = "1" ]; then
 		/etc/init.d/xray restart >/dev/null 2>&1
 	else
-		/etc/init.d/xray running 2>/dev/null && /etc/init.d/xray stop >/dev/null 2>&1
+		# Keep the independent reverse port-forward instance when main is disabled.
+		if [ "$(uci -q get xray.rpf.enabled)" = "1" ]; then
+			/etc/init.d/xray restart >/dev/null 2>&1
+		else
+			/etc/init.d/xray running 2>/dev/null && /etc/init.d/xray stop >/dev/null 2>&1
+		fi
 	fi
 	changed=1
 fi
@@ -227,7 +232,23 @@ _sweep_proxy_service() {
 [ "$ss_libev_disabled" = "1" ] && _sweep_ss_orphans shadowsocks-libev ss-local ss-redir ss-tunnel ss-server
 [ "$ss_rust_disabled" = "1" ] && _sweep_ss_orphans shadowsocks-rust sslocal ssserver
 _sweep_proxy_service v2ray "$v2ray_enabled"
-_sweep_proxy_service xray "$xray_enabled"
+if [ "$xray_enabled" = "0" ] && [ "$(uci -q get xray.rpf.enabled)" = "1" ]; then
+	# A running xray.rpf is expected even when the selected proxy is elsewhere.
+	# Sweep only a stale main instance, retaining rpf through the restart.
+	for pid in $(pgrep -x xray 2>/dev/null); do
+		cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)"
+		case "$cmdline" in
+			*"/var/etc/xray/xray.main.json"*)
+				_log "Proxy enforce: disabled xray.main still running, restarting xray to keep rpf (configured proxy: ${configured_proxy})"
+				/etc/init.d/xray restart >/dev/null 2>&1
+				changed=1
+				break
+				;;
+		esac
+	done
+else
+	_sweep_proxy_service xray "$xray_enabled"
+fi
 
 [ "$changed" = "1" ] && /etc/init.d/omr-tracker start >/dev/null 2>&1
 exit 0
