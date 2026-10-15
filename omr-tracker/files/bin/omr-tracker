@@ -297,7 +297,7 @@ _ping() {
 	[ -z "$host" ] && return
 	local device="$2"
 	local localip="$3"
-	if [ -n "$OMR_TRACKER_INTERFACE" ] && { [ "$OMR_TRACKER_NO_BIND" = "1" ] ]; }; then
+	if [ -n "$OMR_TRACKER_INTERFACE" ] && [ "$OMR_TRACKER_NO_BIND" = "1" ]; then
 		ret=$(ping -I "${device}" \
 			-w "$OMR_TRACKER_TIMEOUT" \
 			-c "$OMR_TRACKER_COUNT" \

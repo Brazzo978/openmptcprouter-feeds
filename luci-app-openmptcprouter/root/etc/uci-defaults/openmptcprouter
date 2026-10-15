@@ -35,6 +35,7 @@ fi
 if [ "$(uci -q show openmptcprouter | grep server)" = "" ]; then
 	uci -q batch <<-EOF >/dev/null
 		set openmptcprouter.vps=server
+		set openmptcprouter.vps.redirect_ports=0
 		set openmptcprouter.vps.username="openmptcprouter"
 		commit openmptcprouter
 	EOF

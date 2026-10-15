@@ -90,7 +90,11 @@ function interface_from_device(dev)
 end
 
 function add_server(add_server_name)
-	ucic:set("openmptcprouter",add_server_name:gsub("[^%w_]+","_"),"server")
+	local server = add_server_name:gsub("[^%w_]+","_")
+	ucic:set("openmptcprouter",server,"server")
+	if not ucic:get("openmptcprouter",server,"redirect_ports") then
+		ucic:set("openmptcprouter",server,"redirect_ports","0")
+	end
 	ucic:save("openmptcprouter")
 	ucic:commit("openmptcprouter")
 end
@@ -3125,6 +3129,28 @@ function interfaces_only_status()
 			end
 		end
 
+		if gateway == "" and proto ~= "dhcpv6" then gateway = get_gateway(interface) end
+		if gateway == "" and ifname ~= "" and ipv6 ~= "1" and ipv6 ~= "auto" and fs.access("/sys/class/net/" .. ifname) then
+			local route_list = sys.exec("ip -4 r list dev " .. shell_quote(ifname))
+			gateway = route_list:match("(%d+%.%d+%.%d+%.%d+)%s+proto kernel") or ""
+			if gateway == "" then
+				gateway = route_list:match("default via (%d+%.%d+%.%d+%.%d+)") or ""
+			end
+			if gateway == "" and not (ifname:match("^tun.*") or interface:match("^ovpn.*") or interface:match("^wg.*")) then
+				gateway = route_list:match("via (%d+%.%d+%.%d+%.%d+)") or ""
+			end
+		end
+		if gateway6 == "" and (ipv6 == "1" or ipv6 == "auto") then gateway6 = get_gateway6(interface) end
+		if gateway6 == "" and ifname ~= "" and (ipv6 == "1" or ipv6 == "auto") and fs.access("/sys/class/net/" .. ifname) then
+			local route6_list = sys.exec("ip -6 r list dev " .. shell_quote(ifname))
+			gateway6 = route6_list:match("([%x:]+)%s+proto kernel") or ""
+			if gateway6 == "" then
+				gateway6 = route6_list:match("default via ([%x:]+)") or ""
+			end
+			if gateway6 == "" and not (ifname:match("^tun.*") or interface:match("^ovpn.*") or interface:match("^wg.*")) then
+				gateway6 = route6_list:match("via ([%x:]+)") or ""
+			end
+		end
 		local signal, operator, phonenumber, donglestate, networktype = "", "", "", "", ""
 		if gateway ~= "" or gateway6 ~= "" then
 			if uci:get("openmptcprouter","settings","disablegwping") ~= "1" then

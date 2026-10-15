@@ -3220,8 +3220,8 @@ _set_config_from_vps() {
 
 	# Shorewall settings
 	shorewall_redirect="$(echo "$vps_config" | jsonfilter -q -e '@.shorewall.redirect_ports')"
+	redirect="0"
 	[ "$shorewall_redirect" = "enable" ] && redirect="1"
-	[ "$shorewall_redirect" = "disable" ] && redirect="0"
 	uci -q batch <<-EOF >/dev/null
 		set openmptcprouter.${servername}.redirect_ports=$redirect
 	EOF
@@ -3660,7 +3660,7 @@ _config_service() {
 	fi
 	_backup_list
 	redirect_port="0"
-	if [ "$(uci -q get openmptcprouter.${servername}.redirect_ports)" = "1" ] || [ "$(uci -q get upnpd.config.enabled)" = "1" ]; then
+	if [ "$(uci -q get openmptcprouter.${servername}.redirect_ports)" = "1" ]; then
 		redirect_port="1"
 	fi
 	if [ "$user_permission" != "ro" ]; then
