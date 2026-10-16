@@ -6,7 +6,7 @@ START=85
 
 USE_PROCD=1
 
-EXTRA_COMMANDS="wireguard_remote_access diagnostic_logs set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
+EXTRA_COMMANDS="wireguard_remote_access diagnostic_logs set_pihole set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
 
@@ -1842,7 +1842,7 @@ set_bypass_ips() {
 _set_vpn_ip() {
 	local settings
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
-	[ -z "$vps_config" ] && return
+	[ -z "$vps_config" ] && return 1
 	[ "$(uci -q get openmptcprouter.settings.vpn)" = "none" ] && return
 	vpnifname="$(uci -q get network.omrvpn.device)"
 	vpnip_local_current="$(echo "$vps_config" | jsonfilter -q -e '@.vpn.remoteip')"
@@ -1858,11 +1858,70 @@ _set_vpn_ip() {
 	if [ "$vpnip_remote" != "" ] && [ "$vpnip_local" != "" ] && ([ "$vpnip_remote" != "$vpnip_remote_current" ] || [ "$vpnip_local" != "$vpnip_local_current" ] || [ "$ula" != "$ula_current" ]); then
 		settings='{"remoteip" : "'$vpnip_local'","localip" : "'$vpnip_remote'","ula" : "'$ula'"}'
 		result=$(_set_json "vpnips" "$settings")
+		[ "$(echo "$result" | jsonfilter -q -e '@.result')" = "done" ]
+		return $?
+	fi
+	[ -n "$vpnip_remote" ] && [ -n "$vpnip_local" ]
+}
+
+# Hotplug invokes this command without _config_service's authenticated context.
+# Select one active VPS; never copy this tunnel address into a backup VPS.
+_vpn_ip_pick_server() {
+	local candidate="$1" priority=0
+	[ "$(uci -q get openmptcprouter."$candidate".disabled)" = "1" ] && return
+	[ -n "$(uci -q get openmptcprouter."$candidate".username)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".password)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".port)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".ip)" ] || return
+	if [ "$(uci -q get openmptcprouter."$candidate".current)" = "1" ]; then
+		priority=3
+	elif [ "$(uci -q get openmptcprouter."$candidate".master)" = "1" ]; then
+		priority=2
+	elif [ "$(uci -q get openmptcprouter."$candidate".backup)" != "1" ]; then
+		priority=1
+	fi
+	[ "$priority" -gt 0 ] || return
+	if [ "$priority" -gt "$vpn_ip_priority" ]; then
+		vpn_ip_selected="$candidate"
+		vpn_ip_priority="$priority"
+		vpn_ip_candidates=1
+	elif [ "$priority" -eq "$vpn_ip_priority" ]; then
+		vpn_ip_candidates=$((vpn_ip_candidates + 1))
 	fi
 }
 
+_vpn_ip_sync_ip() {
+	[ "$vpn_ip_done" = "1" ] && return
+	server="$1"
+	vps_config=$(_get_json "config")
+	# A reachable API error is not an authenticated server configuration.
+	[ -n "$(echo "$vps_config" | jsonfilter -q -e '@.vpn.remoteip')" ] || return
+	[ -n "$(echo "$vps_config" | jsonfilter -q -e '@.vpn.localip')" ] || return
+	[ "$(echo "$vps_config" | jsonfilter -q -e '@.user.permission')" = "ro" ] && return
+	_set_vpn_ip && vpn_ip_done=1
+}
+
 set_vpn_ip() {
-	_set_vpn_ip
+	local vpn_ip_selected="" vpn_ip_priority=0 vpn_ip_candidates=0 vpn_ip_done=0
+	local servername server serverport token vps_config vpnifname
+	[ "$(uci -q get openmptcprouter.settings.vpn)" = "none" ] && return 0
+	vpnifname="$(uci -q get network.omrvpn.device)"
+	[ -n "$vpnifname" ] || return 0
+	# Do not fall back to a tracker WAN address while the tunnel is down.
+	[ -n "$(ip -4 -o addr show dev "$vpnifname" scope global 2>/dev/null)" ] || return 0
+	config_load openmptcprouter
+	config_foreach _vpn_ip_pick_server server
+	[ -n "$vpn_ip_selected" ] || return 0
+	if [ "$vpn_ip_candidates" != "1" ]; then
+		logger -t OMR-VPS "VPN IP synchronization skipped: active VPS is ambiguous"
+		return 1
+	fi
+	servername="$vpn_ip_selected"
+	serverport="$(uci -q get openmptcprouter."$servername".port)"
+	token="$(uci -q get openmptcprouter."$servername".token)"
+	vps_config=""
+	config_list_foreach "$servername" ip _vpn_ip_sync_ip
+	[ "$vpn_ip_done" = "1" ]
 }
 
 
@@ -3384,133 +3443,6 @@ _set_config_from_vps() {
 	fi
 }
 
-_backup_send() {
-	servername=$1
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	sysupgrade -k -b /tmp/backup.tar.gz
-	backup_data="$(cat /tmp/backup.tar.gz | base64 | tr -d '\n')"
-	backup_sha256sum="$(sha256sum /tmp/backup.tar.gz | awk '{print $1}')"
-	[ -n "$backup_data" ] && {
-		logger -t "OMR-VPS" "Send backup file to server $servername"
-		local backupjson
-		backupjson='{"data": "'$backup_data'","sha256sum": "'$backup_sha256sum'"}'
-		echo "$backupjson" > /tmp/backupjson
-		result=$(_set_json "backuppost" "@/tmp/backupjson")
-		rm -f /tmp/backupjson
-		uci -q set openmptcprouter.$servername.lastbackup=$(date +%s)
-	}
-}
-
-backup_send() {
-	config_load openmptcprouter
-	config_foreach _backup_send server
-}
-
-
-_backup_get() {
-	servername=$1
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	[ -z "$lastbackup" ] || [ "$lastbackup" -lt "$(uci -q get openmptcprouter.$servername.lastbackup)" ] && {
-		lastbackup="$(uci -q get openmptcprouter.$servername.lastbackup)"
-		serverbackup="$servername"
-	}
-}
-
-_backup_get_and_apply() {
-	servername=$1
-	backupfile=$2
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	if [ -n "$backupfile" ]; then
-		echo "get $backupfile"
-		vps_backup=$(_get_json "backupget?filename=${backupfile}")
-	else
-		vps_backup=$(_get_json "backupget")
-	fi
-	[ -z "$vps_backup" ] && return
-	backup_data="$(echo "$vps_backup" | jsonfilter -q -e '@.data')"
-	backup_sha256sum="$(echo "$vps_backup" | jsonfilter -q -e '@.sha256sum')"
-	[ -n "$backup_data" ] && {
-		echo $backup_data | base64 -d > /tmp/backup.tar.gz
-		sysupgrade -r /tmp/backup.tar.gz
-	}
-}
-
-backup_get() {
-	backuptoapply=$2
-	if [ -n "$backuptoapply" ]; then
-		_backup_get_and_apply $1 $2
-	else
-		lastbackup=""
-		serverbackup=""
-		config_load openmptcprouter
-		config_foreach _backup_get server
-		[ -n "$serverbackup" ] && _backup_get_and_apply $serverbackup
-	fi
-}
-
-_backup_list() {
-	bservername=$1
-	[ -z "$servername" ] && servername=$bservername
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	vps_backup=$(_get_json "backuplist")
-	[ -z "$vps_backup" ] && return
-	backup_lastmodif="$(echo "$vps_backup" | jsonfilter -q -e '@.modif')"
-	[ -n "$backup_lastmodif" ] && {
-		uci -q set openmptcprouter.$servername.lastbackup=$backup_lastmodif
-		backup_all="$(echo "$vps_backup" | jsonfilter -q -e '@.sorted[*]')"
-		uci -q del openmptcprouter.$servername.allbackup
-		echo "$vps_backup" | jsonfilter -q -e '@.sorted[*]' | while read backup; do
-			name=$(echo "$backup" | jsonfilter -q -e '@[0]' | tr -d '\n')
-			modiftime=$(echo "$backup" | jsonfilter -q -e '@[1]' | tr -d '\n')
-			uci -q add_list openmptcprouter.$servername.allbackup="${name}|${modiftime}"
-		done
-	}
-}
-
-
-
-backup_list() {
-	config_load openmptcprouter
-	config_foreach _backup_list server
-	[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
-}
-
-
 _count_server() {
 	local servername=$1
 	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
@@ -3658,7 +3590,6 @@ _config_service() {
 		_set_vps_firewall
 		[ -n "$(uci -q show network | grep wireguard)" ] && [ -z "$(_set_wireguard_vps)" ] && error=1
 	fi
-	_backup_list
 	redirect_port="0"
 	if [ "$(uci -q get openmptcprouter.${servername}.redirect_ports)" = "1" ]; then
 		redirect_port="1"

@@ -1752,7 +1752,7 @@ function force_stop_vpn(vpn)
 		sys.exec("/etc/init.d/glorytun stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/glorytun-udp stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/dsvpn stop >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/openvpn stop omr >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpn running omr >/dev/null 2>&1 && /etc/init.d/openvpn stop omr >/dev/null 2>&1")
 		sys.exec("/etc/init.d/mqvpn stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/softethervpnclient stop >/dev/null 2>/dev/null")
 	elseif vpn:match("^glorytun_tcp.*") then
@@ -1762,7 +1762,7 @@ function force_stop_vpn(vpn)
 	elseif vpn == "dsvpn" then
 		sys.exec("/etc/init.d/dsvpn stop >/dev/null 2>/dev/null")
 	elseif vpn == "openvpn" then
-		sys.exec("/etc/init.d/openvpn stop omr >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpn running omr >/dev/null 2>&1 && /etc/init.d/openvpn stop omr >/dev/null 2>&1")
 	elseif vpn == "mqvpn" then
 		sys.exec("/etc/init.d/mqvpn stop >/dev/null 2>/dev/null")
 	elseif vpn == "softethervpn" or vpn == "softether" then

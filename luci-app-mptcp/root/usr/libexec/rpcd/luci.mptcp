@@ -559,7 +559,7 @@ end
 -- -------------------------------------------------------------------------
 
 -- Path live collector from .14; preserve its JSON contract.
-local function paths_data()
+local function collect_paths_data(include_monitor)
 local function read_first(paths)
 	for _, path in ipairs(paths) do
 		local fh = io.open(path, "r")
@@ -950,11 +950,19 @@ local function build_mptcp_metrics(status, interfaces)
 	local mptcp_connections = 0
 	local mptcp_subflows = 0
 	local tcp_subflows = 0
+	local configured_paths = 0
+	local up_paths = 0
 	local active_paths = 0
 
 	for _, iface in ipairs(interfaces or {}) do
 		if iface.multipath == "on" or iface.multipath == "master" or iface.multipath == "backup" or iface.multipath == "handover" then
-			active_paths = active_paths + 1
+			configured_paths = configured_paths + 1
+			if iface.up then
+				up_paths = up_paths + 1
+				if iface.has_endpoint then
+					active_paths = active_paths + 1
+				end
+			end
 		end
 	end
 
@@ -970,6 +978,8 @@ local function build_mptcp_metrics(status, interfaces)
 	return {
 		endpoint_count = #(status.endpoints or {}),
 		interface_count = #(interfaces or {}),
+		configured_path_count = configured_paths,
+		up_path_count = up_paths,
 		active_path_count = active_paths,
 		connection_count = #(status.connections or {}),
 		mptcp_connection_count = mptcp_connections,
@@ -980,6 +990,36 @@ end
 
 	local status = collect_mptcp_status()
 	local interfaces = collect_mptcp_interfaces(status.endpoints)
+	if include_monitor then
+		local nstat = exec_output("nstat -az 2>/dev/null") or ""
+		local counters, counter_map = parse_mptcp_counters(nstat)
+		if #counters == 0 then
+			-- nstat is optional on some images; procfs has cumulative counters.
+			nstat = mptcp_counters_raw()
+			local proc_counters = parse_counters(nstat)
+			for name, count in pairs(proc_counters) do
+				local full_name = "MPTcpExt" .. name
+				counter_map[full_name] = count
+				counters[#counters + 1] = { name = full_name, value = count, rate = 0 }
+			end
+			table.sort(counters, function(a, b) return a.name < b.name end)
+		end
+		return {
+			generated = os.time(),
+			kernel = status.kernel,
+			metrics = build_mptcp_metrics(status, interfaces),
+			interfaces = interfaces,
+			connections = status.connections,
+			counters = counters,
+			counter_map = counter_map,
+			raw = {
+				endpoints = status.raw.endpoints,
+				ss = status.raw.ss,
+				nstat = nstat,
+				monitor = exec_output("multipath -m 2>/dev/null") or ""
+			}
+		}
+	end
 	local paths = {}
 	local by_dev = {}
 
@@ -1081,6 +1121,10 @@ end
 			ss = status.raw.ss
 		}
 	}
+end
+
+local function paths_data()
+	return collect_paths_data(false)
 end
 
 local methods = {
@@ -1251,6 +1295,11 @@ local methods = {
 	-- Bandwidth / diagnostics (existing methods below)
 	paths_data = {
 		call = function() return paths_data() end
+	},
+	-- Structured, read-only snapshot for the live monitoring view. Reuse the
+	-- same 6.18-compatible parsers as the paths and diagnostics views.
+	mptcp_status_data = {
+		call = function() return collect_paths_data(true) end
 	},
 
 	-- -----------------------------------------------------------------------

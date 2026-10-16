@@ -6,6 +6,25 @@
 'require fs';
 'require ui';
 
+function is3KVersion(version) {
+	return /(?:^|[-_.])3k(?:rc[0-9]*)?$/i.test(String(version || ''));
+}
+
+function newerVersion(current, latest) {
+	if (!current || !latest || is3KVersion(current) !== is3KVersion(latest)) return false;
+	var currentBase = String(current).match(/^\d+(?:\.\d+)*/);
+	var latestBase = String(latest).match(/^\d+(?:\.\d+)*/);
+	if (!currentBase || !latestBase) return false;
+	var a = currentBase[0].split('.').map(Number), b = latestBase[0].split('.').map(Number);
+	for (var i = 0; i < Math.max(a.length, b.length); i++) {
+		if ((b[i] || 0) !== (a[i] || 0)) return (b[i] || 0) > (a[i] || 0);
+	}
+	var currentRc = String(current).match(/3krc(\d*)$/i);
+	var latestRc = String(latest).match(/3krc(\d*)$/i);
+	if (currentRc && !latestRc) return true;
+	if (latestRc && !currentRc) return false;
+	return !!(currentRc && latestRc && Number(latestRc[1]) > Number(currentRc[1]));
+}
 var callSettingsAdd = rpc.declare({
 	object: 'openmptcprouter', method: 'settingsadd',
 	params: [
@@ -144,7 +163,7 @@ return view.extend({
 		var updateServer = null;
 		(uci.sections('openmptcprouter', 'server') || []).forEach(function(srv) {
 			var ver = srv.omr_version || '';
-			if (ver && latestVpsVer && ver !== latestVpsVer)
+			if (newerVersion(ver, latestVpsVer))
 				updateServer = srv['.name'];
 		});
 		this._updateServer = updateServer;

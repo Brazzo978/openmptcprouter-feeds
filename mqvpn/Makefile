@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mqvpn
 PKG_VERSION:=0.16.2
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 PKG_LICENSE:=Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 
@@ -122,6 +122,10 @@ define Build/Compile
 		-DSSL_INC_PATH="$(BSSL_INC)" \
 		-DSSL_LIB_PATH="$(BSSL_LIBS)" \
 		-DXQC_ENABLE_BBR2=ON \
+		-DXQC_ENABLE_FEC=ON \
+		-DXQC_ENABLE_XOR=ON \
+		-DXQC_ENABLE_RSC=ON \
+		-DXQC_ENABLE_PKM=ON \
 		-DCMAKE_C_FLAGS="$(TARGET_CFLAGS)" \
 		-DCMAKE_CXX_FLAGS="$(TARGET_CXXFLAGS)"
 	+$(MAKE) -C "$(XQUIC_BUILD)"
@@ -146,6 +150,7 @@ define Package/mqvpn/install
 	$(INSTALL_BIN) $(MQVPN_BUILD)/mqvpn $(1)/usr/sbin/mqvpn
 	$(CP) ./files/* $(1)/
 	$(INSTALL_BIN) ./files/etc/uci-defaults/4103-mqvpn-world-hold $(1)/etc/uci-defaults/4103-mqvpn-world-hold
+	$(INSTALL_BIN) ./files/etc/hotplug.d/ntp/30-mqvpn-time-step $(1)/etc/hotplug.d/ntp/30-mqvpn-time-step
 endef
 
 $(eval $(call BuildPackage,mqvpn))

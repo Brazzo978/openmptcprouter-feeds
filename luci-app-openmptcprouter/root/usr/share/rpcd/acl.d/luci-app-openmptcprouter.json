@@ -23,10 +23,7 @@
                     "wizardadd",
                     "settingsadd",
                     "updateVPS",
-                    "wireguardRemoteAccessStatus",
-                    "backuplist",
-                    "backupget",
-                    "backupsend"
+                    "wireguardRemoteAccessStatus"
                 ],
                 "file": [
                     "stat",
@@ -175,10 +172,7 @@
                     "settingsadd",
                     "updateVPS",
                     "wireguardRemoteAccessStatus",
-                    "wireguardRemoteAccessSet",
-                    "backuplist",
-                    "backupget",
-                    "backupsend"
+                    "wireguardRemoteAccessSet"
                 ],
                 "uci": [
                     "add",

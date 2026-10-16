@@ -418,7 +418,7 @@ return view.extend({
 				.finally(L.bind(this.renderContents, this));
 		};
 
-		/* ── Step 1: Servers ───────────────────────────── */
+		/* ── Servers ───────────────────────────── */
 		/* Server sections whose API key was edited in this form, and whether
 		 * the "Force retrieve settings" flag below is ticked by us rather
 		 * than by the user (so reverting the field can untick it again while
@@ -495,7 +495,7 @@ return view.extend({
 		o = s.option(form.Flag, 'disabled', _('Disable server'));
 		o.rmempty = true;
 
-		/* ── Step 2: Settings (tabbed) ─────────────────── */
+		/* ── Settings (tabbed) ─────────────────── */
 		s = m.section(form.NamedSection, 'settings', 'main', _('Settings'));
 		s.tab('general',  _('General'));
 		s.tab('ipv6',     _('IPv6'));
@@ -797,7 +797,7 @@ return view.extend({
 		o.default = 'world';
 		o.retain = true; /* see 'vpn' option's comment above (#4350) */
 
-		/* ── Step 3: LAN ───────────────────────────────── */
+		/* ── LAN ───────────────────────────────── */
 		s = m.section(form.TypedSection, 'interface', _('LAN interfaces'));
 		s.uciconfig = 'network';
 		s.addremove = false;
@@ -827,7 +827,7 @@ return view.extend({
 		o.default = '255.255.255.0';
 		o.depends('proto', 'static');
 
-		/* ── Step 4: WAN ───────────────────────────────── */
+		/* ── WAN ───────────────────────────────── */
 		s = m.section(form.TypedSection, 'interface', _('WAN interfaces'));
 		s.uciconfig = 'network';
 		s.addremove = true;
@@ -1112,15 +1112,10 @@ return view.extend({
 		}
 		this._doSave = doSave;
 
-		/* ═══════════════════════════════════════════════════
-		 *  STEP WIZARD WRAPPER
-		 *  Re-applied after every Map.renderContents() so the step UI
-		 *  survives section add/remove re-renders.
-		 * ═══════════════════════════════════════════════════ */
-		var currentStep = 0;
-
+		/* Keep all four sections on one page. renderContents() runs again
+		 * after adding or removing a server or WAN, so decorate each render. */
 		function decorateWizard(mapEl) {
-			if (!mapEl || mapEl.querySelector('.omr-steps'))
+			if (!mapEl || mapEl.querySelector('.omr-page-actions'))
 				return;
 
 			ensureWizardCSSLoaded();
@@ -1128,63 +1123,21 @@ return view.extend({
 			var sections = mapEl.querySelectorAll(':scope > .cbi-section');
 			if (sections.length < 4)
 				sections = mapEl.querySelectorAll('.cbi-section');
-
-			var stepLabels = [_('Server'), _('Settings'), _('LAN'), _('WAN')];
-			var panels = [], i;
-
-			for (i = 0; i < Math.min(sections.length, 4); i++) {
-				var panel = E('div', { 'class': 'omr-panel' });
-				sections[i].parentNode.insertBefore(panel, sections[i]);
-				panel.appendChild(sections[i]);
-				panels.push(panel);
-			}
-
-			if (!panels.length)
+			if (sections.length < 4)
 				return;
 
-			// Remove LuCI default page actions (using wizard's custom buttons instead)
-			mapEl.querySelectorAll('.cbi-page-actions').forEach(function(el) {
-				el.remove();
-			});
-
-			if (currentStep >= panels.length) currentStep = panels.length - 1;
-			if (currentStep < 0) currentStep = 0;
-
-			panels[currentStep].classList.add('active');
-
-			// Step bar
-			var stepsUl = E('ul', { 'class': 'omr-steps' });
-
-			function goTo(idx) {
-				if (idx < 0 || idx >= panels.length) return;
-				for (var j = 0; j < idx; j++)
-					stepsUl.children[j].classList.add('done');
-				panels[currentStep].classList.remove('active');
-				stepsUl.children[currentStep].classList.remove('active');
-				currentStep = idx;
-				panels[currentStep].classList.add('active');
-				stepsUl.children[currentStep].classList.add('active');
-				updateNav();
-				window.scrollTo({ top: 0, behavior: 'smooth' });
+			var sectionLabels = [_('Server'), _('Settings'), _('LAN'), _('WAN')];
+			for (var i = 0; i < sectionLabels.length; i++) {
+				sections[i].classList.add('omr-page-section');
+				sections[i].parentNode.insertBefore(
+					E('h2', { 'class': 'omr-section-heading' }, sectionLabels[i]),
+					sections[i]);
 			}
 
-			stepLabels.forEach(function(label, idx) {
-				stepsUl.appendChild(E('li', {
-					'class': idx === currentStep ? 'active' : (idx < currentStep ? 'done' : ''),
-					'click': function() { goTo(idx); }
-				}, [
-					E('span', { 'class': 'step-num' }, '' + (idx + 1)),
-					E('span', { 'class': 'step-label' }, ' ' + label)
-				]));
-			});
-
-			// Nav buttons
-			var btnPrev = E('button', { 'type': 'button', 'class': 'cbi-button' }, '← ' + _('Previous'));
-			var btnNext = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply' }, _('Next') + ' →');
-			var btnSave = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply' }, _('Save & Apply'));
-
-			btnPrev.addEventListener('click', function() { goTo(currentStep - 1); });
-			btnNext.addEventListener('click', function() { goTo(currentStep + 1); });
+			var btnSave = E('button', {
+				'type': 'button',
+				'class': 'cbi-button cbi-button-apply'
+			}, _('Save & Apply'));
 			btnSave.addEventListener('click', function() {
 				btnSave.disabled = true;
 				doSave().catch(function() {}).finally(function() {
@@ -1192,44 +1145,14 @@ return view.extend({
 				});
 			});
 
-			var navDiv = E('div', { 'class': 'cbi-page-actions omr-nav' }, [
-				E('div', { 'style': 'display:flex;gap:.5em' }, [btnPrev, btnNext, btnSave])
-			]);
+			mapEl.insertBefore(E('h2', {
+				'class': 'omr-page-title'
+			}, _('OpenMPTCProuter Wizard')), mapEl.firstChild);
+			mapEl.appendChild(E('div', {
+				'class': 'cbi-page-actions omr-page-actions'
+			}, btnSave));
 
-			function updateNav() {
-				btnPrev.style.display = currentStep === 0 ? 'none' : '';
-				btnNext.style.display = currentStep === panels.length - 1 ? 'none' : '';
-			}
-			updateNav();
 
-			// Assemble
-			var wrapper = E('div', {}, [
-				E('h2', {}, _('OpenMPTCProuter Wizard')),
-				stepsUl
-			]);
-
-			panels.forEach(function(p) { wrapper.appendChild(p); });
-			wrapper.appendChild(navDiv);
-
-			// Remove ALL page action elements and buttons outside wrapper
-			mapEl.querySelectorAll('.cbi-page-actions:not(.omr-nav), .cbi-section-actions').forEach(function(el) {
-				el.remove();
-			});
-			mapEl.querySelectorAll('button').forEach(function(btn) {
-				if (!wrapper.contains(btn)) {
-					btn.remove();
-				}
-			});
-
-			while (mapEl.firstChild) mapEl.removeChild(mapEl.firstChild);
-			mapEl.appendChild(wrapper);
-
-			// Remove LuCI default buttons that appear after render (with delay to ensure they're added)
-			setTimeout(function() {
-				document.querySelectorAll('.cbi-page-actions:not(.omr-nav), .cbi-section-actions').forEach(function(el) {
-					el.remove();
-				});
-			}, 100);
 		}
 
 		var origRenderContents = m.renderContents;
@@ -1246,6 +1169,12 @@ return view.extend({
 		};
 
 		return m.render();
+	},
+
+	/* The wizard supplies its own atomic-save button inside the map.
+	 * LuCI appends its default footer outside that map after rendering. */
+	addFooter: function() {
+		return E([]);
 	},
 
 	handleSaveApply: function(ev) {

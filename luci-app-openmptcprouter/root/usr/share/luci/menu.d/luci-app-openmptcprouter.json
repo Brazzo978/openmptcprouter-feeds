@@ -43,17 +43,6 @@
 	    "acl": ["luci-app-openmptcprouter"]
 	}
     },
-    "admin/system/openmptcprouter/backup": {
-	"title": "Backup",
-	"order": 4,
-	"action": {
-	    "type": "view",
-	    "path": "openmptcprouter/backup"
-	},
-	"depends": {
-	    "acl": ["luci-app-openmptcprouter"]
-	}
-    },
     "admin/system/openmptcprouter/logs": {
 	"title": "Diagnostic logs",
 	"order": 5,

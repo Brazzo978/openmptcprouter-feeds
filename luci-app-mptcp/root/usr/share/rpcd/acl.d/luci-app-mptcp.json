@@ -18,6 +18,7 @@
 		    "interface_bandwidth",
 		    "mptcp_fullmesh",
 		    "mptcp_monitor",
+		    "mptcp_status_data",
 		    "mptcp_connections",
 		    "mptcp_check_trace",
 		    "get_settings",

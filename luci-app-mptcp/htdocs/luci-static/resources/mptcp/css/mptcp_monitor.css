@@ -1,0 +1,33 @@
+.omr-monitor { color: #16263b; }
+.omr-monitor-hero { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; padding:1.2rem; margin-bottom:1rem; border:1px solid #dbe5f0; border-radius:16px; background:linear-gradient(135deg,#f8fbff,#edf6ff); }
+.omr-monitor-hero h2 { margin:0 0 .35rem; }
+.omr-monitor-hero p { margin:.2rem 0; }
+.omr-monitor-muted { color:#60758b; font-size:12px; }
+.omr-monitor-help, .omr-monitor-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); gap:.7rem; margin-bottom:1rem; }
+.omr-monitor-help > span, .omr-monitor-card { display:flex; flex-direction:column; gap:.35rem; padding:.8rem 1rem; border:1px solid #dbe5f0; border-radius:12px; background:#fff; }
+.omr-monitor-help small, .omr-monitor-card small, .omr-monitor-card span { color:#60758b; line-height:1.4; }
+.omr-monitor-card strong { font-size:20px; overflow-wrap:anywhere; }
+.omr-monitor-panel { padding:1rem; margin:0 0 1rem; border:1px solid #dbe5f0; border-radius:14px; background:#fff; box-shadow:0 5px 18px rgba(15,35,60,.05); }
+.omr-monitor-panel h3 { margin:0 0 .2rem; }
+.omr-monitor-panel p { margin:.2rem 0 .8rem; }
+.omr-monitor-panel summary { cursor:pointer; font-weight:700; }
+.omr-monitor-panel pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:35rem; overflow:auto; }
+.omr-monitor-alerts { display:grid; gap:.5rem; }
+.omr-monitor-alert { display:flex; align-items:flex-start; gap:.65rem; padding:.7rem; border:1px solid #dbe5f0; border-radius:10px; }
+.omr-monitor-alert span:last-child { display:flex; flex-direction:column; gap:.2rem; }
+.omr-monitor-alert.warning { background:#fffbeb; border-color:#fde68a; }
+.omr-monitor-alert.error { background:#fef2f2; border-color:#fecaca; }
+.omr-monitor-alert.ok { background:#f0fdf4; border-color:#bbf7d0; }
+.omr-monitor-alert.info { background:#eff6ff; border-color:#bfdbfe; }
+.omr-monitor-badge { display:inline-block; padding:.15rem .5rem; border-radius:999px; background:#f1f5f9; font-size:11px; font-weight:700; white-space:nowrap; }
+.omr-monitor-badge.ok { background:#dcfce7; color:#166534; }
+.omr-monitor-badge.warning { background:#fef3c7; color:#92400e; }
+.omr-monitor-badge.error { background:#fee2e2; color:#991b1b; }
+.omr-monitor-badge.info { background:#dbeafe; color:#1e40af; }
+.omr-monitor-scroll { max-width:100%; overflow-x:auto; }
+.omr-monitor-table { width:100%; min-width:680px; border-collapse:collapse; }
+.omr-monitor-table th, .omr-monitor-table td { padding:.55rem .65rem; border-bottom:1px solid #e6edf5; text-align:left; vertical-align:top; font-size:12px; }
+.omr-monitor-table th { background:#f4f8fc; color:#455b71; font-weight:700; }
+.omr-monitor-table td strong { display:block; overflow-wrap:anywhere; }
+.omr-monitor-table td small { display:block; color:#687f94; margin-top:.2rem; overflow-wrap:anywhere; }
+@media (max-width:600px) { .omr-monitor-hero { flex-direction:column; } }

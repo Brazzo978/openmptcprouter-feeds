@@ -1,0 +1,51 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -931,6 +931,7 @@
+     if(Libevent_FOUND OR EVENT_LIB)
+         add_executable(test_control_socket tests/test_control_socket.c src/reorder_rx.c)
+         target_include_directories(test_control_socket PRIVATE
++            ${XQUIC_INCLUDE_DIR}
+             ${CMAKE_SOURCE_DIR}/src
+             ${CMAKE_SOURCE_DIR}/src/platform/linux
+             ${CMAKE_SOURCE_DIR}/src/platform/posix
+diff --git a/src/platform/linux/control_socket.c b/src/platform/linux/control_socket.c
+--- a/src/platform/linux/control_socket.c
++++ b/src/platform/linux/control_socket.c
+@@ -75,6 +75,7 @@
+ #include "control_socket.h"
+ #include "platform_internal.h"
+ #include "json_mini.h"
++#include "xquic/xqc_configure.h" /* Report the features actually linked from XQUIC. */
+ #include "log.h"
+ 
+ #include <event2/event.h>
+diff --git a/tests/test_control_socket.c b/tests/test_control_socket.c
+--- a/tests/test_control_socket.c
++++ b/tests/test_control_socket.c
+@@ -901,7 +901,11 @@
+     call_dispatch("{\"cmd\":\"get_build_info\"}", resp, sizeof(resp));
+     ASSERT_CONTAINS(resp, "\"version\":\"test\"");
+     ASSERT_CONTAINS(resp, "\"scheduler\":\"none\"");
+-    ASSERT_CONTAINS(resp, "\"fec_enabled\":");
++#ifdef XQC_ENABLE_FEC
++    ASSERT_CONTAINS(resp, "\"fec_enabled\":1");
++#else
++    ASSERT_CONTAINS(resp, "\"fec_enabled\":0");
++#endif
+ }
+ 
+ /* Client mode: mqvpn_server_scheduler_label(NULL) degrades to "unknown"
+@@ -915,7 +919,11 @@
+     call_dispatch_client("{\"cmd\":\"get_build_info\"}", resp, sizeof(resp));
+     ASSERT_CONTAINS(resp, "\"version\":\"test\"");
+     ASSERT_CONTAINS(resp, "\"scheduler\":\"minrtt\"");
+-    ASSERT_CONTAINS(resp, "\"fec_enabled\":");
++#ifdef XQC_ENABLE_FEC
++    ASSERT_CONTAINS(resp, "\"fec_enabled\":1");
++#else
++    ASSERT_CONTAINS(resp, "\"fec_enabled\":0");
++#endif
+     g_cli_scheduler_label = "unknown";
+ }
+ 

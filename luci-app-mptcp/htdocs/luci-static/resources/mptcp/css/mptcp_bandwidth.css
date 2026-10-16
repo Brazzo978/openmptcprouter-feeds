@@ -1,0 +1,18 @@
+#bw-root .omr-bw-meta { display:flex; justify-content:space-between; gap:1rem; align-items:center; margin:.4rem 0 .75rem; font-size:12px; color:#526476; }
+#bw-root .omr-bw-meta #omr-bw-status { font-weight:700; }
+#bw-root .omr-bw-meta #omr-bw-status.error { color:#b42318; }
+#bw-root .omr-bw-health { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.7rem; margin-bottom:1rem; padding:.8rem; border:1px solid #dbe5f0; border-radius:16px; background:linear-gradient(135deg,#f8fbff,#edf6ff); }
+#bw-root .omr-bw-health-card { display:flex; flex-direction:column; gap:.2rem; padding:.7rem; border:1px solid #dbe5f0; border-radius:12px; background:#fff; }
+#bw-root .omr-bw-health-card small { color:#61768b; font-weight:700; text-transform:uppercase; }
+#bw-root .omr-bw-health-card strong { color:#16283e; font-size:17px; overflow-wrap:anywhere; }
+#bw-root .omr-bw-health-card span { color:#61768b; font-size:12px; }
+#bw-root .omr-bw-controls { display:flex; gap:.8rem; flex-wrap:wrap; margin-bottom:1rem; padding:1rem; border:1px solid #dbe5f0; border-radius:14px; background:#fff; }
+#bw-root .omr-bw-control { display:flex; flex-direction:column; gap:.3rem; color:#40546a; font-size:12px; font-weight:700; }
+#bw-root .omr-bw-control select { min-width:140px; min-height:35px; padding:.35rem .5rem; border:1px solid #c8d6e4; border-radius:9px; background:#fff; color:#16283e; }
+#bw-root .omr-bw-legend { display:flex; flex-wrap:wrap; gap:.45rem; margin:.3rem 0 .8rem; }
+#bw-root .omr-bw-chip { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .65rem; border:1px solid #ccd9e6; border-radius:999px; background:#fff; color:#1b344e; font-size:12px; font-weight:700; cursor:pointer; }
+#bw-root .omr-bw-chip.off { opacity:.5; background:#f5f8fb; }
+#bw-root .omr-bw-chip:focus-visible { outline:2px solid #2f7df6; outline-offset:2px; }
+#bw-root .omr-bw-dot { width:.7rem; height:.7rem; border-radius:50%; }
+#bw-root .mptcp-summary-card, #bw-root .mptcp-wan-card { border:1px solid #dbe5f0; border-radius:16px; background:linear-gradient(180deg,#fff,#f8fbfe); box-shadow:0 5px 18px rgba(15,35,60,.05); }
+@media (max-width:600px) { #bw-root .mptcp-summary-card__header { flex-direction:column; } }

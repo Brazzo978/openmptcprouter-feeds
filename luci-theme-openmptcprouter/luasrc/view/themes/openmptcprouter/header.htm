@@ -21,6 +21,37 @@
 	-- Get current and latest OMR version
 	local current_omr_version = luci.model.uci.cursor():get("openmptcprouter","settings","version") or ""
 	local latest_omr_version = luci.model.uci.cursor():get("openmptcprouter","latest_versions","omr") or ""
+	local function is_3k_version(version)
+		local lower = version:lower()
+		return lower:match("[-_%.]3k$") ~= nil or lower:match("[-_%.]3krc%d*$") ~= nil
+	end
+
+	local function newer_version(current, latest)
+		if current == "" or latest == "" or is_3k_version(current) ~= is_3k_version(latest) then
+			return false
+		end
+		local current_base = current:match("^%d[%d%.]*")
+		local latest_base = latest:match("^%d[%d%.]*")
+		if not current_base or not latest_base then return false end
+		local current_parts, latest_parts = {}, {}
+		for part in current_base:gmatch("%d+") do current_parts[#current_parts + 1] = tonumber(part) end
+		for part in latest_base:gmatch("%d+") do latest_parts[#latest_parts + 1] = tonumber(part) end
+		for i = 1, math.max(#current_parts, #latest_parts) do
+			local a, b = current_parts[i] or 0, latest_parts[i] or 0
+			if b ~= a then return b > a end
+		end
+		local current_rc = current:lower():match("3krc(%d*)$")
+		local latest_rc = latest:lower():match("3krc(%d*)$")
+		if current_rc and not latest_rc then return true end
+		if latest_rc and not current_rc then return false end
+		if current_rc and latest_rc then return (tonumber(latest_rc) or 0) > (tonumber(current_rc) or 0) end
+		return false
+	end
+
+	local omr_update_available = newer_version(current_omr_version, latest_omr_version)
+	local omr_release_url = is_3k_version(current_omr_version)
+		and "https://github.com/Brazzo978/openmptcprouter/releases"
+		or "https://www.openmptcprouter.com/"
 
 -%>
 <!DOCTYPE html>
@@ -67,10 +98,10 @@
 					<% end %>
 				</div>
 			<%- end -%>
-			<%- if current_omr_version ~= "" and latest_omr_version ~= "" and current_omr_version < latest_omr_version then -%>
+			<%- if omr_update_available then -%>
 				<div class="alert-message notice">
 					<p><%=translatef("You have OpenMPTCProuter version %s and version %s is now available",current_omr_version,latest_omr_version)%></p>
-					<div class="right"><a class="btn" href="https://www.openmptcprouter.com/"><%:Download latest version...%></a></div>
+					<div class="right"><a class="btn" href="<%=omr_release_url%>"><%:Download latest version...%></a></div>
 				</div>
 			<%- end -%>
 
