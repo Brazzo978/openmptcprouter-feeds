@@ -1,0 +1,10 @@
+{
+  "luci-app-openmptcprouter-diagnostic": {
+    "description": "Read-only OpenMPTCProuter diagnostics and support report",
+    "read": {
+      "ubus": {
+        "openmptcprouter": [ "diagnostic_logs", "support_report" ]
+      }
+    }
+  }
+}

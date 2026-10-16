@@ -9,15 +9,13 @@
 
 METRICS_DIR="${OMR_METRICS_DIR:-/tmp/metrics}"
 [ -d "$METRICS_DIR" ] || mkdir -p "$METRICS_DIR"
-OMR_MODEMMANAGER_BIN="${OMR_MODEMMANAGER_BIN:-/bin/omr-modemmanager}"
-OMR_QMI_BIN="${OMR_QMI_BIN:-/usr/bin/omr-qmi}"
 
 # The omrvpn/OWVPN* tunnel is collected like every other interface: it is
 # what the LAN actually sends through, so its latency/loss to the VPS, its
 # queue and its own subflows are worth showing (the LuCI page renders it as
 # a separate "VPN tunnel" group, not as a WAN). The WAN-only collectors
-# below need no guard for it -- no wireless sysfs dir and a non-modem proto
-# skip the signal readers, and no MPTCP endpoint / weight / cost / asn
+# below need no guard for it -- no wireless sysfs dir means no WiFi
+# signal read, and no MPTCP endpoint / weight / cost / asn
 # exists for a tunnel, so those fields just stay null.
 # What must not happen is shipping it: POST /metrics on the VPS is a
 # per-WAN store feeding the decision model, so omr-metrics-send drops the
@@ -26,82 +24,8 @@ OMR_QMI_BIN="${OMR_QMI_BIN:-/usr/bin/omr-qmi}"
 # One clock read for the whole run
 _now=$(date +%s)
 
-# Query the modem (mmcli/qmi via omr-modemmanager or omr-qmi) at most once
-# per TTL window, caching the raw "all"/"signal" output to a per-interface
-# file. Each query is a D-Bus round-trip (~0.2-0.3s of fork+exec overhead),
-# and signal quality doesn't move fast enough to need a fresh read every
-# single post-tracking cycle, so most cycles just replay the last reading.
-# Default TTL tracks post_interval (3 cycles); override via
-# OMR_TRACKER_MODEM_SIGNAL_TTL if a tighter or looser bound is needed.
-_modem_query_cached() {
-	local bin="$1" device="$2"
-	local cache_file="${METRICS_DIR}/.${OMR_TRACKER_INTERFACE}.modemsig"
-	local ttl="${OMR_TRACKER_MODEM_SIGNAL_TTL:-$(( ${OMR_TRACKER_POST_INTERVAL:-10} * 3 ))}"
-	local now cache_ts
-	now=$_now
-	MODEM_ALL_RESULT=""
-	MODEM_SIGNAL_RESULT=""
-	if [ -f "$cache_file" ]; then
-		{ read -r cache_ts; read -r MODEM_ALL_RESULT; read -r MODEM_SIGNAL_RESULT; } < "$cache_file" 2>/dev/null
-	fi
-	# Guard against an empty/corrupted cache_ts before doing arithmetic on it
-	case "$cache_ts" in ''|*[!0-9]*) cache_ts="";; esac
-	if [ -n "$cache_ts" ] && [ $(( now - cache_ts )) -lt "$ttl" ] && [ $(( now - cache_ts )) -ge 0 ]; then
-		return
-	fi
-	MODEM_ALL_RESULT=$("$bin" "$device" all 2>/dev/null)
-	MODEM_SIGNAL_RESULT=$("$bin" "$device" signal 2>/dev/null)
-	printf '%s\n%s\n%s\n' "$now" "$MODEM_ALL_RESULT" "$MODEM_SIGNAL_RESULT" > "$cache_file" 2>/dev/null
-}
-
-# Collect modem signal quality if applicable
-_get_modem_signal() {
-	local proto device result
-	proto=$(uci -q get "network.${OMR_TRACKER_INTERFACE}.proto")
-
-	OMR_TRACKER_SIGNAL_QUALITY=""
-	SIGNAL_OPERATOR=""
-	SIGNAL_NUMBER=""
-	SIGNAL_STATE=""
-	SIGNAL_TYPE=""
-	OMR_TRACKER_SIGNAL_RSSI=""
-	OMR_TRACKER_SIGNAL_RSRP=""
-	OMR_TRACKER_SIGNAL_RSRQ=""
-	OMR_TRACKER_SIGNAL_SINR=""
-
-	if [ "$proto" = "modemmanager" ] || [ "$proto" = "qmi" ]; then
-		local device_path bin _rest
-		device_path=$(uci -q get "network.${OMR_TRACKER_INTERFACE}.device")
-		[ -z "$device_path" ] && return
-		if [ "$proto" = "modemmanager" ]; then
-			bin="$OMR_MODEMMANAGER_BIN"
-		else
-			bin="$OMR_QMI_BIN"
-		fi
-
-		_modem_query_cached "$bin" "$device_path"
-
-		# "all" mode: PERCENT;OPERATOR;NUMBER;STATE;TYPE (first line)
-		result="$MODEM_ALL_RESULT"
-		if [ -n "$result" ]; then
-			IFS=';' read -r SIGNAL_QUALITY SIGNAL_OPERATOR SIGNAL_NUMBER SIGNAL_STATE SIGNAL_TYPE _rest <<EOF
-$result
-EOF
-		fi
-
-		# "signal" mode: RSSI;RSRP;RSRQ;SINR
-		result="$MODEM_SIGNAL_RESULT"
-		if [ -n "$result" ]; then
-			IFS=';' read -r SIGNAL_RSSI SIGNAL_RSRP SIGNAL_RSRQ SIGNAL_SINR _rest <<EOF
-$result
-EOF
-		fi
-	fi
-}
-
-
 # Query+parse iwinfo at most once per TTL window, caching the parsed fields
-# (same rationale as _modem_query_cached: it's a full netlink round-trip,
+# (it is a full netlink round-trip,
 # and a disassociated WiFi-WAN link pays this every cycle just as often as
 # an associated one since nothing here is gated on link state). Sets the
 # WIFI_* globals and returns non-zero when there was nothing to parse
@@ -839,11 +763,9 @@ MPTCP_EP_SUBFLOW="false"
 MPTCP_EP_BACKUP="false"
 MPTCP_EP_FULLMESH="false"
 
-# Detect interface type and collect signal
+# Collect WiFi signal when this interface is wireless
 if [ -d "${OMR_SYS_CLASS_NET_DIR:-/sys/class/net}/${OMR_TRACKER_DEVICE}/wireless" ]; then
 	_get_wifi_signal
-else
-	_get_modem_signal
 fi
 
 _get_tc_stats
@@ -1045,7 +967,6 @@ _reap_removed_interfaces() {
 		[ -n "$(uci -q get "network.${iface}")" ] && continue
 		rm -f "$_f" \
 			"${METRICS_DIR}/.${iface}.bw" \
-			"${METRICS_DIR}/.${iface}.modemsig" \
 			"${METRICS_DIR}/.${iface}.tmp"
 		logger -t omr-metrics "dropped metrics of ${iface}: no longer a configured interface, last sample older than ${ttl}s"
 	done

@@ -6,13 +6,32 @@
 'require fs';
 'require ui';
 
+function is3KVersion(version) {
+	return /(?:^|[-_.])3k(?:rc[0-9]*)?$/i.test(String(version || ''));
+}
+
+function newerVersion(current, latest) {
+	if (!current || !latest || is3KVersion(current) !== is3KVersion(latest)) return false;
+	var currentBase = String(current).match(/^\d+(?:\.\d+)*/);
+	var latestBase = String(latest).match(/^\d+(?:\.\d+)*/);
+	if (!currentBase || !latestBase) return false;
+	var a = currentBase[0].split('.').map(Number), b = latestBase[0].split('.').map(Number);
+	for (var i = 0; i < Math.max(a.length, b.length); i++) {
+		if ((b[i] || 0) !== (a[i] || 0)) return (b[i] || 0) > (a[i] || 0);
+	}
+	var currentRc = String(current).match(/3krc(\d*)$/i);
+	var latestRc = String(latest).match(/3krc(\d*)$/i);
+	if (currentRc && !latestRc) return true;
+	if (latestRc && !currentRc) return false;
+	return !!(currentRc && latestRc && Number(latestRc[1]) > Number(currentRc[1]));
+}
 var callSettingsAdd = rpc.declare({
 	object: 'openmptcprouter', method: 'settingsadd',
 	params: [
 		'redirect_ports',
 		'tcp_keepalive_time', 'tcp_fin_timeout', 'tcp_syn_retries', 'tcp_fastopen',
 		'tcp_retries1', 'tcp_retries2', 'ip_default_ttl',
-		'disable_ipv6', 'disable_6in4', 'disable_modemmanager', 'banudpip',
+		'disable_ipv6', 'disable_6in4', 'banudpip',
 		'externalcheck', 'openvpnlb', 'restricttolan', 'debug', 'savevnstat',
 		'disablegwping', 'status_vps_timeout', 'status_getip_timeout', 'status_whois_timeout',
 		'disableloopdetection', 'disableserverhttptest', 'disableintfrename',
@@ -32,6 +51,15 @@ var callUpdateVPS = rpc.declare({
 	expect: { '': {} }
 });
 
+var callWireguardRemoteAccessStatus = rpc.declare({
+	object: 'openmptcprouter', method: 'wireguardRemoteAccessStatus',
+	params: ['server'], expect: { '': {} }
+});
+
+var callWireguardRemoteAccessSet = rpc.declare({
+	object: 'openmptcprouter', method: 'wireguardRemoteAccessSet',
+	params: ['server', 'lan_access'], expect: { '': {} }
+});
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -64,12 +92,25 @@ return view.extend({
 				kern ? L.resolveDefault(fs.stat('/lib/modules/' + kern + '/shortcut-fe.ko'), null)
 				     : Promise.resolve(null)
 			]);
+		}).then(function(data) {
+			var servers = uci.sections('openmptcprouter', 'server') || [];
+			return Promise.all(servers.map(function(srv) {
+				return L.resolveDefault(callWireguardRemoteAccessStatus(srv['.name']), {
+					supported: false, error: _('VPS unavailable')
+				});
+			})).then(function(states) {
+				var byServer = {};
+				servers.forEach(function(srv, i) { byServer[srv['.name']] = states[i]; });
+				data.push(byServer);
+				return data;
+			});
 		});
 	},
 
 	render: function(data) {
 		var res     = data[0];
 		var sfeStat = data[1];
+		var wireguardStates = data[2] || {};
 		var m, s, o;
 		var self = this;
 
@@ -122,7 +163,7 @@ return view.extend({
 		var updateServer = null;
 		(uci.sections('openmptcprouter', 'server') || []).forEach(function(srv) {
 			var ver = srv.omr_version || '';
-			if (ver && latestVpsVer && ver !== latestVpsVer)
+			if (newerVersion(ver, latestVpsVer))
 				updateServer = srv['.name'];
 		});
 		this._updateServer = updateServer;
@@ -158,6 +199,32 @@ return view.extend({
 		o = s.option(form.Flag, 'nofwredirect',
 			_('Disable ports redirection defined in firewall from server to this router'));
 
+		/* The VPS is authoritative. A missing endpoint leaves this control
+		 * unavailable; opening or saving the page never enables it. */
+		this._wireguardStates = wireguardStates;
+		o = s.option(form.Flag, '_wireguard_remote_lan',
+			_('Allow remote WireGuard access to LAN'),
+			_('Permit this server\'s WireGuard clients to reach the router LAN. Add the LAN subnet to the client AllowedIPs (or use 0/0). Internet access remains available; router HTTP and HTTPS at its VPN address remain available for recovery.'));
+		o.rmempty = false;
+		o.cfgvalue = function(section_id) {
+			var state = wireguardStates[section_id];
+			return state && state.supported === true && state.lan_access === true ? '1' : '0';
+		};
+		o.write = function() {};
+		o.remove = function() {};
+		var originalRenderWidget = o.renderWidget;
+		o.renderWidget = function(section_id, option_index, cfgvalue) {
+			var widget = originalRenderWidget.call(this, section_id, option_index, cfgvalue);
+			var state = wireguardStates[section_id];
+			if (!state || state.supported !== true || typeof state.lan_access !== 'boolean') {
+				var input = widget && widget.querySelector && widget.querySelector('input');
+				if (input) input.disabled = true;
+				if (widget && widget.setAttribute)
+					widget.setAttribute('title', state && state.error ? String(state.error) : _('Unavailable on this VPS'));
+			}
+			return widget;
+		};
+		this._wireguardOption = o;
 		/* ── Tabbed settings section ───────────────────────────────── */
 		s = m.section(form.NamedSection, 'settings', 'settings', _('Settings'));
 		s.addremove = false;
@@ -312,9 +379,6 @@ return view.extend({
 			_('Disable interfaces auto rename'),
 			_('Disable renaming interfaces'));
 
-		o = s.taboption('other', form.Flag, 'disable_modemmanager',
-			_('Disable ModemManager'));
-
 		o = s.taboption('other', form.Flag, 'shadowsocksudp',
 			_('Shadowsocks UDP'),
 			_('When proxy shadowsocks is used, use it for UDP if VPN down'));
@@ -467,7 +531,6 @@ return view.extend({
 				get('ip_default_ttl'),
 				get('disable_ipv6'),
 				get('disable_6in4'),
-				get('disable_modemmanager'),
 				get('banudpip'),
 				get('external_check'),
 				get('openvpn_lb'),
@@ -504,9 +567,25 @@ return view.extend({
 				get('vxlan_bridge_if'),
 				get('status_time_budget')
 			).then(function() {
+				var changes = [];
+				(uci.sections('openmptcprouter', 'server') || []).forEach(function(srv) {
+					var name = srv['.name'];
+					var state = self._wireguardStates[name];
+					if (!state || state.supported !== true || typeof state.lan_access !== 'boolean') return;
+					var selected = self._wireguardOption.formvalue(name) === '1';
+					if (selected === state.lan_access) return;
+					changes.push(callWireguardRemoteAccessSet(name, selected).then(function(result) {
+						if (!result || result.supported !== true || result.lan_access !== selected)
+							throw new Error(name + ': ' + (result && result.error || _('VPS rejected the change')));
+						state.lan_access = selected;
+					}));
+				});
+				return Promise.all(changes);
+			}).then(function() {
 				ui.addNotification(null, _('Settings saved and applied successfully.'), 'info');
 			}).catch(function(err) {
 				ui.addNotification(null, _('Failed to save settings: ') + String(err), 'error');
+				throw err;
 			});
 		});
 	},

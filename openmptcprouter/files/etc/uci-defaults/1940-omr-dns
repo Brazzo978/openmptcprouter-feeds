@@ -246,6 +246,54 @@ if [ -z "$(grep unknown-server-time-limit /etc/unbound/unbound_srv.conf)" ]; the
 	echo "unknown-server-time-limit: 2500" > /etc/unbound/unbound_srv.conf
 fi
 
+# Seed the IANA KSK-2024 root DS locally. A resolver that missed the RFC 5011
+# hold-down cannot learn the new key through its now-invalid DNSSEC chain.
+# Preserve each existing root.key: it also contains Unbound's RFC 5011 state.
+anchor='. IN DS 38696 8 2 683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16'
+ksk_public_key='AwEAAa96jeuknZlaeSrvyAJj6ZHv28hhOKkx3rLGXVaC6rXTsDc449/cidltpkyGwCJNnOAlFNKF2jBosZBU5eeHspaQWOmOElZsjICMQMC3aeHbGiShvZsx4wMYSjH8e7Vrhbu6irwCzVBApESjbUdpWWmEnhathWu1jo+siFUiRAAxm9qyJNg/wOZqqzL/dL/q8PkcRU5oUKEpUge71M3ej2/7CPqpdVwuMoTvoB+ZOT4YeGyxMvHmbrxlFzGOHOijtzN+u1TQNatX2XBuzZNQ1K+s2CXkPIZo7s6JgZyvaBevYtxPvYLw4z9mR7K2vaF18UYH9Z9GNUUeayffKC73PYc='
+config_key=/etc/unbound/root.key
+runtime_key=/var/lib/unbound/root.key
+new_config_key=0
+new_runtime_key=0
+[ -f "$config_key" ] || new_config_key=1
+[ -f "$runtime_key" ] || new_runtime_key=1
+
+has_anchor() {
+	[ -f "$1" ] || return 1
+	# Unbound rewrites a learned DS as a DNSKEY with RFC 5011 state.
+	grep -Eiq '^[[:space:]]*\.[[:space:]]+([0-9]+[[:space:]]+)?IN[[:space:]]+DS[[:space:]]+38696[[:space:]]+8[[:space:]]+2[[:space:]]+683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16([[:space:]]|$)' "$1" && return 0
+	awk -v key="$ksk_public_key" '
+		$1 == "." && /;;state=2[[:space:]]*\[[[:space:]]*VALID[[:space:]]*\]/ {
+			for (i = 2; i <= NF - 5; i++)
+				if (toupper($i) == "IN" && toupper($(i+1)) == "DNSKEY" &&
+				    $(i+2) == "257" && $(i+3) == "3" && $(i+4) == "8" &&
+				    $(i+5) == key) { found = 1; exit }
+		}
+		END { exit !found }
+	' "$1"
+}
+
+mkdir -p /etc/unbound /var/lib/unbound || exit 1
+if [ "$new_config_key" -eq 1 ] && [ -f "$runtime_key" ]; then
+	cp -p "$runtime_key" "$config_key" || exit 1
+fi
+if [ "$new_runtime_key" -eq 1 ] && [ -f "$config_key" ]; then
+	cp -p "$config_key" "$runtime_key" || exit 1
+fi
+
+for key in "$config_key" "$runtime_key"; do
+	if ! has_anchor "$key"; then
+		# Append rather than replace so learned trust-anchor state survives.
+		printf '\n%s\n' "$anchor" >> "$key" || exit 1
+	fi
+done
+
+# Let the daemon maintain newly created files on future RFC 5011 updates.
+if id unbound >/dev/null 2>&1; then
+	[ "$new_config_key" -eq 0 ] || chown unbound:unbound "$config_key" || exit 1
+	[ "$new_runtime_key" -eq 0 ] || chown unbound:unbound "$runtime_key" || exit 1
+fi
+
 rm -f /tmp/luci-indexcache
 
 exit 0

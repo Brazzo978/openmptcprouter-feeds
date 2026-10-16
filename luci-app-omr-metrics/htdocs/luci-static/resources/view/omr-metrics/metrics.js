@@ -843,7 +843,7 @@ return view.extend({
 		var sigRows = [];
 		if (isWifi) {
 			sigRows = [
-				[ self._help(_('Type'),     _('Signal source type (WiFi or cellular)')), 'WiFi' ],
+				[ self._help(_('Type'),     _('Signal source type (WiFi)')), 'WiFi' ],
 				[ self._help(_('SSID'),     _('Wi-Fi network name')), wifi.ssid  || '—' ],
 				[ self._help(_('BSSID'),    _('Access point MAC address')), wifi.bssid || '—' ],
 				[ self._help(_('Channel'),  _('Wi-Fi channel in use')), self._fmt(wifi.channel, null) ],
@@ -857,17 +857,7 @@ return view.extend({
 						: null
 				) ],
 			];
-		} else if (sig.type) {
-			sigRows = [
-				[ self._help(_('Type'),     _('Signal source type (WiFi or cellular)')), String(sig.type).toUpperCase() ],
-				[ self._help(_('Operator'), _('Mobile network operator name')), sig.operator || '—' ],
-				[ self._help(_('State'),    _('Connection state reported by the modem')), sig.state || '—' ],
-				[ self._help(_('Quality'),  _('Signal quality percentage reported by the modem')), self._signalBar(sig.quality) ],
-				[ self._help(_('RSSI'),     _('Received Signal Strength Indicator (dBm) — less negative is better')), self._fmt(sig.rssi, 'dBm') ],
-				[ self._help(_('RSRP'),     _('Reference Signal Received Power (dBm, LTE) — less negative is better')), self._fmt(sig.rsrp, 'dBm') ],
-				[ self._help(_('RSRQ'),     _('Reference Signal Received Quality (dB, LTE) — less negative is better')), self._fmt(sig.rsrq, 'dB') ],
-				[ self._help(_('SINR'),     _('Signal to Interference and Noise Ratio (dB) — higher is better')), self._fmt(sig.sinr, 'dB') ],
-			];
+
 		}
 
 		/* ---- BBR rows (only when BBR congestion control is active) ---- */

@@ -55,30 +55,22 @@ MY_DEPENDS := \
     ethtool \
     iputils-ping \
     tracebox \
-    !TARGET_mvebu:luci-proto-3g \
-    !TARGET_mvebu:comgt-ncm !TARGET_mvebu:luci-proto-ncm \
-    !TARGET_mvebu:luci-proto-modemmanager \
     !TARGET_mvebu:luci-proto-ppp \
     omr-update \
     rng-tools \
     openvpn-openssl \
     mmc-utils \
-    libimobiledevice libimobiledevice-utils \
-    comgt \
     kmod-random-core \
     kmod-netem \
     ca-bundle openssl-util \
     dejavu-fonts-ttf-DejaVuSerif dejavu-fonts-ttf-DejaVuSerif-Bold dejavu-fonts-ttf-DejaVuSerif-Italic dejavu-fonts-ttf-DejaVuSerif-BoldItalic \
     iputils-tracepath netcat simple-obfs \
     (TARGET_x86||TARGET_x86_64):kmod-e1000 (TARGET_x86||TARGET_x86_64):kmod-e1000e (TARGET_x86||TARGET_x86_64):kmod-igb (TARGET_x86||TARGET_x86_64):kmod-ne2k-pci (TARGET_x86||TARGET_x86_64):kmod-bnx2 \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-serial !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-serial-option \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-serial-wwan \
-    usb-modeswitch !(TARGET_mvebu||TARGET_ipq806x||TARGET_mt7623):uqmi \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-mii !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-wdm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-qmi-wwan !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-mbim !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):umbim \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-huawei-cdc-ncm !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-rndis !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-ether !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-ipheth !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):usbmuxd !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):libusbmuxd \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-proto-qmi !LINUX_5_4:wpad-mesh-openssl !LINUX_5_4:libopenssl-legacy LINUX_5_4:wpad-basic (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-usb-net-rtl8152 \
-    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):luci-app-mlvpn !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):mlvpn 464xlat kmod-zram kmod-ipt-nat kmod-ipt-nat6 iptables-mod-ipopt igmpproxy ss iptraf-ng \
-    luci-app-acl block-mount blockd fstools luci-app-shutdown libwebp luci-proto-gre vxlan luci-proto-vxlan tcptraceroute luci-proto-mbim luci-app-ttyd luci-mod-dashboard kmod-usb2 libustream-openssl (TARGET_x86||TARGET_x86_64):kmod-ixgbevf (TARGET_x86||TARGET_x86_64):kmod-igbvf \
+    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-mii !(TARGET_mvebu||TARGET_ramips||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net \
+    !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-rndis !(TARGET_mvebu||TARGET_ramips||TARGET_ipq40xx||TARGET_ipq806x||TARGET_mt7623):kmod-usb-net-cdc-ether \
+    !LINUX_5_4:wpad-mesh-openssl !LINUX_5_4:libopenssl-legacy LINUX_5_4:wpad-basic (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-usb-net-rtl8152 \
+    464xlat kmod-zram kmod-ipt-nat kmod-ipt-nat6 iptables-mod-ipopt igmpproxy ss iptraf-ng \
+    luci-app-acl block-mount blockd fstools luci-app-shutdown libwebp luci-proto-gre vxlan luci-proto-vxlan tcptraceroute luci-app-ttyd luci-mod-dashboard kmod-usb2 libustream-openssl (TARGET_x86||TARGET_x86_64):kmod-ixgbevf (TARGET_x86||TARGET_x86_64):kmod-igbvf \
     hwinfo (TARGET_x86||TARGET_x86_64):dmidecode kmod-bonding luci-app-sysupgrade \
     luci-theme-openwrt-2020 luci-proto-wireguard \
     !(LINUX_5_4):mptcpd (TARGET_x86||TARGET_x86_64):kmod-igc !TARGET_mvebu:kmod-mmc-spi kmod-macsec usbutils v2ray-core !LINUX_5_4:v2ray-config \
@@ -87,7 +79,7 @@ MY_DEPENDS := \
     xray-core !LINUX_5_4:xray-config \
     shadowsocks-rust-sslocal shadowsocks-rust-ssservice LINUX_5_4:shadowsocks-rust-config !LINUX_5_4:shadowsocks-rust-config-nft luci-app-shadowsocks-rust \
     luci-proto-external omr-schedule jq luci-app-ddns \
-    mbim-utils (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-r8169 !(TARGET_ipq40xx||TARGET_x86_64):kmod-mt7601u !TARGET_x86_64:kmod-ath9k-htc \
+    (TARGET_x86||TARGET_x86_64||TARGET_rockchip_armv8):kmod-r8169 !(TARGET_ipq40xx||TARGET_x86_64):kmod-mt7601u !TARGET_x86_64:kmod-ath9k-htc \
     TARGET_mvebu:kmod-mwlwifi TARGET_mvebu:mwlwifi-firmware-88w8864 TARGET_mvebu:mwlwifi-firmware-88w8897 TARGET_mvebu:mwlwifi-firmware-88w8964 TARGET_mvebu:mwlwifi-firmware-88w8997 \
     TARGET_x86_64:kmod-atlantic \
     !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-bkup !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-burst !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-first !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-red !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):mptcp-bpf-rr !(LINUX_5_4||LINUX_6_1||TARGET_ramips||TARGET_ipq806x):bpftool-full \
@@ -124,7 +116,7 @@ MY_DEPENDS := \
 #  luci-proto-bonding luci-app-statistics luci-proto-gre
 #    softethervpn5-client softethervpn5-server luci-app-nginx-ha
 
-#    luci-app-mlvpn ubond \
+#    ubond \
 #     kmod-ath9k kmod-ath9k-htc
 
 #    (TARGET_x86||TARGET_x86_64):open-vm-tools \
@@ -134,7 +126,7 @@ MY_DEPENDS := \
 
 #OMR_SUPPORTED_LANGS := ar bg bn_BD ca en fi fr de el he hi hu it ja mr ms nb_NO pl pt_BR pt ro ru es sv uk vi zh_Hans zh_Hant
 #OMR_SUPPORTED_LANGS := ar bg ca cs de en fi fr de el he hi hu it ja ko mr ms no oc pl pt-br pt ro ru es sk sv tr uk vi zh-cn zh-tw
-OMR_SUPPORTED_LANGS := ar bg ca cs de en fi fr de el he hi hu it ja ko mr ms no pl pt-br pt ro ru es sk sv tr uk vi zh-cn zh-tw oc
+OMR_SUPPORTED_LANGS :=
 
 define Package/$(PKG_NAME)
 SECTION:=OMR

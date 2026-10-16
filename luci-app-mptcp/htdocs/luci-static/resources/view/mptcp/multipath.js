@@ -16,6 +16,10 @@ var callMultipathBandwidth = rpc.declare({
 	expect: { '': {} }
 });
 
+var callPathsData = rpc.declare({
+	object: 'luci.mptcp', method: 'paths_data', expect: { '': {} }
+});
+
 var callIfaceBandwidth = rpc.declare({
 	object: 'luci.mptcp',
 	method: 'interface_bandwidth',
@@ -25,16 +29,21 @@ var callIfaceBandwidth = rpc.declare({
 
 return view.extend({
 	STEP:   5,
+	POLL_INTERVAL: 3,
+	WINDOW_SECONDS: 300,
+	_lastPoll: 0,
+	_lastHealth: 0,
+	_selected: null,
 	HEIGHT: 300,
 	WIDTH:  760,
 
 	/* runtime state – reset on every tab switch */
 	_state:    null,
-	_smaState: {},
 
 	load: function() {
 		return Promise.all([
 			uci.load('network'),
+			uci.load('openmptcprouter'),
 			callGetInterfaces()
 		]);
 	},
@@ -80,16 +89,6 @@ return view.extend({
 		       '(' + kby.toFixed(2) + '\u202f' + uby + ')';
 	},
 
-	_sma: function(key, period, val) {
-		if (!this._smaState[key]) this._smaState[key] = [];
-		var buf = this._smaState[key];
-		buf.push(val);
-		if (buf.length > period) buf.shift();
-		var s = 0;
-		for (var i = 0; i < buf.length; i++) s += buf[i];
-		return s / buf.length;
-	},
-
 	_domSafeId: function(s) {
 		return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '_');
 	},
@@ -105,7 +104,7 @@ return view.extend({
 		uci.sections('network', 'interface', function(s) {
 			var name = s['.name'];
 			if (!name || name === 'loopback') return;
-			var mp = s.multipath || '';
+			var mp = s.multipath || uci.get('openmptcprouter', name, 'multipath') || '';
 			if (mp !== 'on' && mp !== 'master' && mp !== 'backup' && mp !== 'handover') return;
 			var dev = devByName[name] || s.device || s.ifname || name;
 			ifaces.push({ name: name, label: s.label || name, device: dev });
@@ -316,18 +315,133 @@ return view.extend({
 		};
 	},
 
+	_htmlEscape: function(value) {
+		return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) {
+			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+		});
+	},
+
+	_injectBwStyles: function() {
+		if (document.querySelector('link[href*="mptcp_bandwidth.css"]')) return;
+		var link = document.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = L.resource('mptcp/css/mptcp_bandwidth.css');
+		document.head.appendChild(link);
+	},
+
+	_selectControl: function(id, label, choices, selected, unit) {
+		return E('label', { 'class': 'omr-bw-control' }, [
+			E('span', {}, label),
+			E('select', { 'id': id }, choices.map(function(n) {
+				var attrs = { 'value': String(n) };
+				if (n === selected) attrs.selected = 'selected';
+				return E('option', attrs, n + ' ' + unit);
+			}))
+		]);
+	},
+
+	_updateBwMeta: function(message, error) {
+		var status = document.getElementById('omr-bw-status');
+		var scale = document.getElementById('omr-bw-scale');
+		if (status && message) {
+			status.textContent = message;
+			status.className = error ? 'error' : '';
+		}
+		if (scale) scale.textContent = this.WINDOW_SECONDS / 60 + ' ' + _('minute window') + ', ' + this.POLL_INTERVAL + ' ' + _('second refresh');
+	},
+
+	_pmName: function(v) {
+		if (String(v) === '0') return _('In-kernel') + ' (0)';
+		if (String(v) === '1') return _('Userspace') + ' (1)';
+		return v || '-';
+	},
+	_updateHealth: function() {
+		var self = this;
+		return callPathsData().then(function(p) {
+			var k = p.kernel || {}, m = p.metrics || {};
+			var cards = [
+				[_('MPTCP'), k.enabled === '1' ? _('Enabled') : k.enabled === '0' ? _('Disabled') : '-', self._pmName(k.pm_type || k.path_manager)],
+				[_('Scheduler'), k.scheduler || '-', _('Active algorithm')],
+				[_('Congestion'), k.congestion || '-', _('TCP CC')],
+				[_('Paths'), String(m.endpoint_count || 0) + ' ' + _('endpoints'), String(m.mptcp_connection_count || 0) + ' ' + _('active connections')]
+			];
+			var node = document.getElementById('omr-bw-health');
+			if (!node) return;
+			while (node.firstChild) node.removeChild(node.firstChild);
+			cards.forEach(function(c) {
+				node.appendChild(E('div', { 'class': 'omr-bw-health-card' }, [E('small', {}, c[0]), E('strong', {}, c[1]), E('span', {}, c[2])]));
+			});
+		}).catch(function() {
+			var node = document.getElementById('omr-bw-health');
+			if (node) node.textContent = _('MPTCP status unavailable');
+		});
+	},
+
+	_legend: function(dir, ifaces) {
+		var self = this;
+		var entries = [{ name: 'total', label: _('Total'), color: dir === 'dn' ? '#2f7df6' : '#0f9d7a' }].concat(ifaces.map(function(i) {
+			return { name: i.name, label: i.label, color: self._ifaceColor(i.name) };
+		}));
+		return E('div', { 'id': 'total_' + dir + '_svg-legend', 'class': 'omr-bw-legend' }, entries.map(function(item) {
+			return E('button', { 'type': 'button', 'class': 'omr-bw-chip', 'aria-pressed': 'true', 'click': function(ev) {
+				ev.preventDefault();
+				var chosen = self._selected[dir] || {};
+				chosen[item.name] = chosen[item.name] === false;
+				self._selected[dir] = chosen;
+				self._applyVisibility();
+			} }, [E('span', { 'class': 'omr-bw-dot', 'style': 'background:' + item.color }), item.label]);
+		}));
+	},
+
+	_applyVisibility: function() {
+		var st = this._state;
+		if (!st || st.mode !== 'all') return;
+		var self = this;
+		[['dn', st.combinedDn], ['up', st.combinedUp]].forEach(function(entry) {
+			var dir = entry[0], chart = entry[1], selected = self._selected[dir] || {};
+			if (!chart) return;
+			var totalVisible = selected.total !== false;
+			if (chart.totalFill) chart.totalFill.style.visibility = totalVisible ? 'visible' : 'hidden';
+			if (chart.totalLine) chart.totalLine.style.visibility = totalVisible ? 'visible' : 'hidden';
+			st.ifaces.forEach(function(name) {
+				var line = chart.ifaceLines[name], visible = selected[name] !== false;
+				if (line) { line.fill.style.visibility = visible ? 'visible' : 'hidden'; line.line.style.visibility = visible ? 'visible' : 'hidden'; }
+			});
+			var buttons = document.querySelectorAll('#' + chart.id + '-legend button');
+			var names = ['total'].concat(st.ifaces);
+			for (var i = 0; i < buttons.length; i++) {
+				var visible = selected[names[i]] !== false;
+				buttons[i].className = visible ? 'omr-bw-chip' : 'omr-bw-chip off';
+				buttons[i].setAttribute('aria-pressed', visible ? 'true' : 'false');
+			}
+		});
+	},
 	/* ------------------------------------------------------------------ *
 	 *  Render                                                             *
 	 * ------------------------------------------------------------------ */
 
 	render: function(data) {
 		var self    = this;
-		var ifaces  = this._getMultipathIfaces(data[1]);
+		var ifaces  = this._getMultipathIfaces(data[2]);
 		var allTabs = [{ name: 'all', label: _('All interfaces'), device: 'all' }].concat(ifaces);
 		this._allIfaces = ifaces;
 		this._injectStyles();
 
+		this._selected = { dn: {}, up: {} };
+		this._lastPoll = 0;
+		this._lastHealth = 0;
+		this._injectBwStyles();
 		var root = E('div', { 'id': 'bw-root' }, [
+			E('h2', {}, _('Realtime Traffic')),
+			E('div', { 'class': 'omr-bw-meta' }, [
+				E('span', { 'id': 'omr-bw-status' }, _('Starting…')),
+				E('small', { 'id': 'omr-bw-scale' }, '')
+			]),
+			E('div', { 'id': 'omr-bw-health', 'class': 'omr-bw-health' }, _('MPTCP status loading…')),
+			E('div', { 'class': 'omr-bw-controls' }, [
+				this._selectControl('omr-bw-refresh', _('Refresh'), [1, 3, 5, 10, 15, 30], this.POLL_INTERVAL, _('seconds')),
+				this._selectControl('omr-bw-window', _('Window'), [60, 120, 300, 600], this.WINDOW_SECONDS, _('seconds'))
+			]),
 			E('ul', { 'class': 'cbi-tabmenu', 'id': 'bw-tabmenu' }),
 			E('div', { 'id': 'bw-area' })
 		]);
@@ -343,6 +457,17 @@ return view.extend({
 			li.id = 'bwtab-' + tab.name;
 			tabmenu.appendChild(li);
 		});
+
+		root.querySelector('#omr-bw-refresh').addEventListener('change', function(ev) {
+			self.POLL_INTERVAL = Number(ev.target.value) || 3;
+			self._lastPoll = 0;
+			self._updateBwMeta();
+		});
+		root.querySelector('#omr-bw-window').addEventListener('change', function(ev) {
+			self.WINDOW_SECONDS = Number(ev.target.value) || 300;
+			self._switchTab(self._currentTab || allTabs[0], allTabs);
+		});
+		this._updateBwMeta();
 
 		/* Register the single recurring poll; data arrives after SVG is sized */
 		poll.add(L.bind(this._tick, this), 1);
@@ -369,7 +494,10 @@ return view.extend({
 
 		/* Nulling _state makes _tick a no-op until the new state is ready */
 		this._state    = null;
-		this._smaState = {};
+		this._currentTab = tab;
+		this.STEP = this.WIDTH / this.WINDOW_SECONDS;
+		this._lastPoll = 0;
+		this._updateBwMeta();
 
 		var area = document.getElementById('bw-area');
 		if (!area) return;
@@ -460,12 +588,14 @@ return view.extend({
 			]),
 			E('div', { 'class': 'mptcp-chart-block' }, [
 				E('div', { 'class': 'mptcp-chart-block__title' }, _('Inbound – all interfaces')),
+				self._legend('dn', ifaces),
 				self._createSVG('total_dn_svg', combinedHeight),
 				makeSummaryStats('total_dn'),
 				E('div', { 'id': 'total_dn_scale', 'class': 'mptcp-chart-block__meta' }, '-')
 			]),
 			E('div', { 'class': 'mptcp-chart-block' }, [
 				E('div', { 'class': 'mptcp-chart-block__title' }, _('Outbound – all interfaces')),
+				self._legend('up', ifaces),
 				self._createSVG('total_up_svg', combinedHeight),
 				makeSummaryStats('total_up'),
 				E('div', { 'id': 'total_up_scale', 'class': 'mptcp-chart-block__meta' }, '-')
@@ -537,8 +667,8 @@ return view.extend({
 
 			var dnScaleEl = document.getElementById('total_dn_scale');
 			var upScaleEl = document.getElementById('total_up_scale');
-			if (dnScaleEl) dnScaleEl.textContent = '(' + minWin + ' ' + _('minutes window, 1 second interval') + ')';
-			if (upScaleEl) upScaleEl.textContent = '(' + minWin + ' ' + _('minutes window, 1 second interval') + ')';
+			if (dnScaleEl) dnScaleEl.textContent = '(' + minWin + ' ' + _('minutes window, ') + self.POLL_INTERVAL + ' ' + _('second refresh') + ')';
+			if (upScaleEl) upScaleEl.textContent = '(' + minWin + ' ' + _('minutes window, ') + self.POLL_INTERVAL + ' ' + _('second refresh') + ')';
 
 			self._state = {
 				mode:        'all',
@@ -551,9 +681,7 @@ return view.extend({
 				combinedDn:  combinedDn,
 				combinedUp:  combinedUp,
 				dndata:      {},
-				updata:      {},
-				totalDn:     [],
-				totalUp:     []
+				updata:      {}
 			};
 			ifaces.forEach(function(iface) {
 				self._state.dndata[iface.name] = [];
@@ -561,19 +689,21 @@ return view.extend({
 				self._state.stampIface[iface.name] = 0;
 			});
 
+			self._applyVisibility();
+
 			/* Hover tooltips */
 			self._addSVGHover('total_dn_svg', totalHeight, function(svgX) {
 				var st = self._state;
 				if (!st || st.mode !== 'all') return null;
 				var lines = [];
-				var ti = self._xToIndex(svgX, st.totalDn.length);
-				if (ti >= 0) lines.push('<span style="color:#5aabff">\u25bc\u00a0' + _('Total') + ':</span> ' + self._bwLabel(st.totalDn[ti] || 0, false));
+				var ti = self._xToIndex(svgX, (st.displayDn || []).length);
+				if (ti >= 0) lines.push('<span style="color:#5aabff">\u25bc\u00a0' + _('Total') + ':</span> ' + self._bwLabel((st.displayDn || [])[ti] || 0, false));
 				st.ifaces.forEach(function(itf) {
 					var series = (st.dndata && st.dndata[itf]) || [];
 					var j = self._xToIndex(svgX, series.length);
 					if (j < 0) return;
 					var c = st.cards[itf];
-					lines.push('<span style="color:' + (c ? c.color : '#aaa') + '">' + (c ? c.label : itf) + ':</span> ' + self._bwLabel(series[j] || 0, false));
+					lines.push('<span style="color:' + (c ? c.color : '#aaa') + '">' + self._htmlEscape(c ? c.label : itf) + ':</span> ' + self._bwLabel(series[j] || 0, false));
 				});
 				return lines.length ? lines.join('<br>') : null;
 			});
@@ -581,14 +711,14 @@ return view.extend({
 				var st = self._state;
 				if (!st || st.mode !== 'all') return null;
 				var lines = [];
-				var ti = self._xToIndex(svgX, st.totalUp.length);
-				if (ti >= 0) lines.push('<span style="color:#3ecfa8">\u25b2\u00a0' + _('Total') + ':</span> ' + self._bwLabel(st.totalUp[ti] || 0, false));
+				var ti = self._xToIndex(svgX, (st.displayUp || []).length);
+				if (ti >= 0) lines.push('<span style="color:#3ecfa8">\u25b2\u00a0' + _('Total') + ':</span> ' + self._bwLabel((st.displayUp || [])[ti] || 0, false));
 				st.ifaces.forEach(function(itf) {
 					var series = (st.updata && st.updata[itf]) || [];
 					var j = self._xToIndex(svgX, series.length);
 					if (j < 0) return;
 					var c = st.cards[itf];
-					lines.push('<span style="color:' + (c ? c.color : '#aaa') + '">' + (c ? c.label : itf) + ':</span> ' + self._bwLabel(series[j] || 0, false));
+					lines.push('<span style="color:' + (c ? c.color : '#aaa') + '">' + self._htmlEscape(c ? c.label : itf) + ':</span> ' + self._bwLabel(series[j] || 0, false));
 				});
 				return lines.length ? lines.join('<br>') : null;
 			});
@@ -670,8 +800,8 @@ return view.extend({
 
 			var scDn = document.getElementById('bwscale_dn');
 			var scUp = document.getElementById('bwscale_up');
-			if (scDn) scDn.textContent = '(' + minWin + ' ' + _('minutes window, 1 second interval') + ')';
-			if (scUp) scUp.textContent = '(' + minWin + ' ' + _('minutes window, 1 second interval') + ')';
+			if (scDn) scDn.textContent = '(' + minWin + ' ' + _('minutes window, ') + self.POLL_INTERVAL + ' ' + _('second refresh') + ')';
+			if (scUp) scUp.textContent = '(' + minWin + ' ' + _('minutes window, ') + self.POLL_INTERVAL + ' ' + _('second refresh') + ')';
 
 			self._state = {
 				mode:   'iface',
@@ -707,7 +837,11 @@ return view.extend({
 	 * ------------------------------------------------------------------ */
 
 	_tick: function() {
+		var now = Date.now();
+		if (now - this._lastHealth >= 10000) { this._lastHealth = now; this._updateHealth(); }
 		if (!this._state) return Promise.resolve();
+		if (now - this._lastPoll < this.POLL_INTERVAL * 1000) return Promise.resolve();
+		this._lastPoll = now;
 		if (this._state.mode === 'all')   return this._pollAll();
 		if (this._state.mode === 'iface') return this._pollIface();
 		return Promise.resolve();
@@ -722,7 +856,7 @@ return view.extend({
 		var st   = this._state;
 
 		return callMultipathBandwidth().then(function(raw) {
-			if (!st || st.mode !== 'all') return;
+			if (!st || st !== self._state || st.mode !== 'all') return;
 			if (!raw || typeof raw !== 'object') return;
 
 			/* Accept both direct payload and wrapped { data: ... } payloads */
@@ -760,52 +894,37 @@ return view.extend({
 					if (d[i][0] <= prev) continue;
 					if (i > 0) {
 						var dt = d[i][0] - d[i-1][0];
-						if (dt) {
-							st.dndata[itf].push(self._sma('dn_'+itf, 15, Math.max(0, (d[i][1]-d[i-1][1])/dt)));
-							st.updata[itf].push(self._sma('up_'+itf, 15, Math.max(0, (d[i][3]-d[i-1][3])/dt)));
+						if (dt > 0 && dt <= 10) {
+							var rxDelta = d[i][1] - d[i-1][1], txDelta = d[i][3] - d[i-1][3];
+							if (rxDelta >= 0 && txDelta >= 0 && rxDelta / dt <= 12500000000 && txDelta / dt <= 12500000000) {
+								st.dndata[itf].push(rxDelta / dt);
+								st.updata[itf].push(txDelta / dt);
+							}
 						}
 					}
 				}
 				st.dndata[itf] = st.dndata[itf].slice(-st.wanted);
 				st.updata[itf] = st.updata[itf].slice(-st.wanted);
 				if (d.length) {
-					st.stampIface[itf] = d[d.length-1][0];
+					st.stampIface[itf] = Math.max(st.stampIface[itf] || 0, d[d.length-1][0]);
 					nextStamp = Math.max(nextStamp, st.stampIface[itf]);
 				}
 			});
 
-			var totalSeries = parsed.total;
-			if (totalSeries) {
-				var prevTotal = st.stamp;
-				for (var ti = (prevTotal ? 0 : 1); ti < totalSeries.length; ti++) {
-					if (totalSeries[ti][0] <= prevTotal) continue;
-					if (ti > 0) {
-						var tdt = totalSeries[ti][0] - totalSeries[ti - 1][0];
-						if (tdt) {
-							st.totalDn.push(self._sma('dn_total', 15, Math.max(0, (totalSeries[ti][1] - totalSeries[ti - 1][1]) / tdt)));
-							st.totalUp.push(self._sma('up_total', 15, Math.max(0, (totalSeries[ti][3] - totalSeries[ti - 1][3]) / tdt)));
-						}
-					}
-				}
-				st.totalDn = st.totalDn.slice(-st.wanted);
-				st.totalUp = st.totalUp.slice(-st.wanted);
-				nextStamp = Math.max(nextStamp, totalSeries[totalSeries.length - 1][0]);
-			}
-
 			st.stamp = nextStamp;
+			self._updateBwMeta(_('Live'), false);
 
 			if (st.combinedDn && st.combinedUp) {
 				var scDnAll, scUpAll;
 				var cDn = st.combinedDn, cUp = st.combinedUp;
 
-				/* Align all series to globalStamp:
-				   1. Right-pad lagging interfaces with their last known value.
-				   2. Left-pad shorter histories with 0 so all start at the same x. */
+				/* Align all series to globalStamp: zero-fill stale paths and
+				   left-pad shorter histories so the overlay shares one x-axis. */
 				var globalStamp = st.stamp;
 				function alignSeries(s, itfStamp) {
 					var lag = (itfStamp > 0) ? Math.max(0, Math.round(globalStamp - itfStamp)) : 0;
 					if (lag === 0) return s;
-					var lastVal = s.length > 0 ? s[s.length - 1] : 0;
+					var lastVal = 0; /* stale interface must not keep contributing traffic */
 					var out = s.slice();
 					for (var _p = 0; _p < Math.min(lag, st.wanted); _p++) out.push(lastVal);
 					return out;
@@ -840,6 +959,8 @@ return view.extend({
 					}
 				});
 
+				st.displayDn = totalDnP;
+				st.displayUp = totalUpP;
 				var totalDnStats = self._seriesStats(totalDnP);
 				var totalUpStats = self._seriesStats(totalUpP);
 				var maxDnAll = Math.max(totalDnStats.peak, 1);
@@ -903,7 +1024,7 @@ return view.extend({
 					if (el) el.innerHTML = self._bwLabel(entry.v, true);
 				});
 			}
-		}).catch(function() {});
+		}).catch(function(e) { if (st === self._state) self._updateBwMeta(_('Graph update failed') + ': ' + (e && e.message || _('RPC error')), true); });
 	},
 
 	/* ------------------------------------------------------------------ *
@@ -915,22 +1036,26 @@ return view.extend({
 		var st   = this._state;
 
 		return callIfaceBandwidth(st.device).then(function(data) {
-			if (!st || st.mode !== 'iface') return;
+			if (!st || st !== self._state || st.mode !== 'iface') return;
 			if (!Array.isArray(data) || !data.length) return;
 
 			for (var i = (st.stamp ? 0 : 1); i < data.length; i++) {
 				if (data[i][0] <= st.stamp) continue;
 				if (i > 0) {
 					var dt = data[i][0] - data[i-1][0];
-					if (dt) {
-						st.dataRx.push((data[i][1] - data[i-1][1]) / dt);
-						st.dataTx.push((data[i][3] - data[i-1][3]) / dt);
+					if (dt > 0 && dt <= 10) {
+						var rxDelta = data[i][1] - data[i-1][1], txDelta = data[i][3] - data[i-1][3];
+						if (rxDelta >= 0 && txDelta >= 0 && rxDelta / dt <= 12500000000 && txDelta / dt <= 12500000000) {
+							st.dataRx.push(rxDelta / dt);
+							st.dataTx.push(txDelta / dt);
+						}
 					}
 				}
 			}
 			st.dataRx = st.dataRx.slice(-st.wanted);
 			st.dataTx = st.dataTx.slice(-st.wanted);
-			st.stamp  = data[data.length-1][0];
+			st.stamp  = Math.max(st.stamp, data[data.length-1][0]);
+			self._updateBwMeta(_('Live'), false);
 
 			var rxStats = self._seriesStats(st.dataRx);
 			var txStats = self._seriesStats(st.dataTx);
@@ -964,7 +1089,7 @@ return view.extend({
 				var el = document.getElementById(c.id);
 				if (el) el.innerHTML = self._bwLabel(c.v, true);
 			});
-		}).catch(function() {});
+		}).catch(function(e) { if (st === self._state) self._updateBwMeta(_('Graph update failed') + ': ' + (e && e.message || _('RPC error')), true); });
 	},
 
 	handleSaveApply: null,

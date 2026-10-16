@@ -90,7 +90,11 @@ function interface_from_device(dev)
 end
 
 function add_server(add_server_name)
-	ucic:set("openmptcprouter",add_server_name:gsub("[^%w_]+","_"),"server")
+	local server = add_server_name:gsub("[^%w_]+","_")
+	ucic:set("openmptcprouter",server,"server")
+	if not ucic:get("openmptcprouter",server,"redirect_ports") then
+		ucic:set("openmptcprouter",server,"redirect_ports","0")
+	end
 	ucic:save("openmptcprouter")
 	ucic:commit("openmptcprouter")
 end
@@ -130,10 +134,6 @@ local function clear_server_vpn_proxy(ips)
 			if ucic:get("dsvpn", "vpn", "host") == ip then
 				ucic:delete("dsvpn", "vpn", "host")
 				changed["dsvpn"] = true
-			end
-			if ucic:get("mlvpn", "general", "host") == ip then
-				ucic:delete("mlvpn", "general", "host")
-				changed["mlvpn"] = true
 			end
 			if ucic:get("mqvpn", "server", "ip") == ip then
 				ucic:delete("mqvpn", "server", "ip")
@@ -319,11 +319,14 @@ function enable_interface(intf, enable)
 	end
 end
 
-function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspeed,uploadspeed)
+function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspeed,uploadspeed,sqmautorate)
 	-- Set interfaces settings
 	local dl = tonumber(downloadspeed) or 0
 	local ul = tonumber(uploadspeed) or 0
 	local sqm_on = tostring(sqmenabled) == "1"
+	local was_autorate = ucic:get("sqm",intf,"autorate") == "1"
+	local autorate_on = sqmautorate == nil or sqmautorate == ""
+		and was_autorate or tostring(sqmautorate) == "1"
 
 	if proto ~= "other" and proto ~= "" then
 		ucic:set("network",intf,"proto",proto)
@@ -370,23 +373,47 @@ function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspee
 		ucic:set("sqm",intf,"upload","0")
 	end
 
-	if dl ~= 0 and ul ~= 0 then
-		ucic:set("network",intf,"downloadspeed",tostring(dl))
-		ucic:set("network",intf,"uploadspeed",tostring(ul))
-		ucic:set("sqm",intf,"download",tostring(math.ceil(dl*95/100)))
-		ucic:set("sqm",intf,"upload",tostring(math.ceil(ul*95/100)))
-		ucic:set("sqm",intf,"enabled", sqm_on and "1" or "0")
-		ucic:set("qos",intf,"download",tostring(math.ceil(dl*95/100)))
-		ucic:set("qos",intf,"upload",tostring(math.ceil(ul*95/100)))
-		ucic:set("qos",intf,"enabled", sqm_on and "1" or "0")
-	else
-		ucic:set("sqm",intf,"download","0")
-		ucic:set("sqm",intf,"upload","0")
-		ucic:set("sqm",intf,"enabled","0")
-		ucic:set("qos",intf,"download","0")
-		ucic:set("qos",intf,"upload","0")
-		ucic:set("qos",intf,"enabled","0")
+	-- Retain hand-tuned autorate limits if the measured speed and mode did not change.
+	-- The wizard's .14 policy was max 100%, base 65%, min 25%; fixed SQM 90%.
+	local function set_shaping(direction, speed)
+		local current_speed = tonumber(ucic:get("network",intf,direction .. "speed")) or 0
+		local base = tonumber(ucic:get("sqm",intf,direction)) or 0
+		local min = tonumber(ucic:get("sqm",intf,"min_" .. direction)) or 0
+		local max = tonumber(ucic:get("sqm",intf,"max_" .. direction)) or 0
+		if speed > 0 then
+			ucic:set("network",intf,direction .. "speed",tostring(speed))
+			if autorate_on then
+				if not was_autorate or current_speed ~= speed or base <= 0 or min <= 0 or max <= 0 then
+					ucic:set("sqm",intf,direction,tostring(math.ceil(speed*65/100)))
+					ucic:set("sqm",intf,"min_" .. direction,tostring(math.ceil(speed*25/100)))
+					ucic:set("sqm",intf,"max_" .. direction,tostring(speed))
+				end
+			else
+				ucic:set("sqm",intf,direction,tostring(math.ceil(speed*90/100)))
+			end
+			ucic:set("qos",intf,direction,tostring(math.ceil(speed*90/100)))
+		else
+			ucic:delete("network",intf,direction .. "speed")
+			ucic:set("sqm",intf,direction,"0")
+			ucic:set("qos",intf,direction,"0")
+		end
 	end
+
+	set_shaping("download", dl)
+	set_shaping("upload", ul)
+	if sqmautorate ~= nil and sqmautorate ~= "" then
+		ucic:set("sqm",intf,"autorate",autorate_on and "1" or "0")
+	end
+	if autorate_on then
+		ucic:set("sqm",intf,"qdisc","cake")
+		ucic:set("sqm",intf,"script","piece_of_cake.qos")
+		if ucic:get("sqm",intf,"iqdisc_opts") == nil then
+			ucic:set("sqm",intf,"iqdisc_opts","autorate-ingress")
+		end
+	end
+	local enable_shaping = sqm_on and dl > 0 and ul > 0
+	ucic:set("sqm",intf,"enabled",enable_shaping and "1" or "0")
+	ucic:set("qos",intf,"enabled",enable_shaping and "1" or "0")
 
 	-- Disable multipath on LAN, VPN and loopback
 	ucic:set("network","loopback","multipath","off")
@@ -405,6 +432,9 @@ function set_interface(intf,proto,ipaddr,netmask,gateway,sqmenabled,downloadspee
 end
 
 function default_vpn(default_vpn)
+	if default_vpn == "mlvpn" or default_vpn == "openvpn_bonding" then
+		return { error = "This VPN is not supported in 3K." }
+	end
 	-- Stop all VPN services before switching to avoid stale tunnels.
 	force_stop_vpn("all")
 	-- Get VPN set by default
@@ -434,10 +464,6 @@ function default_vpn(default_vpn)
 		ucic:set("dsvpn","vpn","remoteip","10.255.251.1")
 		ucic:set("network","omr6in4","ipaddr","10.255.251.2")
 		ucic:set("network","omr6in4","peeraddr","10.255.251.1")
-	elseif default_vpn == "mlvpn" then
-		vpn_port = 65201
-		vpn_intf = "mlvpn0"
-		ucic:set("network","omrvpn","proto","dhcp")
 	elseif default_vpn == "openvpn" then
 		vpn_port = 65301
 		vpn_intf = "tun0"
@@ -465,13 +491,6 @@ function default_vpn(default_vpn)
 	else
 		ucic:set("dsvpn","vpn","enable",0)
 	end
-	-- Set MLVPN settings
-	if default_vpn == "mlvpn" then
-		ucic:set("mlvpn","general","enable",1)
-		ucic:set("network","omrvpn","proto","dhcp")
-	else
-		ucic:set("mlvpn","general","enable",0)
-	end
 	if default_vpn == "openvpn" then
 		ucic:set("openvpn","omr","enabled",1)
 		ucic:set("network","omrvpn","proto","dhcp")
@@ -493,8 +512,6 @@ function default_vpn(default_vpn)
 	ucic:commit("glorytun")
 	ucic:save("glorytun-udp")
 	ucic:commit("glorytun-udp")
-	ucic:save("mlvpn")
-	ucic:commit("mlvpn")
 	ucic:save("dsvpn")
 	ucic:commit("dsvpn")
 	ucic:save("openvpn")
@@ -655,7 +672,6 @@ function server_settings(server,server_ip,openmptcprouter_vps_key,openmptcproute
 		ucic:set("glorytun","vpn","host",server_ip)
 		ucic:set("glorytun-udp","vpn","host",server_ip)
 		ucic:set("dsvpn","vpn","host",server_ip)
-		ucic:set("mlvpn","general","host",server_ip)
 		local mqvpn_port = "65443"
 		ucic:set("mqvpn","server","ip",server_ip)
 		ucic:set("mqvpn","server","port",mqvpn_port)
@@ -675,8 +691,6 @@ function server_settings(server,server_ip,openmptcprouter_vps_key,openmptcproute
 		ucic:set("xray","omrout","s_shadowsocks_address",server_ip)
 		ucic:save("qos")
 		ucic:commit("qos")
-		ucic:save("mlvpn")
-		ucic:commit("mlvpn")
 		ucic:save("dsvpn")
 		ucic:commit("dsvpn")
 		ucic:save("v2ray")
@@ -733,15 +747,6 @@ function set_dsvpn(dsvpn_key)
 	ucic:commit("dsvpn")
 end
 
-function set_mlvpn(mlvpn_password)
-	-- Set MLVPN settings
-	ucic:set("mlvpn","general","password",mlvpn_password)
-	ucic:set("mlvpn","general","firstport","65201")
-	ucic:set("mlvpn","general","interface_name","mlvpn0")
-	ucic:save("mlvpn")
-	ucic:commit("mlvpn")
-end
-
 function set_openvpn(openvpn_key)
 	-- Set OpenVPN settings
 	local openvpn_key_path = "/etc/luci-uploads/openvpn.key"
@@ -773,6 +778,115 @@ end
 local function shell_quote(value)
 	local s = _as_string(value, "")
 	return "'" .. s:gsub("'", "'\"'\"'") .. "'"
+end
+
+
+-- Status PMTU mirrors the .62 path probe: IPv4 DF ping towards the VPS on
+-- each WAN/tunnel, binary search up to the link MTU, with a short-lived cache.
+local function read_status_link_mtu(uci, interface, ifname)
+	local mtu = ""
+	if type(ifname) == "string" and ifname:match("^[%w_.:@-]+$") then
+		local path = "/sys/class/net/" .. ifname .. "/mtu"
+		if fs.access(path) then
+			mtu = (fs.readfile(path) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		end
+	end
+	if mtu == "" and interface then
+		mtu = uci:get("openmptcprouter", interface, "mtu") or ""
+	end
+	return tostring(mtu)
+end
+
+local function status_path_mtu(ifname, target, link_mtu, family, can_probe)
+	if type(ifname) ~= "string" or ifname == "" or type(target) ~= "string" or target == "" then
+		return ""
+	end
+	if not ifname:match("^[%w_.:@-]+$") then
+		return ""
+	end
+	local max_mtu = tonumber(link_mtu) or 1500
+	local min_mtu, overhead, ping_family = 576, 28, ""
+	if family == "6" then
+		min_mtu, overhead, ping_family = 1280, 48, "-6 "
+	end
+	if max_mtu < min_mtu then return "" end
+
+	local now = os.time()
+	local ttl = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_cache_ttl") or "300") or 300
+	local tries = tonumber(ucic:get("openmptcprouter", "settings", "pmtu_probe_tries") or "2") or 2
+	tries = math.max(1, math.min(5, tries))
+	local key = (ifname .. "_" .. target .. "_" .. family):gsub("[^%w_.-]", "_")
+	local cache_file = "/tmp/omr-pmtu-" .. key
+	local cached = io.open(cache_file, "r")
+	if cached then
+		local contents = cached:read("*a") or ""
+		cached:close()
+		local ts, value = contents:match("^(%d+)%s+(%d+)")
+		if ts and value and now - tonumber(ts) < ttl then
+			return value
+		end
+	end
+
+	local function cache(value)
+		local f = io.open(cache_file, "w")
+		if f then
+			f:write(tostring(now), " ", tostring(value), "\n")
+			f:close()
+		end
+	end
+	local function probe(mtu)
+		local payload = math.max(0, mtu - overhead)
+		local cmd = "ping " .. ping_family .. "-B -w 1 -W 1 -c 1 -M do -s " ..
+			payload .. " -I " .. shell_quote(ifname) .. " " .. shell_quote(target) ..
+			" >/dev/null 2>/dev/null"
+		local ok = os.execute(cmd)
+		return ok == true or ok == 0
+	end
+
+	-- Honor the 0.64 status RPC deadline; cached values remain available when
+	-- probes are skipped, while a new probe never holds the page past its budget.
+	if not can_probe() then return "" end
+	if not probe(min_mtu) then
+		cache(max_mtu)
+		return tostring(max_mtu)
+	end
+	local low, high, best = min_mtu, max_mtu, 0
+	while low <= high do
+		if not can_probe() then return "" end
+		local mid = math.floor((low + high) / 2)
+		local success = false
+		for _ = 1, tries do
+			if not can_probe() then return "" end
+			if probe(mid) then
+				success = true
+				break
+			end
+		end
+		if success then
+			best, low = mid, mid + 1
+		else
+			high = mid - 1
+		end
+	end
+	if best > 0 then
+		cache(best)
+		return tostring(best)
+	end
+	return ""
+end
+
+local function status_mtu_target(omr)
+	local target = omr.service_addr_ip
+	if not target or target == "" then target = omr.service_addr or "" end
+	if target == "127.0.0.1" then target = omr.wan_addr or "" end
+	return target
+end
+
+local function get_status_mtu(uci, interface, ifname, target, family, can_probe)
+	local link_mtu = read_status_link_mtu(uci, interface, ifname)
+	local path_mtu = status_path_mtu(ifname, target, link_mtu, family, can_probe)
+	if path_mtu ~= "" then return path_mtu, link_mtu end
+	return link_mtu, link_mtu
 end
 
 local function curl_auth_header(token)
@@ -901,7 +1015,7 @@ end
 local wizard_uci_configs = {
 	"network", "firewall", "openmptcprouter", "qos", "sqm",
 	"shadowsocks-libev", "shadowsocks-rust", "v2ray", "xray",
-	"glorytun", "glorytun-udp", "dsvpn", "mqvpn", "mlvpn", "openvpn",
+	"glorytun", "glorytun-udp", "dsvpn", "mqvpn", "openvpn",
 	"softethervpn", "ubond"
 }
 
@@ -978,6 +1092,9 @@ local function set_vps_disabled(disable)
 end
 
 function wizard_add(args)
+	if args.default_vpn == "mlvpn" or args.default_vpn == "openvpn_bonding" then
+		return { error = "This VPN is not supported in 3K." }
+	end
 	-- Discard any uci changes staged (but never committed) by LuCI ubus
 	-- sessions: rpcd shares the /tmp/.uci savedir, so stale deltas such as
 	-- 'del network.wan1.proto' left behind by an earlier page visit would
@@ -1046,10 +1163,6 @@ function wizard_add(args)
 		set_dsvpn(_as_string(args.dsvpn_key, ""))
 	end
 
-	if _as_string(args.mlvpn_password, "") ~= "" then
-		set_mlvpn(_as_string(args.mlvpn_password, ""))
-	end
-
 	if _as_string(args.mqvpn_key, "") ~= "" then
 		set_mqvpn(_as_string(args.mqvpn_key, ""))
 	end
@@ -1093,7 +1206,6 @@ function wizard_add(args)
 				ucic:set("openvpn",sectionname,"cipher","none")
 			end
 		end)
-		ucic:set("mlvpn","general","cleartext_data","1")
 		ucic:set("v2ray","omrout","s_vmess_user_security","none")
 		ucic:set("v2ray","omrout","s_vless_user_security","none")
 		ucic:set("v2ray","omrout","s_trojan_user_security","none")
@@ -1117,7 +1229,6 @@ function wizard_add(args)
 				ucic:set("openvpn",sectionname,"cipher","AES-256-GCM")
 			end
 		end)
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_vless_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_trojan_user_security","aes-128-gcm")
@@ -1143,7 +1254,6 @@ function wizard_add(args)
 				ucic:set("openvpn",sectionname,"cipher","AES-256-CFB")
 			end
 		end)
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_vless_user_security","aes-128-gcm")
 		ucic:set("v2ray","omrout","s_trojan_user_security","aes-128-gcm")
@@ -1169,7 +1279,6 @@ function wizard_add(args)
 				ucic:set("openvpn",sectionname,"cipher","CHACHA20-POLY1305")
 			end
 		end)
-		ucic:set("mlvpn","general","cleartext_data","0")
 		ucic:set("v2ray","omrout","s_vmess_user_security","chacha20-poly1305")
 		ucic:set("v2ray","omrout","s_vless_user_security","chacha20-poly1305")
 		ucic:set("v2ray","omrout","s_trojan_user_security","chacha20-poly1305")
@@ -1235,6 +1344,9 @@ function wizard_add(args)
 				end
 
 				local proto = _as_string(itf.proto, "dhcp")
+				if proto ~= "static" and proto ~= "dhcp" and proto ~= "dhcpv6" and proto ~= "pppoe" then
+					proto = "dhcp"
+				end
 				set_interface(
 					name,
 					proto,
@@ -1243,7 +1355,8 @@ function wizard_add(args)
 					_as_string(itf.gateway, ""),
 					_to_flag(itf.sqmenabled),
 					_as_string(itf.downloadspeed, "0"),
-					_as_string(itf.uploadspeed, "0")
+					_as_string(itf.uploadspeed, "0"),
+					_to_flag(itf.sqmautorate)
 				)
 
 				_set_or_delete("network", name, "type", _as_string(itf.type, ""))
@@ -1292,13 +1405,9 @@ function wizard_add(args)
 						ucic:delete("openmptcprouter", companion)
 					end
 				end
-				_set_or_delete("network", name, "apn", _as_string(itf.apn, ""))
-				_set_or_delete("network", name, "pincode", _as_string(itf.pincode, ""))
-				_set_or_delete("network", name, "delay", _as_string(itf.delay, ""))
 				_set_or_delete("network", name, "username", _as_string(itf.username, ""))
 				_set_or_delete("network", name, "password", _as_string(itf.password, ""))
 				_set_or_delete("network", name, "auth", _as_string(itf.auth, ""))
-				_set_or_delete("network", name, "mode", _as_string(itf.mode, ""))
 				_set_or_delete("network", name, "label", _as_string(itf.label, ""))
 				_set_or_delete("network", name, "multipath", _as_string(itf.multipath, "on"))
 				_set_or_delete("openmptcprouter", name, "multipath", _as_string(itf.multipath, "on"))
@@ -1319,7 +1428,9 @@ function wizard_add(args)
 					ucic:set("sqm", name, "queue")
 				end
 				_set_or_delete("qos", name, "enabled", _to_flag(itf.qosenabled))
-				_set_or_delete("sqm", name, "enabled", _to_flag(itf.sqmenabled))
+				_set_or_delete("sqm", name, "enabled", _to_flag(itf.sqmenabled) == "1"
+					and (tonumber(itf.downloadspeed) or 0) > 0
+					and (tonumber(itf.uploadspeed) or 0) > 0 and "1" or "0")
 				_set_or_delete("sqm", name, "autorate", _to_flag(itf.sqmautorate))
 
 				if _to_flag(itf.lan) == "1" then
@@ -1485,7 +1596,6 @@ function settings_add(args)
 		disableipv6(_as_string(args.disable_ipv6, "1"))
 	end
 	_set_or_delete("openmptcprouter", "settings", "disable_6in4", _to_flag(args.disable_6in4))
-	_set_or_delete("openmptcprouter", "settings", "disable_modemmanager", _to_flag(args.disable_modemmanager))
 	_set_flag_if_given("external_check", args.externalcheck)
 	_set_or_delete("openmptcprouter", "settings", "restrict_to_lan", _to_flag(args.restricttolan))
 	_set_or_delete("openmptcprouter", "settings", "debug", _to_flag(args.debug))
@@ -1546,9 +1656,6 @@ function settings_add(args)
 		ucic:set("shadowsocks-libev", section[".name"], "no_delay", nodelay)
 	end)
 
-	if _to_flag(args.disable_modemmanager) == "1" then
-		sys.exec("/etc/init.d/modemmanager stop >/dev/null 2>/dev/null")
-	end
 
 	if _as_string(args.savevnstat, "") ~= "" then
 		savevnstat(_to_flag(args.savevnstat))
@@ -1582,10 +1689,6 @@ local function set_vpn_enabled(vpn, enabled)
 		ucic:set("dsvpn","vpn","enable",value)
 		configs["dsvpn"] = true
 	end
-	if vpn == "all" or vpn == "mlvpn" then
-		ucic:set("mlvpn","general","enable",value)
-		configs["mlvpn"] = true
-	end
 	if vpn == "all" or vpn == "openvpn" then
 		ucic:set("openvpn","omr","enabled",value)
 		configs["openvpn"] = true
@@ -1616,11 +1719,8 @@ function force_start_vpn(vpn)
 		sys.exec("/etc/init.d/glorytun-udp start >/dev/null 2>/dev/null")
 	elseif vpn == "dsvpn" then
 		sys.exec("/etc/init.d/dsvpn start >/dev/null 2>/dev/null")
-	elseif vpn == "mlvpn" then
-		sys.exec("/etc/init.d/mlvpn start >/dev/null 2>/dev/null")
 	elseif vpn == "openvpn" then
 		sys.exec("/etc/init.d/openvpn start >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/openvpnbonding start >/dev/null 2>/dev/null")
 	elseif vpn == "mqvpn" then
 		sys.exec("/etc/init.d/mqvpn start >/dev/null 2>/dev/null")
 	elseif vpn == "softethervpn" or vpn == "softether" then
@@ -1652,9 +1752,7 @@ function force_stop_vpn(vpn)
 		sys.exec("/etc/init.d/glorytun stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/glorytun-udp stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/dsvpn stop >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/mlvpn stop >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/openvpn stop omr >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/openvpnbonding stop >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpn running omr >/dev/null 2>&1 && /etc/init.d/openvpn stop omr >/dev/null 2>&1")
 		sys.exec("/etc/init.d/mqvpn stop >/dev/null 2>/dev/null")
 		sys.exec("/etc/init.d/softethervpnclient stop >/dev/null 2>/dev/null")
 	elseif vpn:match("^glorytun_tcp.*") then
@@ -1663,11 +1761,8 @@ function force_stop_vpn(vpn)
 		sys.exec("/etc/init.d/glorytun-udp stop >/dev/null 2>/dev/null")
 	elseif vpn == "dsvpn" then
 		sys.exec("/etc/init.d/dsvpn stop >/dev/null 2>/dev/null")
-	elseif vpn == "mlvpn" then
-		sys.exec("/etc/init.d/mlvpn stop >/dev/null 2>/dev/null")
 	elseif vpn == "openvpn" then
-		sys.exec("/etc/init.d/openvpn stop omr >/dev/null 2>/dev/null")
-		sys.exec("/etc/init.d/openvpnbonding stop >/dev/null 2>/dev/null")
+		sys.exec("/etc/init.d/openvpn running omr >/dev/null 2>&1 && /etc/init.d/openvpn stop omr >/dev/null 2>&1")
 	elseif vpn == "mqvpn" then
 		sys.exec("/etc/init.d/mqvpn stop >/dev/null 2>/dev/null")
 	elseif vpn == "softethervpn" or vpn == "softether" then
@@ -1714,9 +1809,7 @@ function restart_all()
 	sys.exec("/etc/init.d/shadowsocks-libev restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/glorytun restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/glorytun-udp restart >/dev/null 2>/dev/null")
-	sys.exec("/etc/init.d/mlvpn restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/openvpn restart >/dev/null 2>/dev/null")
-	sys.exec("/etc/init.d/openvpnbonding restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/dsvpn restart >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/omr-tracker start >/dev/null 2>/dev/null")
 	sys.exec("/etc/init.d/omr-6in4 restart >/dev/null 2>/dev/null")
@@ -1728,7 +1821,7 @@ function restart_all()
 end
 
 function restart_all_async()
-	sys.exec("sh -c '(sleep 1; /etc/init.d/macvlan restart; /bin/ubus call network reload; /etc/init.d/omr-tracker stop; /etc/init.d/mptcp restart; /etc/init.d/shadowsocks-libev restart; /etc/init.d/glorytun restart; /etc/init.d/glorytun-udp restart; /etc/init.d/mlvpn restart; /etc/init.d/openvpn restart; /etc/init.d/openvpnbonding restart; /etc/init.d/dsvpn restart; /etc/init.d/mqvpn restart; /etc/init.d/omr-tracker start; /etc/init.d/omr-6in4 restart; /etc/init.d/mptcpovervpn restart; /etc/init.d/vnstat restart; /etc/init.d/v2ray restart; /etc/init.d/xray restart; /etc/init.d/shadowsocks-rust restart; sleep 60; /etc/init.d/v2ray rules_up; /etc/init.d/xray rules_up; /etc/init.d/omr-bypass restart) >/dev/null 2>/dev/null &'")
+	sys.exec("sh -c '(sleep 1; /etc/init.d/macvlan restart; /bin/ubus call network reload; /etc/init.d/omr-tracker stop; /etc/init.d/mptcp restart; /etc/init.d/shadowsocks-libev restart; /etc/init.d/glorytun restart; /etc/init.d/glorytun-udp restart; /etc/init.d/openvpn restart; /etc/init.d/dsvpn restart; /etc/init.d/mqvpn restart; /etc/init.d/omr-tracker start; /etc/init.d/omr-6in4 restart; /etc/init.d/mptcpovervpn restart; /etc/init.d/vnstat restart; /etc/init.d/v2ray restart; /etc/init.d/xray restart; /etc/init.d/shadowsocks-rust restart; sleep 60; /etc/init.d/v2ray rules_up; /etc/init.d/xray rules_up; /etc/init.d/omr-bypass restart) >/dev/null 2>/dev/null &'")
 end
 
 function apply_settings_async()
@@ -1830,6 +1923,36 @@ function cpuscalinggovernor(scaling_governor)
 	ucic:commit("openmptcprouter")
 end
 
+-- Keep the VPS access decision on the VPS. This method only proxies an
+-- explicit action for a configured server; it never persists a local flag.
+local function wireguard_remote_access(server, action)
+	if type(server) ~= "string" or not server:match("^[%w_-]+$") or
+	   ucic:get("openmptcprouter", server) ~= "server" then
+		return { supported = false, error = "Invalid server" }
+	end
+	if action ~= "status" and action ~= "allow" and action ~= "deny" then
+		return { supported = false, error = "Invalid action" }
+	end
+	local cmd = "/etc/init.d/openmptcprouter-vps wireguard_remote_access " ..
+		shell_quote(action) .. " " .. shell_quote(server) .. " 2>/dev/null"
+	if timeout_cmd then cmd = timeout_cmd .. " 35 " .. cmd end
+	local pipe = io.popen(cmd)
+	if not pipe then return { supported = false, error = "VPS unavailable" } end
+	local payload = pipe:read(4097) or ""
+	local ok = pipe:close()
+	if #payload > 4096 or payload == "" then
+		return { supported = false, error = "VPS unavailable" }
+	end
+	local parsed, response = pcall(jsonc.parse, payload)
+	if type(response) ~= "table" then
+		return { supported = false, error = "Invalid VPS response" }
+	end
+	if ok and response.supported == true and type(response.lan_access) == "boolean" then
+		return { supported = true, lan_access = response.lan_access }
+	end
+	local reason = response.error or response.detail
+	return { supported = false, error = type(reason) == "string" and reason or "VPS does not support this setting" }
+end
 function update_vps()
 	sys.exec("/etc/init.d/openmptcprouter-vps restart >/dev/null 2>/dev/null")
 	ucic:foreach("openmptcprouter", "server", function(section)
@@ -2373,7 +2496,6 @@ function interfaces_status()
 	mArray.openmptcprouter["tun6_state"] = "DOWN"
 	if string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?glorytun(-udp)?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?dsvpn?$'"), "%d+") or
-	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mlvpn?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?openvpn?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/var/softethervpn/)?vpnclient?$'"), "%d+") or
 	   string.find(sys.exec("/usr/bin/pgrep '^(/usr/sbin/)?mqvpn$'"), "%d+") then
@@ -2426,7 +2548,6 @@ function interfaces_status()
 			{"glorytun", "vpn", "glorytun_tcp"},
 			{"glorytun-udp", "vpn", "glorytun_udp"},
 			{"dsvpn", "vpn", "dsvpn"},
-			{"mlvpn", "general", "mlvpn"},
 			{"openvpn", "omr", "openvpn", "enabled"},
 			{"softethervpn", "openmptcprouter", "softether"},
 			{"mqvpn", "settings", "mqvpn"}
@@ -2670,16 +2791,6 @@ function interfaces_status()
 					end
 				end
 			end
-			if uci:get("openmptcprouter",interface,"manufacturer") == "huawei" and ipaddr ~= "" and status_budget_left() then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-huawei " .. ipaddr .. " " .. gateway .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			end
 		elseif gateway == "" and gateway6 == "" then
 			gw_ping = "DOWN"
 			gw_ping6 = "DOWN"
@@ -2687,30 +2798,6 @@ function interfaces_status()
 		end
 		if gateway6 == "" and ipv6 ~= "1" and ipv6 ~= "auto" and gw_ping6 == "DOWN" then
 			gw_ping6 = "OFF"
-		end
-
-		if ifname ~= "" and (proto == "qmi" or proto == "3g" or proto == "modemmanager") and status_budget_left() then
-			if proto == "qmi" then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-qmi " .. (section['device'] or "") .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			elseif proto == "3g" then
-				signal = exec_with_timeout(2, "omr-3g " .. shell_quote(section['device'] or "") .. " | tr -d '\n'")
-			elseif proto == "modemmanager" then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-modemmanager " .. (section['device'] or "") .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			end
 		end
 
 		local latency, server_ping, server_http = "", "", ""
@@ -2778,7 +2865,7 @@ function interfaces_status()
 		end
 
 		local ipv6_discover = "NONE"
-		local mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", ""
+		local mtu, link_mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", "", ""
 
 		if connectivity ~= "ERROR" then
 			if ifname ~= nil and (ifname:match("^tun.*") and interface:match("^ovpn.*")) then
@@ -2833,9 +2920,9 @@ function interfaces_status()
 					end
 				end
 			end
-			if ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
-				mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				if mtu == "" then mtu = uci:get("openmptcprouter",interface,"mtu") or "" end
+			if ifname and ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
+				mtu, link_mtu = get_status_mtu(uci, interface, ifname,
+					status_mtu_target(mArray.openmptcprouter), "4", status_budget_left)
 			end
 			loop = uci:get("openmptcprouter",interface,"loop") == "1"
 		end
@@ -2888,7 +2975,7 @@ function interfaces_status()
 			multipath = section["multipath"],
 			status = connectivity,
 			wanip = publicIP, wanip6 = publicIP6,
-			latency = latency, mtu = mtu,
+			latency = latency, mtu = mtu, link_mtu = link_mtu,
 			whois = whois or "unknown", whois6 = whois6 or "unknown",
 			qos = section["trafficcontrol"],
 			download = section["download"], upload = section["upload"],
@@ -2911,7 +2998,7 @@ function interfaces_status()
 			wifi_bitrate = wifi_bitrate, wifi_signal = wifi_signal,
 			wifi_noise = wifi_noise,
 		}
-		if ifname ~= nil and (ifname:match("^tun.*") or ifname:match("^mlvpn.*")) then
+		if ifname ~= nil and (ifname:match("^tun.*")) then
 			table.insert(mArray.tunnels, data)
 		else
 			table.insert(mArray.wans, data)
@@ -2971,6 +3058,14 @@ function interfaces_only_status()
 	local ntm = require "luci.model.network".init()
 	local uci = require "luci.model.uci".cursor()
 	local mArray = {}
+
+	-- Keep path-MTU probes within one deadline shared by all interfaces.
+	-- status_time_budget=0 disables new probes; cached PMTU remains readable.
+	local status_budget = tonumber(integer_string(uci:get("openmptcprouter","settings","status_time_budget") or "15", "15", 0, 300))
+	local status_deadline = os.time() + status_budget
+	local function status_budget_left()
+		return os.time() < status_deadline
+	end
 
 	mArray.openmptcprouter = {}
 	mArray.openmptcprouter["external_check"] = false
@@ -3064,6 +3159,28 @@ function interfaces_only_status()
 			end
 		end
 
+		if gateway == "" and proto ~= "dhcpv6" then gateway = get_gateway(interface) end
+		if gateway == "" and ifname ~= "" and ipv6 ~= "1" and ipv6 ~= "auto" and fs.access("/sys/class/net/" .. ifname) then
+			local route_list = sys.exec("ip -4 r list dev " .. shell_quote(ifname))
+			gateway = route_list:match("(%d+%.%d+%.%d+%.%d+)%s+proto kernel") or ""
+			if gateway == "" then
+				gateway = route_list:match("default via (%d+%.%d+%.%d+%.%d+)") or ""
+			end
+			if gateway == "" and not (ifname:match("^tun.*") or interface:match("^ovpn.*") or interface:match("^wg.*")) then
+				gateway = route_list:match("via (%d+%.%d+%.%d+%.%d+)") or ""
+			end
+		end
+		if gateway6 == "" and (ipv6 == "1" or ipv6 == "auto") then gateway6 = get_gateway6(interface) end
+		if gateway6 == "" and ifname ~= "" and (ipv6 == "1" or ipv6 == "auto") and fs.access("/sys/class/net/" .. ifname) then
+			local route6_list = sys.exec("ip -6 r list dev " .. shell_quote(ifname))
+			gateway6 = route6_list:match("([%x:]+)%s+proto kernel") or ""
+			if gateway6 == "" then
+				gateway6 = route6_list:match("default via ([%x:]+)") or ""
+			end
+			if gateway6 == "" and not (ifname:match("^tun.*") or interface:match("^ovpn.*") or interface:match("^wg.*")) then
+				gateway6 = route6_list:match("via ([%x:]+)") or ""
+			end
+		end
 		local signal, operator, phonenumber, donglestate, networktype = "", "", "", "", ""
 		if gateway ~= "" or gateway6 ~= "" then
 			if uci:get("openmptcprouter","settings","disablegwping") ~= "1" then
@@ -3090,16 +3207,6 @@ function interfaces_only_status()
 					end
 				end
 			end
-			if uci:get("openmptcprouter",interface,"manufacturer") == "huawei" and ipaddr ~= "" then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-huawei " .. ipaddr .. " " .. gateway .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			end
 		elseif gateway == "" and gateway6 == "" then
 			gw_ping = "DOWN"
 			gw_ping6 = "DOWN"
@@ -3107,30 +3214,6 @@ function interfaces_only_status()
 		end
 		if gateway6 == "" and ipv6 ~= "1" and ipv6 ~= "auto" and gw_ping6 == "DOWN" then
 			gw_ping6 = "OFF"
-		end
-
-		if ifname ~= "" then
-			if proto == "qmi" then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-qmi " .. (section['device'] or "") .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			elseif proto == "3g" then
-				signal = exec_with_timeout(2, "omr-3g " .. shell_quote(section['device'] or "") .. " | tr -d '\n'")
-			elseif proto == "modemmanager" then
-				local intfdata = ut.trim(exec_with_timeout(2, "omr-modemmanager " .. (section['device'] or "") .. " all"))
-				if intfdata ~= "" then
-					signal      = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $1}'"))
-					operator    = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $2}'"))
-					phonenumber = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $3}'"))
-					donglestate = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $4}'"))
-					networktype = ut.trim(sys.exec("echo " .. shell_quote(intfdata) .. " | awk -F';' '{print $5}'"))
-				end
-			end
 		end
 
 		local latency, server_ping, server_http = "", "", ""
@@ -3163,12 +3246,12 @@ function interfaces_only_status()
 		end
 
 		local ipv6_discover = "NONE"
-		local mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", ""
+		local mtu, link_mtu, whois, whois6, publicIP, publicIP6 = "", "", "", "", "", ""
 
 		if connectivity ~= "ERROR" then
-			if ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
-				mtu = ut.trim(sys.exec("cat /sys/class/net/" .. ifname .. "/mtu | tr -d '\n'"))
-				if mtu == "" then mtu = uci:get("openmptcprouter",interface,"mtu") or "" end
+			if ifname and ifname ~= "" and fs.access("/sys/class/net/" .. ifname) then
+				mtu, link_mtu = get_status_mtu(uci, interface, ifname,
+					status_mtu_target(mArray.openmptcprouter), "4", status_budget_left)
 			end
 			loop = uci:get("openmptcprouter",interface,"loop") == "1"
 		end
@@ -3221,7 +3304,7 @@ function interfaces_only_status()
 			multipath = section["multipath"],
 			status = connectivity,
 			wanip = publicIP, wanip6 = publicIP6,
-			latency = latency, mtu = mtu,
+			latency = latency, mtu = mtu, link_mtu = link_mtu,
 			whois = whois or "unknown", whois6 = whois6 or "unknown",
 			qos = section["trafficcontrol"],
 			download = section["download"], upload = section["upload"],
@@ -3253,7 +3336,16 @@ function interfaces_only_status()
 end
 
 
+local diagnostic = dofile("/usr/share/omr/diagnostic.lua")
+
 local methods = {
+	diagnostic_logs = {
+		args = { limit = 500, scope = "all" },
+		call = function(args) return diagnostic.collect(args.limit or 500, args.scope or "all", false) end
+	},
+	support_report = {
+		call = function() return diagnostic.collect(500, "all", true) end
+	},
 	getrootfs = {
 		call = function() return get_rootfs() end
 	},
@@ -3270,6 +3362,16 @@ local methods = {
 		args = { disable = 0 },
 		call = function(args)
 			disableipv6(args.disable)
+		end
+	},
+	wireguardRemoteAccessStatus = {
+		args = { server = "" },
+		call = function(args) return wireguard_remote_access(args.server, "status") end
+	},
+	wireguardRemoteAccessSet = {
+		args = { server = "", lan_access = false },
+		call = function(args)
+			return wireguard_remote_access(args.server, args.lan_access and "allow" or "deny")
 		end
 	},
 	updateVPS = {
@@ -3359,14 +3461,14 @@ local methods = {
 		call = function(args) enable_interface(args.intf, args.enable) end
 	},
 	setinterface = {
-		args = { intf = "", proto = "dhcp", ipaddr = "", netmask = "", gateway = "", sqmenabled = 0, downloadspeed = 0, uploadspeed = 0 },
+		args = { intf = "", proto = "dhcp", ipaddr = "", netmask = "", gateway = "", sqmenabled = 0, downloadspeed = 0, uploadspeed = 0, sqmautorate = "" },
 		call = function(args)
-			set_interface(args.intf, args.proto, args.ipaddr, args.netmask, args.gateway, args.sqmenabled, args.downloadspeed, args.uploadspeed)
+			set_interface(args.intf, args.proto, args.ipaddr, args.netmask, args.gateway, args.sqmenabled, args.downloadspeed, args.uploadspeed, args.sqmautorate)
 		end
 	},
 	defaultvpn = {
 		args = { vpn = "glorytun_tcp" },
-		call = function(args) default_vpn(args.vpn) end
+		call = function(args) return default_vpn(args.vpn) end
 	},
 	setserver = {
 		args = { server = "vps", server_ip = "", openmptcprouter_vps_key = "" },
@@ -3390,17 +3492,13 @@ local methods = {
 		args = { key = "" },
 		call = function(args) set_dsvpn(args.key) end
 	},
-	setmlvpn = {
-		args = { password = "" },
-		call = function(args) set_mlvpn(args.password) end
-	},
 	setopenvpn = {
 		args = { key = "" },
 		call = function(args) set_openvpn(args.key) end
 	},
 	setvpn = {
 		args = { vpn = "openvpn" },
-		call = function(args) default_vpn(args.vpn) end
+		call = function(args) return default_vpn(args.vpn) end
 	},
 	setproxy = {
 		args = { proxy = "shadowsocks-rust" },
@@ -3442,7 +3540,7 @@ local methods = {
 			shadowsocks_key = "", shadowsocks2022_key = "",
 			glorytun_key = "", dsvpn_key = "",
 			mqvpn_key = "", mqvpn_scheduler = "", mqvpn_port = "",
-			mlvpn_password = "", softethervpn_password = "", ubond_password = "",
+			softethervpn_password = "", ubond_password = "",
 			v2ray_user = "", xray_user = "", xray_transport = "",
 			v2rayudp = "", forceretrieve = "",
 			mptcpovervpn_vpn = "", country = "", dns64 = "",
@@ -3458,7 +3556,7 @@ local methods = {
 			redirect_ports = "",
 			tcp_keepalive_time = "", tcp_fin_timeout = "", tcp_syn_retries = "", tcp_fastopen = "",
 			tcp_retries1 = "", tcp_retries2 = "", ip_default_ttl = "",
-			disable_ipv6 = "", disable_6in4 = "", disable_modemmanager = "", banudpip = "",
+			disable_ipv6 = "", disable_6in4 = "", banudpip = "",
 			externalcheck = "", openvpnlb = "", restricttolan = "", debug = "", savevnstat = "",
 			disablegwping = "", status_vps_timeout = "", status_getip_timeout = "", status_whois_timeout = "", status_time_budget = "",
 			disableloopdetection = "", disableserverhttptest = "", disableintfrename = "",

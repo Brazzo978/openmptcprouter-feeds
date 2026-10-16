@@ -67,14 +67,16 @@ define Build/Configure
 	# bpftune uses a simple Makefile, no configure needed
 endef
 
+# Only src is needed by the router package. The upstream top-level targets
+# also build man pages and tests, requiring host rst2man and unrelated tools.
 define Build/Compile
-	+$(MAKE_VARS) $(MAKE) -C $(PKG_BUILD_DIR) \
+	+$(MAKE_VARS) $(MAKE) -C $(PKG_BUILD_DIR)/src \
 	$(MAKE_FLAGS) \
 	all
 endef
 
 define Build/Install
-	+$(MAKE_VARS) $(MAKE) -C $(PKG_BUILD_DIR) \
+	+$(MAKE_VARS) $(MAKE) -C $(PKG_BUILD_DIR)/src \
 	$(MAKE_FLAGS) \
 	DESTDIR="$(PKG_INSTALL_DIR)" \
 	install

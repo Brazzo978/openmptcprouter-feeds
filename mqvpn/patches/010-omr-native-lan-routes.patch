@@ -1,0 +1,889 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -795,6 +795,7 @@
+     add_executable(test_session tests/test_session.c src/addr_pool.c src/log.c)
+     add_executable(test_dns     tests/test_dns.c     src/platform/linux/dns.c     src/platform/posix/dns_common.c     src/log.c)
+     add_executable(test_route_check tests/test_route_check.c src/platform/linux/route_check.c src/log.c)
++    add_executable(test_client_routes tests/test_client_routes.c)
+     add_executable(test_flow_sched tests/test_flow_sched.c src/flow_sched.c src/log.c)
+     add_executable(test_path_label tests/test_path_label.c src/mqvpn_path_label.c src/log.c)
+     add_executable(test_status tests/test_status.c)
+@@ -820,7 +821,7 @@
+     # gate + PTB token bucket, extracted from mqvpn_client.c/mqvpn_server.c) —
+     # links reorder_tx.c (for the peek it wraps) + icmp.c (for the PTB send).
+     add_executable(test_reorder_gate tests/test_reorder_gate.c src/reorder_tx.c src/icmp.c src/log.c)
+-    set(MQVPN_UNIT_TESTS test_config test_auth test_session test_dns test_route_check test_flow_sched test_path_label test_status test_path_rotation test_fec_reinj test_ciphers test_path_error_policy test_path_state_machine test_control_response_bound test_reorder_common test_reorder_tx test_reorder_rx test_reorder_config test_classifier test_icmp test_reorder_gate)
++    set(MQVPN_UNIT_TESTS test_config test_auth test_session test_dns test_route_check test_client_routes test_flow_sched test_path_label test_status test_path_rotation test_fec_reinj test_ciphers test_path_error_policy test_path_state_machine test_control_response_bound test_reorder_common test_reorder_tx test_reorder_rx test_reorder_config test_classifier test_icmp test_reorder_gate)
+ 
+     # test_tcp_lane #include's BOTH src/hybrid/tcp_lane.c AND
+     # src/hybrid/tcp_lane_uplink.c (Task 12 split the uplink relay out of
+diff --git a/include/libmqvpn.h b/include/libmqvpn.h
+--- a/include/libmqvpn.h
++++ b/include/libmqvpn.h
+@@ -789,6 +789,8 @@
+ MQVPN_API int mqvpn_config_set_listen(mqvpn_config_t *cfg, const char *addr, int port);
+ MQVPN_API int mqvpn_config_set_subnet(mqvpn_config_t *cfg, const char *cidr);
+ MQVPN_API int mqvpn_config_set_subnet6(mqvpn_config_t *cfg, const char *cidr6);
++/* Client-side allowlist of LAN source prefixes for routed replies. */
++MQVPN_API int mqvpn_config_add_client_route(mqvpn_config_t *cfg, const char *cidr);
+ MQVPN_API int mqvpn_config_set_tls_cert(mqvpn_config_t *cfg, const char *cert,
+                                         const char *key);
+ MQVPN_API int mqvpn_config_set_tls_ciphers(mqvpn_config_t *cfg, const char *ciphers);
+@@ -1065,6 +1067,16 @@
+                                     const char *key);
+ 
+ MQVPN_API int mqvpn_server_remove_user(mqvpn_server_t *server, const char *username);
++
++/* Server-only LAN routes behind a configured named user. A replacement is
++ * atomic, survives that user's reconnect, and is revoked on remove_user.
++ * Empty list removes all grants. Forwarding requires exactly one established
++ * session for the named user. Max 16 prefixes per user, 1024 total. IPv4 only. */
++MQVPN_API int mqvpn_server_replace_client_routes(mqvpn_server_t *server,
++    const char *username, const char *const *cidrs, int n);
++MQVPN_API int mqvpn_server_get_client_routes(const mqvpn_server_t *server,
++    const char *username, char routes[][32], int max, int *session_count);
++
+ 
+ /* Assign or clear a fixed (pinned) IP for a user at runtime.
+  * The address is reserved in the pool exclusively for this user.
+diff --git a/src/client_routes.h b/src/client_routes.h
+new file mode 100644
+--- /dev/null
++++ b/src/client_routes.h
+@@ -0,0 +1,75 @@
++// SPDX-License-Identifier: Apache-2.0
++#ifndef MQVPN_CLIENT_ROUTES_H
++#define MQVPN_CLIENT_ROUTES_H
++#include <stdint.h>
++#include <string.h>
++#ifdef _WIN32
++# include <winsock2.h>
++# include <ws2tcpip.h>
++#else
++# include <arpa/inet.h>
++#endif
++#define MQVPN_CLIENT_ROUTE_MAX 1024 /* 64 named users x 16 routes */
++#define MQVPN_CLIENT_ROUTE_PER_USER 16
++typedef struct {
++    char user[64];
++    uint32_t net; /* host byte order */
++    uint32_t mask;
++    uint8_t prefix;
++} mqvpn_client_route_t;
++static inline int
++mqvpn_client_route_parse(const char *cidr, mqvpn_client_route_t *out)
++{
++    if (!cidr || !out || strlen(cidr) >= 32) return -1;
++    char ip[32];
++    const char *slash = strchr(cidr, '/');
++    if (!slash || slash == cidr || slash[1] == '\0' ||
++        (size_t)(slash - cidr) >= sizeof(ip)) return -1;
++    memcpy(ip, cidr, (size_t)(slash - cidr));
++    ip[slash - cidr] = '\0';
++    unsigned prefix = 0;
++    for (const char *p = slash + 1; *p; p++) {
++        if (*p < '0' || *p > '9') return -1;
++        prefix = prefix * 10 + (unsigned)(*p - '0');
++        if (prefix > 32) return -1;
++    }
++    struct in_addr addr;
++    if (inet_pton(AF_INET, ip, &addr) != 1) return -1;
++    uint32_t mask = prefix ? UINT32_MAX << (32 - prefix) : 0;
++    uint32_t net = ntohl(addr.s_addr) & mask;
++    /* LANs must fit one RFC1918 block. OMR reserves 10.255/16 for tunnels. */
++    int priv = (prefix >= 8 && (net & 0xff000000U) == 0x0a000000U) ||
++               (prefix >= 12 && (net & 0xfff00000U) == 0xac100000U) ||
++               (prefix >= 16 && (net & 0xffff0000U) == 0xc0a80000U);
++    if (!priv) return -1;
++    uint32_t reserved = 0x0aff0000U;
++    uint32_t common = prefix < 16 ? mask : 0xffff0000U;
++    if ((net & common) == (reserved & common)) return -1;
++    out->net = net;
++    out->mask = mask;
++    out->prefix = (uint8_t)prefix;
++    return 0;
++}
++static inline int
++mqvpn_client_route_contains(const mqvpn_client_route_t *r, uint32_t addr)
++{
++    return (addr & r->mask) == r->net;
++}
++static inline int
++mqvpn_client_route_overlaps(const mqvpn_client_route_t *a,
++                            const mqvpn_client_route_t *b)
++{
++    uint32_t common = a->prefix < b->prefix ? a->mask : b->mask;
++    return (a->net & common) == (b->net & common);
++}
++static inline const mqvpn_client_route_t *
++mqvpn_client_route_lookup(const mqvpn_client_route_t *routes, int n, uint32_t addr)
++{
++    const mqvpn_client_route_t *best = NULL;
++    for (int i = 0; i < n; i++) {
++        if (mqvpn_client_route_contains(&routes[i], addr) &&
++            (!best || routes[i].prefix > best->prefix)) best = &routes[i];
++    }
++    return best;
++}
++#endif
+diff --git a/src/mqvpn_server.c b/src/mqvpn_server.c
+--- a/src/mqvpn_server.c
++++ b/src/mqvpn_server.c
+@@ -54,6 +54,7 @@
+ #include <xquic/xqc_http3.h>
+ 
+ #include "addr_pool.h"
++#include "client_routes.h"
+ #include "auth.h"
+ #include "flow_sched.h"
+ #include "mqvpn_path_label.h"
+@@ -271,6 +272,8 @@
+ 
+     /* Address pool */
+     mqvpn_addr_pool_t pool;
++    mqvpn_client_route_t client_routes[MQVPN_CLIENT_ROUTE_MAX];
++    int n_client_routes;
+ 
+     /* Session table: indexed by IP offset (1-254) within subnet */
+     svr_conn_t *sessions[MQVPN_ADDR_POOL_MAX + 1];
+@@ -2341,8 +2344,15 @@
+     if (ip_ver == 4) {
+         if (len < 20) return;
+         if (memcmp(pkt + 12, &conn->assigned_ip.s_addr, 4) != 0) {
+-            LOG_W(s, "dropping packet: src IP mismatch (user=%s)", conn->username);
+-            return;
++            uint32_t src;
++            memcpy(&src, pkt + 12, sizeof(src));
++            const mqvpn_client_route_t *route = mqvpn_client_route_lookup(
++                s->client_routes, s->n_client_routes, ntohl(src));
++            if (!route || !conn->tunnel_established ||
++                strcmp(route->user, conn->username) != 0) {
++                LOG_W(s, "dropping packet: src IP mismatch (user=%s)", conn->username);
++                return;
++            }
+         }
+         memcpy(fwd_pkt, pkt, len);
+         if (fwd_pkt[8] <= 1) {
+@@ -3041,9 +3051,27 @@
+     if (ip_ver == 4 && len >= 20) {
+         struct in_addr dst_ip;
+         memcpy(&dst_ip.s_addr, pkt + 16, 4);
+-        uint32_t offset = ntohl(dst_ip.s_addr) - ntohl(s->pool.base.s_addr);
+-        if (offset == 0 || offset > MQVPN_ADDR_POOL_MAX) return MQVPN_OK;
+-        target = s->sessions[offset];
++        uint32_t dst = ntohl(dst_ip.s_addr);
++        uint32_t base = ntohl(s->pool.base.s_addr);
++        uint32_t offset = dst - base;
++        if (offset > 0 && offset <= s->pool.pool_size) {
++            target = s->sessions[offset];
++        } else {
++            const mqvpn_client_route_t *route = mqvpn_client_route_lookup(
++                s->client_routes, s->n_client_routes, dst);
++            if (!route) return MQVPN_OK;
++            int matches = 0;
++            for (int i = 1; i <= MQVPN_ADDR_POOL_MAX; i++) {
++                svr_conn_t *conn = s->sessions[i];
++                if (conn && conn->tunnel_established &&
++                    strcmp(conn->username, route->user) == 0) {
++                    target = conn;
++                    matches++;
++                }
++            }
++            /* More than one live tunnel under the same identity is ambiguous. */
++            if (matches != 1) target = NULL;
++        }
+     } else if (ip_ver == 6 && len >= 40 && s->pool.has_v6) {
+         struct in6_addr dst_ip6;
+         memcpy(&dst_ip6, pkt + 24, 16);
+@@ -3536,6 +3564,14 @@
+         }
+     }
+     if (!found) return MQVPN_ERR_INVALID_ARG;
++
++    /* Route grants are tied to named credentials; revocation removes them. */
++    int kept = 0;
++    for (int i = 0; i < s->n_client_routes; i++) {
++        if (strcmp(s->client_routes[i].user, username) != 0)
++            s->client_routes[kept++] = s->client_routes[i];
++    }
++    s->n_client_routes = kept;
+ 
+     /* Release pinned IP for the removed user if not currently connected */
+     for (int i = 0; i < s->n_pinned_ips; i++) {
+@@ -3936,3 +3972,78 @@
+     out->is_idle = (s->n_sessions == 0) ? 1 : 0;
+     return MQVPN_OK;
+ }
++
++/* Replace a named user's LAN route grants atomically. Only the event-loop
++ * thread calls this and the packet callbacks, so the table needs no lock. */
++int
++mqvpn_server_replace_client_routes(mqvpn_server_t *s, const char *user,
++                                   const char *const *cidrs, int n)
++{
++    if (!s || !user || !user[0] || strlen(user) >= 64 ||
++        n < 0 || n > MQVPN_CLIENT_ROUTE_PER_USER || (n && !cidrs))
++        return MQVPN_ERR_INVALID_ARG;
++    int known = 0;
++    for (int i = 0; i < s->config.n_users; i++)
++        if (strcmp(s->config.user_names[i], user) == 0) known = 1;
++    if (!known) return MQVPN_ERR_INVALID_ARG;
++
++    mqvpn_client_route_t staged[MQVPN_CLIENT_ROUTE_PER_USER];
++    mqvpn_client_route_t pool_route = {0};
++    pool_route.net = ntohl(s->pool.base.s_addr);
++    pool_route.prefix = (uint8_t)s->pool.prefix_len;
++    pool_route.mask = UINT32_MAX << (32 - pool_route.prefix);
++    for (int i = 0; i < n; i++) {
++        if (mqvpn_client_route_parse(cidrs[i], &staged[i]) < 0 ||
++            mqvpn_client_route_overlaps(&staged[i], &pool_route))
++            return MQVPN_ERR_INVALID_ARG;
++        snprintf(staged[i].user, sizeof(staged[i].user), "%s", user);
++        for (int j = 0; j < i; j++)
++            if (mqvpn_client_route_overlaps(&staged[i], &staged[j]))
++                return MQVPN_ERR_INVALID_ARG;
++        for (int j = 0; j < s->n_client_routes; j++)
++            if (strcmp(s->client_routes[j].user, user) != 0 &&
++                mqvpn_client_route_overlaps(&staged[i], &s->client_routes[j]))
++                return MQVPN_ERR_INVALID_ARG;
++    }
++    int kept = 0;
++    for (int i = 0; i < s->n_client_routes; i++)
++        if (strcmp(s->client_routes[i].user, user) != 0) kept++;
++    if (kept + n > MQVPN_CLIENT_ROUTE_MAX) return MQVPN_ERR_MAX_CLIENTS;
++    kept = 0;
++    for (int i = 0; i < s->n_client_routes; i++)
++        if (strcmp(s->client_routes[i].user, user) != 0)
++            s->client_routes[kept++] = s->client_routes[i];
++    if (n) memcpy(&s->client_routes[kept], staged, (size_t)n * sizeof(staged[0]));
++    s->n_client_routes = kept + n;
++    return MQVPN_OK;
++}
++
++int
++mqvpn_server_get_client_routes(const mqvpn_server_t *s, const char *user,
++                               char routes[][32], int max, int *session_count)
++{
++    if (!s || !user || !user[0] || !session_count || max < 0 ||
++        (max && !routes)) return MQVPN_ERR_INVALID_ARG;
++    int known = 0;
++    for (int i = 0; i < s->config.n_users; i++)
++        if (strcmp(s->config.user_names[i], user) == 0) known = 1;
++    if (!known) return MQVPN_ERR_INVALID_ARG;
++    *session_count = 0;
++    for (int i = 1; i <= MQVPN_ADDR_POOL_MAX; i++) {
++        svr_conn_t *conn = s->sessions[i];
++        if (conn && conn->tunnel_established && strcmp(conn->username, user) == 0)
++            (*session_count)++;
++    }
++    int count = 0;
++    for (int i = 0; i < s->n_client_routes; i++) {
++        const mqvpn_client_route_t *r = &s->client_routes[i];
++        if (strcmp(r->user, user) != 0) continue;
++        if (count >= max) return MQVPN_ERR_INVALID_ARG;
++        struct in_addr addr = { .s_addr = htonl(r->net) };
++        char ip[INET_ADDRSTRLEN];
++        if (!inet_ntop(AF_INET, &addr, ip, sizeof(ip)))
++            return MQVPN_ERR_INVALID_ARG;
++        snprintf(routes[count++], 32, "%s/%u", ip, r->prefix);
++    }
++    return count;
++}
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include "libmqvpn.h"
++#include "client_routes.h"
+ #include "mqvpn_internal.h"
+ #include "path_rotation.h"
+ #include "path_error_policy.h"
+@@ -233,6 +234,8 @@
+     int tun_active;
+     int backpressure;
+     int last_notified_mtu;
++    mqvpn_client_route_t client_routes[MQVPN_CLIENT_ROUTE_PER_USER];
++    int n_client_routes;
+ 
+     /* Stats */
+     uint64_t bytes_tx;
+@@ -1038,6 +1041,11 @@
+     memcpy(&c->cbs, cbs, cbs_size);
+     c->user_ctx = user_ctx; // lgtm[cpp/stack-address-escape]
+     c->log_level = cfg->log_level;
++    for (int i = 0; i < cfg->n_client_routes; i++) {
++        mqvpn_client_route_t route;
++        if (mqvpn_client_route_parse(cfg->client_routes[i], &route) < 0) continue;
++        c->client_routes[c->n_client_routes++] = route;
++    }
+     c->state = MQVPN_STATE_IDLE;
+     c->next_path_handle = 1;
+     mqvpn_ptb_bucket_init(&c->ptb_bucket);
+@@ -4071,8 +4079,13 @@
+ {
+     if (ip_ver == 4) {
+         if (conn->addr_assigned && memcmp(pkt + 12, conn->assigned_ip, 4) != 0) {
+-            LOG_D(c, "tun drop: IPv4 src mismatch (len=%zu)", len);
+-            return TUN_INGRESS_DROP; /* silently drop: src mismatch */
++            uint32_t src;
++            memcpy(&src, pkt + 12, sizeof(src));
++            if (!mqvpn_client_route_lookup(c->client_routes, c->n_client_routes,
++                                           ntohl(src))) {
++                LOG_D(c, "tun drop: IPv4 src mismatch (len=%zu)", len);
++                return TUN_INGRESS_DROP;
++            }
+         }
+     } else if (ip_ver == 6) {
+         if (len < IPV6_MIN_HDR || !conn->addr6_assigned) {
+diff --git a/src/mqvpn_config.c b/src/mqvpn_config.c
+--- a/src/mqvpn_config.c
++++ b/src/mqvpn_config.c
+@@ -9,6 +9,7 @@
+ 
+ #include "libmqvpn.h"
+ #include "mqvpn_internal.h"
++#include "client_routes.h"
+ #include "mqvpn_sched_names.h"
+ #include "json_mini.h"
+ 
+@@ -580,11 +581,42 @@
+         }
+     }
+ 
++    char arr_routes[MQVPN_CLIENT_ROUTE_PER_USER][32];
++    int n_routes = 0;
++    v = json_find_key(json_text, "client_routes");
++    if (v) {
++        if (json_read_string_array(v, arr_routes, MQVPN_CLIENT_ROUTE_PER_USER,
++                                   &n_routes) != MQVPN_OK)
++            return MQVPN_ERR_INVALID_ARG;
++        cfg->n_client_routes = 0;
++        for (int i = 0; i < n_routes; i++)
++            if (mqvpn_config_add_client_route(cfg, arr_routes[i]) != MQVPN_OK)
++                return MQVPN_ERR_INVALID_ARG;
++    }
++
+     v = json_find_key(json_text, "users");
+     if (v && json_read_users(cfg, v) != MQVPN_OK) {
+         return MQVPN_ERR_INVALID_ARG;
+     }
+ 
++    return MQVPN_OK;
++}
++
++int
++mqvpn_config_add_client_route(mqvpn_config_t *cfg, const char *cidr)
++{
++    if (!cfg || !cidr || cfg->n_client_routes >= MQVPN_CLIENT_ROUTE_PER_USER)
++        return MQVPN_ERR_INVALID_ARG;
++    mqvpn_client_route_t route;
++    if (mqvpn_client_route_parse(cidr, &route) < 0)
++        return MQVPN_ERR_INVALID_ARG;
++    for (int i = 0; i < cfg->n_client_routes; i++) {
++        mqvpn_client_route_t old;
++        if (mqvpn_client_route_parse(cfg->client_routes[i], &old) == 0 &&
++            mqvpn_client_route_overlaps(&route, &old))
++            return MQVPN_ERR_INVALID_ARG;
++    }
++    snprintf(cfg->client_routes[cfg->n_client_routes++], 32, "%s", cidr);
+     return MQVPN_OK;
+ }
+ 
+diff --git a/src/mqvpn_internal.h b/src/mqvpn_internal.h
+--- a/src/mqvpn_internal.h
++++ b/src/mqvpn_internal.h
+@@ -87,6 +87,8 @@
+     int server_port;
+     char auth_key[256];
+     char auth_username[64]; /* client-only: name to send in x-user header */
++    char client_routes[16][32]; /* client-side allowed LAN source prefixes */
++    int n_client_routes;
+     char user_names[MQVPN_MAX_USERS][64];
+     char user_keys[MQVPN_MAX_USERS][256];
+     char user_fixed_ips[MQVPN_MAX_USERS][20]; /* "" = dynamic, "x.x.x.x" = pinned */
+diff --git a/src/config.c b/src/config.c
+--- a/src/config.c
++++ b/src/config.c
+@@ -10,6 +10,7 @@
+  * are hand-written in both parsers.
+  */
+ #include "config.h"
++#include "client_routes.h"
+ #include "json_mini.h"
+ #include "libmqvpn.h"
+ #include "log.h"
+@@ -95,6 +96,7 @@
+     SEC_REORDER_RULE,
+     SEC_HYBRID,
+     SEC_ADVANCED,
++    SEC_ROUTES,
+ };
+ 
+ static int
+@@ -110,6 +112,7 @@
+     if (strcasecmp(name, "ReorderRule") == 0) return SEC_REORDER_RULE;
+     if (strcasecmp(name, "Hybrid") == 0) return SEC_HYBRID;
+     if (strcasecmp(name, "Advanced") == 0) return SEC_ADVANCED;
++    if (strcasecmp(name, "Routes") == 0) return SEC_ROUTES;
+     return -1;
+ }
+ 
+@@ -127,6 +130,7 @@
+     case SEC_REORDER_RULE: return "ReorderRule";
+     case SEC_HYBRID: return "Hybrid";
+     case SEC_ADVANCED: return "Advanced";
++    case SEC_ROUTES: return "Routes";
+     default: return "?";
+     }
+ }
+@@ -1131,6 +1135,19 @@
+             return;
+         }
+         break;
++    case SEC_ROUTES:
++        if (strcasecmp(key, "ClientRoute") == 0) {
++            mqvpn_client_route_t route;
++            if (cfg->n_client_routes >= MQVPN_CONFIG_MAX_CLIENT_ROUTES ||
++                mqvpn_client_route_parse(val, &route) < 0) {
++                LOG_WRN("%s:%d: invalid or excessive [Routes] ClientRoute '%s'",
++                        path, lineno, val);
++                return;
++            }
++            snprintf(cfg->client_routes[cfg->n_client_routes++], 32, "%s", val);
++            return;
++        }
++        break;
+     case SEC_REORDER_RULE: {
+         /* Keys fill the rule slot pushed by reorder_rule_begin() on section
+          * entry. An over-cap [ReorderRule] is demoted to SEC_NONE at section
+@@ -1300,6 +1317,22 @@
+         }
+     }
+ 
++    char client_route_buf[MQVPN_CONFIG_MAX_CLIENT_ROUTES][64];
++    int n_client_routes = 0;
++    v = json_find_key(json_text, "client_routes");
++    if (v) {
++        if (json_read_string_array(v, client_route_buf,
++                                   MQVPN_CONFIG_MAX_CLIENT_ROUTES,
++                                   &n_client_routes) < 0) return -1;
++        cfg->n_client_routes = 0;
++        for (int i = 0; i < n_client_routes; i++) {
++            mqvpn_client_route_t route;
++            if (mqvpn_client_route_parse(client_route_buf[i], &route) < 0) return -1;
++            mqvpn_copy_str(cfg->client_routes[cfg->n_client_routes++], 32,
++                           client_route_buf[i]);
++        }
++    }
++
+     char path_buf[MQVPN_CONFIG_MAX_PATHS][64];
+     int n_paths = 0;
+     v = json_find_key(json_text, "paths");
+diff --git a/src/config.h b/src/config.h
+--- a/src/config.h
++++ b/src/config.h
+@@ -22,6 +22,7 @@
+ #define MQVPN_CONFIG_MAX_PATHS 8
+ #define MQVPN_CONFIG_MAX_DNS   4
+ #define MQVPN_CONFIG_MAX_USERS 64
++#define MQVPN_CONFIG_MAX_CLIENT_ROUTES 16
+ _Static_assert(MQVPN_CONFIG_MAX_PATHS == MQVPN_MAX_PATHS,
+                "Config path cap must equal library cap (libmqvpn.h)");
+ _Static_assert(MQVPN_CONFIG_MAX_USERS == MQVPN_MAX_USERS,
+@@ -52,6 +53,8 @@
+     char listen[280]; /* "bind:port" */
+     char subnet[32];
+     char subnet6[64]; /* IPv6 tunnel subnet CIDR (e.g. "fd00:abcd::/112") */
++    char client_routes[MQVPN_CONFIG_MAX_CLIENT_ROUTES][32];
++    int n_client_routes;
+ 
+     /* [Interface] — client */
+     char dns_servers[MQVPN_CONFIG_MAX_DNS][64];
+diff --git a/src/main.c b/src/main.c
+--- a/src/main.c
++++ b/src/main.c
+@@ -672,6 +672,7 @@
+             .auth_key = eff_auth_key_client,
+             .auth_username = eff_auth_username,
+             .n_dns = n_dns,
++            .n_client_routes = file_cfg.n_client_routes,
+             .reconnect = eff_reconnect,
+             .reconnect_interval = file_cfg.reconnect_interval,
+             .kill_switch = kill_switch >= 0 ? kill_switch : file_cfg.kill_switch,
+@@ -718,6 +719,8 @@
+         for (int i = 0; i < n_dns; i++) {
+             cfg.dns_servers[i] = dns_servers[i];
+         }
++        for (int i = 0; i < file_cfg.n_client_routes; i++)
++            cfg.client_routes[i] = file_cfg.client_routes[i];
+ #ifdef _WIN32
+         return win_platform_run_client(&cfg);
+ #elif defined(__APPLE__)
+diff --git a/src/vpn_client.h b/src/vpn_client.h
+--- a/src/vpn_client.h
++++ b/src/vpn_client.h
+@@ -33,6 +33,8 @@
+     const char *auth_username;  /* client username sent to server via x-user header (NULL = none) */
+     const char *dns_servers[4]; /* DNS servers to configure (NULL = no DNS override) */
+     int n_dns;                  /* number of DNS servers */
++    const char *client_routes[16]; /* LAN source prefixes */
++    int n_client_routes;
+     int reconnect;              /* 1=auto-reconnect on disconnect (default 1) */
+     int reconnect_interval;     /* base reconnect interval in seconds (default 5) */
+     int kill_switch;            /* 1=block traffic outside tunnel (default 0) */
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -849,6 +849,13 @@
+     mqvpn_config_set_reconnect(lib_cfg, cfg->reconnect,
+                                cfg->reconnect_interval > 0 ? cfg->reconnect_interval : 5);
+     mqvpn_config_set_killswitch_hint(lib_cfg, cfg->kill_switch);
++    for (int i = 0; i < cfg->n_client_routes; i++) {
++        if (mqvpn_config_add_client_route(lib_cfg, cfg->client_routes[i]) != MQVPN_OK) {
++            LOG_ERR("invalid client route: %s", cfg->client_routes[i]);
++            mqvpn_config_free(lib_cfg);
++            return -1;
++        }
++    }
+ 
+     mqvpn_config_set_log_level(lib_cfg, (mqvpn_log_level_t)cfg->log_level);
+ 
+diff --git a/src/platform/linux/control_socket.c b/src/platform/linux/control_socket.c
+--- a/src/platform/linux/control_socket.c
++++ b/src/platform/linux/control_socket.c
+@@ -9,6 +9,8 @@
+  *   {"cmd":"add_user",    "name":"alice","key":"alice-secret"}
+  *   {"cmd":"remove_user", "name":"alice"}
+  *   {"cmd":"list_users"}
++ *   {"cmd":"replace_client_routes","user":"alice","routes":["192.168.2.0/24"]}
++ *   {"cmd":"get_client_routes","user":"alice"}
+  *   {"cmd":"get_stats"}
+  *   {"cmd":"get_status"}
+  *   {"cmd":"get_build_info"}
+@@ -223,6 +225,71 @@
+ }
+ 
+ static int
++ctrl_cmd_replace_client_routes(const char *req, char *resp, size_t cap,
++                               ctrl_socket_t *cs)
++{
++    if (!cs->server)
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"server only\"}");
++    char user[64] = {0};
++    const char *uv = json_find_key(req, "user");
++    const char *v = json_find_key(req, "routes");
++    if (!uv || json_read_string(uv, user, sizeof(user)) < 0 || !user[0] ||
++        !v || *v != '[')
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"user and routes required\"}");
++    char routes[16][32] = {{0}};
++    const char *ptrs[16];
++    int n = 0;
++    v = json_skip_ws(v + 1);
++    while (*v != ']') {
++        if (*v != '"' || n == 16)
++            return snprintf(resp, cap, "{\"ok\":false,\"error\":\"invalid routes\"}");
++        const char *end = strchr(v + 1, '"');
++        if (!end || (size_t)(end - v - 1) >= sizeof(routes[0]) ||
++            memchr(v + 1, '\\', (size_t)(end - v - 1)))
++            return snprintf(resp, cap, "{\"ok\":false,\"error\":\"invalid route\"}");
++        memcpy(routes[n], v + 1, (size_t)(end - v - 1));
++        ptrs[n] = routes[n];
++        n++;
++        v = json_skip_ws(end + 1);
++        if (*v == ',') {
++            v = json_skip_ws(v + 1);
++            if (*v == ']')
++                return snprintf(resp, cap, "{\"ok\":false,\"error\":\"invalid routes\"}");
++        } else if (*v != ']') {
++            return snprintf(resp, cap, "{\"ok\":false,\"error\":\"invalid routes\"}");
++        }
++    }
++    int rc = mqvpn_server_replace_client_routes(cs->server, user, ptrs, n);
++    if (rc != MQVPN_OK)
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"route grant rejected (%d)\"}", rc);
++    return snprintf(resp, cap, "{\"ok\":true,\"n_routes\":%d}", n);
++}
++
++static int
++ctrl_cmd_get_client_routes(const char *req, char *resp, size_t cap,
++                           ctrl_socket_t *cs)
++{
++    if (!cs->server)
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"server only\"}");
++    char user[64] = {0}, routes[16][32] = {{0}};
++    const char *uv = json_find_key(req, "user");
++    if (!uv || json_read_string(uv, user, sizeof(user)) < 0 || !user[0])
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"user required\"}");
++    int session_count = 0;
++    int n = mqvpn_server_get_client_routes(cs->server, user, routes, 16,
++                                           &session_count);
++    if (n < 0)
++        return snprintf(resp, cap, "{\"ok\":false,\"error\":\"unknown user\"}");
++    int pos = snprintf(resp, cap, "{\"ok\":true,\"user\":\"%s\",\"routes\":[", user);
++    for (int i = 0; i < n && pos > 0 && (size_t)pos < cap; i++)
++        pos += snprintf(resp + pos, cap - (size_t)pos, "%s\"%s\"",
++                        i ? "," : "", routes[i]);
++    if (pos <= 0 || (size_t)pos >= cap) return 0;
++    return pos + snprintf(resp + pos, cap - (size_t)pos,
++                          "],\"session_count\":%d}", session_count);
++}
++
++static int
+ ctrl_cmd_get_stats(const char *req, char *resp, size_t resp_len, ctrl_socket_t *cs)
+ {
+     mqvpn_server_t *server = cs->server;
+@@ -627,6 +694,8 @@
+     {"set_user_fixed_ip", ctrl_cmd_set_user_fixed_ip},
+     {"remove_user", ctrl_cmd_remove_user},
+     {"list_users", ctrl_cmd_list_users},
++    {"replace_client_routes", ctrl_cmd_replace_client_routes},
++    {"get_client_routes", ctrl_cmd_get_client_routes},
+     {"get_stats", ctrl_cmd_get_stats},
+     {"get_status", ctrl_cmd_get_status},
+     {"get_build_info", ctrl_cmd_get_build_info},
+diff --git a/tests/test_client_routes.c b/tests/test_client_routes.c
+new file mode 100644
+--- /dev/null
++++ b/tests/test_client_routes.c
+@@ -0,0 +1,38 @@
++// SPDX-License-Identifier: Apache-2.0
++#include "client_routes.h"
++#include <stdlib.h>
++#define CHECK(x) do { if (!(x)) abort(); } while (0)
++#include <stdio.h>
++
++static uint32_t ip(const char *text)
++{
++    struct in_addr addr;
++    CHECK(inet_pton(AF_INET, text, &addr) == 1);
++    return ntohl(addr.s_addr);
++}
++int main(void)
++{
++    mqvpn_client_route_t a = {0}, b = {0};
++    CHECK(mqvpn_client_route_parse("192.168.2.8/24", &a) == 0);
++    CHECK(a.net == ip("192.168.2.0"));
++    CHECK(mqvpn_client_route_contains(&a, ip("192.168.2.99")));
++    CHECK(!mqvpn_client_route_contains(&a, ip("192.168.3.1")));
++    CHECK(mqvpn_client_route_parse("192.168.2.64/26", &b) == 0);
++    CHECK(mqvpn_client_route_overlaps(&a, &b));
++    mqvpn_client_route_t routes[2] = {a, b};
++    CHECK(mqvpn_client_route_lookup(routes, 2, ip("192.168.2.70")) == &routes[1]);
++    CHECK(mqvpn_client_route_lookup(routes, 2, ip("192.168.2.10")) == &routes[0]);
++    CHECK(mqvpn_client_route_lookup(routes, 2, ip("192.168.3.1")) == NULL);
++    const char *bad[] = {
++        "0.0.0.0/0", "10.0.0.0/8", "10.255.0.0/16", "10.255.247.0/24",
++        "172.0.0.0/8", "192.168.0.0/15", "8.8.8.0/24",
++        "192.168.2.0/33", "192.168.2.0/x", "192.168.2.0",
++        "192.168.2.0/24junk"
++    };
++    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++)
++        CHECK(mqvpn_client_route_parse(bad[i], &a) < 0);
++    CHECK(mqvpn_client_route_parse("10.42.0.0/16", &a) == 0);
++    CHECK(mqvpn_client_route_parse("172.16.0.0/12", &a) == 0);
++    puts("client routes OK");
++    return 0;
++}
+diff --git a/tests/test_server.c b/tests/test_server.c
+--- a/tests/test_server.c
++++ b/tests/test_server.c
+@@ -209,6 +209,47 @@
+     ASSERT_NOT_NULL(s);
+     mqvpn_config_free(cfg);
+ 
++    mqvpn_server_destroy(s);
++}
++
++TEST(server_client_routes_atomic_grants)
++{
++    mqvpn_config_t *cfg = make_server_config();
++    ASSERT_EQ(mqvpn_config_add_user(cfg, "alice", "alice-key"), MQVPN_OK);
++    ASSERT_EQ(mqvpn_config_add_user(cfg, "bob", "bob-key"), MQVPN_OK);
++    mqvpn_server_callbacks_t cbs = MQVPN_SERVER_CALLBACKS_INIT;
++    cbs.tun_output = mock_tun_output;
++    cbs.tunnel_config_ready = mock_tunnel_config_ready;
++    mqvpn_server_t *s = mqvpn_server_new(cfg, &cbs, NULL);
++    ASSERT_NOT_NULL(s);
++    mqvpn_config_free(cfg);
++    const char *alice[] = {"192.168.2.0/24"};
++    const char *bob[] = {"192.168.3.0/24"};
++    char routes[16][32] = {{0}};
++    int sessions = -1;
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "unknown", alice, 1),
++              MQVPN_ERR_INVALID_ARG);
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "alice", alice, 1), MQVPN_OK);
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "bob", bob, 1), MQVPN_OK);
++    ASSERT_EQ(mqvpn_server_get_client_routes(s, "alice", routes, 16, &sessions), 1);
++    ASSERT_EQ(strcmp(routes[0], alice[0]), 0);
++    ASSERT_EQ(sessions, 0);
++    const char *overlap[] = {"192.168.2.128/25"};
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "bob", overlap, 1),
++              MQVPN_ERR_INVALID_ARG);
++    ASSERT_EQ(mqvpn_server_get_client_routes(s, "bob", routes, 16, &sessions), 1);
++    ASSERT_EQ(strcmp(routes[0], bob[0]), 0);
++    const char *reserved[] = {"10.255.246.0/24"};
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "alice", reserved, 1),
++              MQVPN_ERR_INVALID_ARG);
++    const char *pool[] = {"10.0.0.0/24"};
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "alice", pool, 1),
++              MQVPN_ERR_INVALID_ARG);
++    ASSERT_EQ(mqvpn_server_replace_client_routes(s, "alice", NULL, 0), MQVPN_OK);
++    ASSERT_EQ(mqvpn_server_get_client_routes(s, "alice", routes, 16, &sessions), 0);
++    ASSERT_EQ(mqvpn_server_remove_user(s, "bob"), MQVPN_OK);
++    ASSERT_EQ(mqvpn_server_get_client_routes(s, "bob", routes, 16, &sessions),
++              MQVPN_ERR_INVALID_ARG);
+     mqvpn_server_destroy(s);
+ }
+ 
+@@ -2176,6 +2217,7 @@
+     run_server_new_missing_tun_output();
+     run_server_new_missing_tunnel_config_ready();
+     run_server_new_destroy();
++    run_server_client_routes_atomic_grants();
+     run_server_destroy_null();
+     run_server_egress_fd_budget();
+ 
+diff --git a/tests/test_config.c b/tests/test_config.c
+--- a/tests/test_config.c
++++ b/tests/test_config.c
+@@ -2792,6 +2792,30 @@
+     ASSERT_EQ_INT(mqvpn_reinj_from_name(NULL), -1, "reinj from_name(NULL)");
+ }
+ 
++static void
++test_client_routes_ini_json(void)
++{
++    mqvpn_file_config_t cfg;
++    mqvpn_config_defaults(&cfg);
++    char *path = write_tmp("[Server]\nAddress = 127.0.0.1:443\n"
++                           "[Routes]\nClientRoute = 192.168.2.0/24\n"
++                           "ClientRoute = 172.16.4.0/24\n");
++    ASSERT_EQ_INT(mqvpn_config_load(&cfg, path), 0, "client routes INI parse");
++    ASSERT_EQ_INT(cfg.n_client_routes, 2, "client routes INI count");
++    ASSERT_EQ_STR(cfg.client_routes[0], "192.168.2.0/24", "client route INI first");
++    unlink(path);
++    mqvpn_config_defaults(&cfg);
++    ASSERT_EQ_INT(mqvpn_config_load_json_filecfg(
++        &cfg, "{\"client_routes\":[\"192.168.2.0/24\"]}"),
++        0, "client routes JSON parse");
++    ASSERT_EQ_INT(cfg.n_client_routes, 1, "client routes JSON count");
++    ASSERT_EQ_STR(cfg.client_routes[0], "192.168.2.0/24", "client route JSON first");
++    mqvpn_config_defaults(&cfg);
++    ASSERT_EQ_INT(mqvpn_config_load_json_filecfg(
++        &cfg, "{\"client_routes\":[\"10.255.246.0/24\"]}"),
++        -1, "reserved tunnel route rejected");
++}
++
+ int
+ main(void)
+ {
+@@ -2875,6 +2899,8 @@
+     test_route_via_server_config_parse();
+     test_route_via_server_config_false();
+ 
++    test_client_routes_ini_json();
++
+     /* no_routes tests */
+     test_no_routes_default_off();
+     test_no_routes_config_parse();
+diff --git a/tests/test_control_socket.c b/tests/test_control_socket.c
+--- a/tests/test_control_socket.c
++++ b/tests/test_control_socket.c
+@@ -54,6 +54,12 @@
+ static int g_list_users_n     = 0;
+ static char g_list_users_names[MQVPN_MAX_USERS][64];
+ 
++static int g_route_rc = MQVPN_OK;
++static int g_route_n = 0;
++static int g_route_sessions = 0;
++static char g_route_user[64] = "alice";
++static char g_routes[16][32];
++
+ /* Configurable state for stats/status/FEC/reorder stubs */
+ static int g_n_clients = 0;
+ static uint64_t g_uptime = 0;
+@@ -86,6 +92,29 @@
+     for (int i = 0; i < n; i++)
+         strncpy(names[i], g_list_users_names[i], 63);
+     return n;
++}
++
++int mqvpn_server_replace_client_routes(mqvpn_server_t *s, const char *user,
++                                       const char *const *cidrs, int n)
++{
++    (void)s;
++    if (g_route_rc != MQVPN_OK) return g_route_rc;
++    snprintf(g_route_user, sizeof(g_route_user), "%s", user);
++    g_route_n = n;
++    for (int i = 0; i < n; i++)
++        snprintf(g_routes[i], sizeof(g_routes[i]), "%s", cidrs[i]);
++    return MQVPN_OK;
++}
++int mqvpn_server_get_client_routes(const mqvpn_server_t *s, const char *user,
++                                   char routes[][32], int max, int *session_count)
++{
++    (void)s;
++    if (strcmp(user, g_route_user) != 0 || max < g_route_n)
++        return MQVPN_ERR_INVALID_ARG;
++    for (int i = 0; i < g_route_n; i++)
++        snprintf(routes[i], 32, "%s", g_routes[i]);
++    *session_count = g_route_sessions;
++    return g_route_n;
+ }
+ 
+ int mqvpn_server_get_stats(const mqvpn_server_t *s, mqvpn_stats_t *st)
+@@ -403,6 +432,43 @@
+ 
+ /* Regression: dispatch() previously fell through without returning when
+  * get_all_fec_stats returned 0 entries and truncated == 0. */
++static int
++call_dispatch_server(const char *req, char *resp, size_t cap)
++{
++    static struct mqvpn_server_s server;
++    ctrl_socket_t cs = {.server = &server};
++    return dispatch(req, resp, cap, &cs);
++}
++TEST(client_route_control_contract)
++{
++    char resp[1024];
++    g_route_rc = MQVPN_OK;
++    call_dispatch_server("{\"cmd\":\"replace_client_routes\",\"user\":\"alice\","
++                         "\"routes\":[\"192.168.2.0/24\"]}", resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"ok\":true");
++    ASSERT_CONTAINS(resp, "\"n_routes\":1");
++    g_route_sessions = 1;
++    call_dispatch_server("{\"cmd\":\"get_client_routes\",\"user\":\"alice\"}",
++                         resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"routes\":[\"192.168.2.0/24\"]");
++    ASSERT_CONTAINS(resp, "\"session_count\":1");
++    g_route_sessions = 0;
++    call_dispatch_server("{\"cmd\":\"get_client_routes\",\"user\":\"alice\"}",
++                         resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"session_count\":0");
++    call_dispatch_server("{\"cmd\":\"replace_client_routes\",\"user\":\"alice\","
++                         "\"routes\":[]}", resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"n_routes\":0");
++    call_dispatch_server("{\"cmd\":\"replace_client_routes\",\"user\":\"alice\","
++                         "\"routes\":[\"bad\",]}", resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"ok\":false");
++    g_route_rc = MQVPN_ERR_INVALID_ARG;
++    call_dispatch_server("{\"cmd\":\"replace_client_routes\",\"user\":\"alice\","
++                         "\"routes\":[\"10.255.246.0/24\"]}", resp, sizeof(resp));
++    ASSERT_CONTAINS(resp, "\"ok\":false");
++    g_route_rc = MQVPN_OK;
++}
++
+ TEST(get_all_fec_stats_empty)
+ {
+     g_fec_n = 0;
+@@ -1436,6 +1502,7 @@
+     run_get_all_fec_stats_client_mode_not_built();
+     run_dispatch_missing_cmd();
+     run_dispatch_unknown_cmd();
++    run_client_route_control_contract();
+ 
+     /* add_user */
+     run_add_user_success();

@@ -1,5 +1,8 @@
 name: openmptcprouter
-on: [push]
+on:
+  push:
+    branches-ignore:
+      - omr-v0.64.2-3K
 
 env:
   REPO_URL: 'https://github.com/ysurac/openmptcprouter'

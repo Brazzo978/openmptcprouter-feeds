@@ -1123,11 +1123,10 @@ manual's summary isn't enough:
 | [WAN Metrics](#wan-metrics) | [luci-app-omr-metrics/docs/metrics-guide.md](../luci-app-omr-metrics/docs/metrics-guide.md) + [settings-guide.md](../luci-app-omr-metrics/docs/settings-guide.md) |
 | [nDPId](#ndpid) | [luci-app-ndpid/docs/ndpid-guide.md](../luci-app-ndpid/docs/ndpid-guide.md) |
 
-Three more user guides exist for pages this manual doesn't have a
+Two more user guides exist for pages this manual doesn't have a
 dedicated section for yet:
 
 - **Advanced Settings** (`admin/system/openmptcprouter/settings`) — TCP/kernel tuning, feature toggles, obfuscation, hardware offload, per-server port redirection: [luci-app-openmptcprouter/docs/settings-guide.md](../luci-app-openmptcprouter/docs/settings-guide.md)
-- **Backup** (`admin/system/openmptcprouter/backup`) — full router-config backup/restore against your VPS: [luci-app-openmptcprouter/docs/backup-guide.md](../luci-app-openmptcprouter/docs/backup-guide.md)
 - **Show all settings** (`admin/system/openmptcprouter/debug`) — a raw, read-only dump of the entire UCI configuration, for troubleshooting: [luci-app-openmptcprouter/docs/debug-guide.md](../luci-app-openmptcprouter/docs/debug-guide.md)
 
 

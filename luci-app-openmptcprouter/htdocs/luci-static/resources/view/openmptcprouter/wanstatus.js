@@ -71,19 +71,6 @@ return view.extend({
 		return (bytes / 1099511627776).toFixed(2) + ' TB';
 	},
 
-	renderSignalBars: function(percent) {
-		var n = Math.min(5, Math.max(0, Math.round((percent || 0) / 20)));
-		var color = n >= 4 ? 'var(--c-ok)' : (n >= 2 ? 'var(--c-warn)' : 'var(--c-err)');
-		var html = '<span style="display:inline-flex;align-items:flex-end;gap:2px;height:16px;vertical-align:middle;" title="' + this.esc(String(percent)) + '%">';
-		for (var i = 1; i <= 5; i++) {
-			var h = (4 + i * 3) + 'px';
-			var bg = i <= n ? color : 'var(--c-line)';
-			html += '<span style="display:inline-block;width:4px;height:' + h + ';background:' + bg + ';border-radius:1px;"></span>';
-		}
-		html += '</span>';
-		return html;
-	},
-
 	stringToColour: function(str) {
 		var fixed = {
 			wan1: 'BlueViolet', wan2: 'DeepSkyBlue', wan3: 'LightGreen', wan4: 'PowderBlue',
@@ -128,9 +115,8 @@ return view.extend({
 		var statusMessage = '';
 		if (!wan.ipaddr && !wan.ip6addr) statusMessage += _('No IP defined') + '<br />';
 		if (!wan.gateway && !wan.gateway6) statusMessage += _('No gateway defined') + '<br />';
-		var noGwCheck = /^(modemmanager|qmi|mbim|3g)$/i.test(wan.proto || '');
-		if (!noGwCheck && wan.gateway && wan.gw_ping === 'DOWN') statusMessage += _('Gateway DOWN') + '<br />';
-		if (!noGwCheck && wan.ip6addr && wan.gateway6 && wan.gw_ping6 === 'DOWN') statusMessage += _('Gateway IPv6 DOWN') + '<br />';
+		if (wan.gateway && wan.gw_ping === 'DOWN') statusMessage += _('Gateway DOWN') + '<br />';
+		if (wan.ip6addr && wan.gateway6 && wan.gw_ping6 === 'DOWN') statusMessage += _('Gateway IPv6 DOWN') + '<br />';
 		if (wan.server_ping === 'DOWN') statusMessage += _('No Server ping response after 1 second') + '<br />';
 		if (wan.server_http === 'DOWN') statusMessage += _('No Server http response after 1 second') + '<br />';
 		if (wan.zonewan === 'NO') statusMessage += _('Network interface not in WAN firewall zone') + '<br />';
@@ -156,21 +142,18 @@ return view.extend({
 		if (wan.ifname && wan.ifname !== wan.label) details += _('interface:') + ' ' + this.esc(wan.ifname) + '<br />';
 		if (gateway) details += _('gateway:') + ' <strong>' + this.esc(gateway) + '</strong><br />';
 		if (wan.latency) details += _('latency:') + ' ' + this.esc(wan.latency) + ' ms<br />';
-		details += _('multipath:') + ' ' + this.esc(wan.multipath || 'off') + '<br />';
-		if (wan.operator) details += _('operator:') + ' <strong>' + this.esc(wan.operator) + '</strong><br />';
-		if (wan.whois && wan.whois !== 'unknown') details += _('ASN:') + ' ' + this.esc(wan.whois) + '<br />';
-		if (wan.phonenumber) details += _('number:') + ' <strong>' + this.esc(wan.phonenumber) + '</strong><br />';
-		if (wan.donglestate) details += _('state:') + ' <strong>' + this.esc(wan.donglestate) + '</strong><br />';
-
-		var badge = '';
-		if (wan.signal || wan.networktype) {
-			badge = '<div class="node-badge">';
-			if (wan.signal) badge += this.renderSignalBars(Number(wan.signal));
-			if (wan.networktype) badge += '<span class="node-badge-type">' + this.esc(wan.networktype) + '</span>';
-			badge += '</div>';
+		if (wan.mtu !== '' && wan.mtu != null) {
+			var linkMTU = wan.link_mtu == null ? '' : String(wan.link_mtu);
+			details += 'PMTU: ' + this.esc(wan.mtu);
+			if (linkMTU !== '' && linkMTU !== String(wan.mtu))
+				details += ' <small>(link mtu ' + this.esc(linkMTU) + ')</small>';
+			details += '<br />';
 		}
+		details += _('multipath:') + ' ' + this.esc(wan.multipath || 'off') + '<br />';
+		if (wan.whois && wan.whois !== 'unknown') details += _('ASN:') + ' ' + this.esc(wan.whois) + '<br />';
 
-		return '<li><a href="#">' + this.getNetworkNodeTemplate(icon, title, statusClass, statusMessage, details, badge) + '</a></li>';
+
+		return '<li><a href="#">' + this.getNetworkNodeTemplate(icon, title, statusClass, statusMessage, details, '') + '</a></li>';
 	},
 
 	render: function(initialData) {

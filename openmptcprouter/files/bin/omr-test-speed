@@ -44,6 +44,34 @@ HOSTLST=$(uci -q get omr-speedtest.urls.download 2>/dev/null | tr '\n' ' ')
 HOSTLST6=$(uci -q get omr-speedtest.urls.download6 2>/dev/null | tr '\n' ' ')
 [ -z "$HOSTLST6" ] && HOSTLST6="$_DEFAULT_HOSTLST6"
 
+# Keep the .62 custom-server host lists while retaining the .64 UCI/default
+# fallback. Each entry is a single HTTP(S) URL; ignore comments and invalid
+# lines instead of passing them to ping/curl as additional arguments.
+load_host_file() {
+	local url hosts=""
+	[ -s "$1" ] || return 1
+	while IFS= read -r url || [ -n "$url" ]; do
+		case "$url" in
+			''|'#'*) continue ;;
+			http://*|https://*) ;;
+			*) continue ;;
+		esac
+		case "$url" in
+			*[[:space:]]*) continue ;;
+		esac
+		hosts="${hosts:+$hosts }$url"
+	done < "$1"
+	[ -n "$hosts" ] || return 1
+	printf '%s' "$hosts"
+}
+
+HOSTFILE="/etc/omr-test-speed-hosts.list"
+HOSTFILE6="/etc/omr-test-speed-hosts6.list"
+file_hosts="$(load_host_file "$HOSTFILE")"
+[ -n "$file_hosts" ] && HOSTLST="$file_hosts"
+file_hosts="$(load_host_file "$HOSTFILE6")"
+[ -n "$file_hosts" ] && HOSTLST6="$file_hosts"
+
 select_server() {
 	[ "$FASTTEST" = true ] || echo "Select best test server..."
 	bestping="9999"
@@ -197,10 +225,10 @@ try=0
 while [ "$response" = "000" ] && [ "$try" -le 3 ]; do
 	select_server
 	if [ "$IPV6" = true ]; then
-		response=$(curl -6 --write-out '%{http_code}' --silent --head --insecure -IL  --connect-timeout 5 --output /dev/null $HOST)
+		response=$(curl -6 --write-out '%{http_code}' --silent --head --insecure -IL  --connect-timeout 5 --max-time 10 --output /dev/null $HOST)
 		[ -n "$HOST" ] && HOSTLST6=$(echo $HOSTLST6 | tr ' ' '\n' | grep -v "$HOST" | xargs)
 	else
-		response=$(curl -4 --write-out '%{http_code}' --silent --head --insecure -IL  --connect-timeout 5 --output /dev/null $HOST)
+		response=$(curl -4 --write-out '%{http_code}' --silent --head --insecure -IL  --connect-timeout 5 --max-time 10 --output /dev/null $HOST)
 		[ -n "$HOST" ] && HOSTLST=$(echo $HOSTLST | tr ' ' '\n' | grep -v "$HOST" | xargs)
 	fi
 	try=$((try+1))

@@ -6,7 +6,7 @@ START=85
 
 USE_PROCD=1
 
-EXTRA_COMMANDS="set_pihole backup_send backup_get backup_list set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
+EXTRA_COMMANDS="wireguard_remote_access diagnostic_logs set_pihole set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
 
@@ -121,7 +121,7 @@ _get_json() {
 			fi
 			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
 		fi
-		echo $result
+		printf '%s\n' "$result"
 	} || {
 		echo ''
 	}
@@ -242,32 +242,6 @@ _set_softethervpn_vps() {
 		#settings='{"port": '$port', "cipher": "'$cipher'"}'
 		settings='{"cipher": "'$cipher'", "password": "'$password'"}'
 		echo $(_set_json "softethervpn" "$settings")
-	else
-		echo 1
-	fi
-}
-
-_set_mlvpn_vps() {
-	local enabled port key
-	enabled="$(uci -q get mlvpn.general.enable)"
-	[ "$enabled" != "1" ] && echo "MLVPN disabled" && return
-	timeout="$(uci -q get mlvpn.general.timeout)"
-	reorder_buffer_size="$(uci -q get mlvpn.general.reorder_buffer_size)"
-	loss_tolerence="$(uci -q get mlvpn.general.loss_tolerence)"
-	password="$(uci -q get mlvpn.general.password)"
-	cleartext_data="$(uci -q get mlvpn.general.cleartext_data)"
-	local current_timeout current_reorder_buffer_size current_loss_tolerence current_password current_cleartext_data
-	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
-	[ -z "$vps_config" ] && return
-	current_timeout="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.timeout')"
-	current_reorder_buffer_size="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.reorder_buffer_size')"
-	current_loss_tolerence="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.loss_tolerence')"
-	current_password="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.key')"
-	current_cleartext_data="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.cleartext_data')"
-	if [ "$current_timeout" != "$timeout" ] || [ "$current_reorder_buffer_size" != "$reorder_buffer_size" ] || [ "$current_loss_tolerence" != "$loss_tolerence" ] || [ "$current_password" != "$password" ] || [ "$current_cleartext_data" != "$cleartext_data" ]; then
-		local settings
-		settings='{"timeout": '$timeout', "reorder_buffer_size": "'$reorder_buffer_size'", "loss_tolerence": "'$loss_tolerence'", "password": "'$password'", "cleartext_data": "'$cleartext_data'"}'
-		echo $(_set_json "mlvpn" "$settings")
 	else
 		echo 1
 	fi
@@ -778,17 +752,6 @@ _get_vps_config() {
 		fi
 	fi
 
-	if [ -n "$(uci -q get mlvpn.general)" ] && [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ] && [ "$(uci -q get mlvpn.general.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ] && [ -f /etc/init.d/mlvpn ]; then
-		uci -q batch <<-EOF >/dev/null
-			set mlvpn.general=mlvpn
-			set mlvpn.general.host="$vpsip"
-			commit mlvpn
-		EOF
-		if [ "$(uci -q get mlvpn.general.enable)" = "1" ]; then
-			logger -t "OMR-VPS" "Restart MLVPN..."
-			/etc/init.d/mlvpn restart
-		fi
-	fi
 	if [ -n "$(uci -q get glorytun.vpn)" ] && [ -z "$(uci -q get openmptcprouter.settings.mptcpovervpn)" ] && [ "$(uci -q get glorytun.vpn.host)" != "$vpsip" ] && [ "$(uci -q get openmptcprouter.settings.ha)" != "1" ]; then
 		uci -q batch <<-EOF >/dev/null
 			set glorytun.vpn.host="$vpsip"
@@ -1389,20 +1352,6 @@ _get_pihole() {
 			/etc/init.d/dnsmasq restart >/dev/null 2>&1
 		fi
 	fi
-	if [ "$vpn" = "mlvpn" ]; then
-		host_ip="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.host_ip')"
-		if [ "$pihole" = "true" ] && [ -z "$(uci -q get dhcp.@dnsmasq[0].server | grep $host_ip)" ]; then
-			uci -q del_list dhcp.@dnsmasq[0].server="$(uci -q get dhcp.@dnsmasq[0].server | tr ' ' '\n' | grep '#53' | grep '10.2')"
-			uci -q batch <<-EOF >/dev/null
-				del_list dhcp.@dnsmasq[0].server="127.0.0.1#5353"
-				add_list dhcp.@dnsmasq[0].server="$host_ip#53"
-				set dhcp.@dnsmasq[0].rebind_protection='0'
-				commit dhcp
-			EOF
-			logger -t "OMR-VPS" "Restart dnsmasq..."
-			/etc/init.d/dnsmasq restart >/dev/null 2>&1
-		fi
-	fi
 	if [ "$vpn" = "dsvpn" ]; then
 		host_ip="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.host_ip')"
 		if [ "$pihole" = "true" ] && [ -z "$(uci -q get dhcp.@dnsmasq[0].server | grep $host_ip)" ]; then
@@ -1436,7 +1385,7 @@ _set_redirect_ports_from_vps() {
 }
 
 _set_mptcp_vps() {
-	local settings path_manager_changed
+	local settings path_manager_changed nanbbr_aggressiveness nanbbr_current nanbbr_capable nanbbr_json nanbbr_changed response api_result api_reason
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
 	mptcp_enabled_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.enabled')"
@@ -1445,6 +1394,8 @@ _set_mptcp_vps() {
 	scheduler_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.scheduler')"
 	syn_retries_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.syn_retries')"
 	congestion_control_current="$(echo "$vps_config" | jsonfilter -q -e '@.network.congestion_control')"
+	nanbbr_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.nanbbr_aggressiveness')"
+	nanbbr_capable="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.nanbbr_aggressiveness_capable')"
 	mptcp_version_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.version')"
 	close_timeout_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.close_timeout')"
 	pm_type_current="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.pm_type')"
@@ -1461,6 +1412,7 @@ _set_mptcp_vps() {
 	scheduler="$(uci -q get network.globals.mptcp_scheduler)"
 	syn_retries="$(uci -q get network.globals.mptcp_syn_retries)"
 	congestion="$(uci -q get network.globals.congestion)"
+	nanbbr_aggressiveness="$(uci -q get network.globals.nanbbr_aggressiveness)"
 	mptcp_version="$(uci -q get network.globals.mptcp_version)"
 	close_timeout="$(uci -q get network.globals.mptcp_close_timeout)"
 	pm_type="$(uci -q get network.globals.mptcp_pm_type)"
@@ -1469,6 +1421,38 @@ _set_mptcp_vps() {
 	[ -z "$mptcp_version" ] && mptcp_version="0"
 	[ ! -f /proc/sys/net/mptcp/mptcp_enabled ] && mptcp_version="1"
 	[ -z "$congestion" ] && congestion="bbr"
+	case "$nanbbr_aggressiveness" in
+		''|*[!0-9]*) nanbbr_aggressiveness="50" ;;
+		*)
+			# Use a canonical JSON integer even if UCI was edited as "008".
+			nanbbr_aggressiveness="$(printf '%s' "$nanbbr_aggressiveness" | sed 's/^0*//')"
+			case "$nanbbr_aggressiveness" in
+				[1-9]|[1-9][0-9]|100) ;;
+				*) nanbbr_aggressiveness="50" ;;
+			esac
+			;;
+	esac
+	# Variable profiles require the value even before their module is loaded.
+	# Other algorithms omit it unless a capable server already reports a value.
+	nanbbr_json=""
+	nanbbr_changed=0
+	case "$congestion" in
+		nanbbr1_var|nanbbr2_var|nanbbr3_var)
+			nanbbr_json=',"nanbbr_aggressiveness": '$nanbbr_aggressiveness
+			[ "$nanbbr_current" != "$nanbbr_aggressiveness" ] && nanbbr_changed=1
+			;;
+		*)
+			case "$nanbbr_capable:$nanbbr_current" in
+				false:*|0:*|*:|*:*[!0-9]*) ;;
+				*)
+					if [ "$nanbbr_current" -ge 1 ] && [ "$nanbbr_current" -le 100 ]; then
+						nanbbr_json=',"nanbbr_aggressiveness": '$nanbbr_aggressiveness
+						[ "$nanbbr_current" != "$nanbbr_aggressiveness" ] && nanbbr_changed=1
+					fi
+					;;
+			esac
+			;;
+	esac
 	# These four v1-only knobs are recent additions: on a router that
 	# predates them, or where the user never touched them, their uci option
 	# is simply absent and `uci -q get` returns "". Left as "", the JSON
@@ -1499,9 +1483,17 @@ _set_mptcp_vps() {
 			esac
 		fi
 	fi
-	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || [ "$path_manager_changed" = "1" ] || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ] || ([ -n "$close_timeout_current" ] && [ "$close_timeout_current" != "0" ] && [ "$close_timeout_current" != "$close_timeout" ]) || ([ -n "$pm_type_current" ] && [ "$pm_type_current" != "0" ] && [ "$pm_type_current" != "$pm_type" ]) || ([ -n "$stale_loss_cnt_current" ] && [ "$stale_loss_cnt_current" != "0" ] && [ "$stale_loss_cnt_current" != "$stale_loss_cnt" ]) || ([ -n "$syn_retrans_current" ] && [ "$syn_retrans_current" != "0" ] && [ "$syn_retrans_current" != "$syn_retrans_before_tcp_fallback" ]); then
-		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'","close_timeout": "'$close_timeout'","pm_type": "'$pm_type'","stale_loss_cnt": "'$stale_loss_cnt'","syn_retrans_before_tcp_fallback": "'$syn_retrans_before_tcp_fallback'"}'
-		echo $(_set_json "mptcp" "$settings")
+	if [ "$mptcp_enabled_current" != "$mptcp_enabled" ] || [ "$checksum_current" != "$checksum" ] || [ "$path_manager_changed" = "1" ] || ([ "$scheduler_current" != "" ] && [ "$scheduler_current" != "$scheduler" ]) || ([ "$syn_retries_current" != "" ] && [ "$syn_retries_current" != "$syn_retries" ]) || [ "$congestion_control_current" != "$congestion" ] || [ "$mptcp_version_current" != "$mptcp_version" ] || ([ -n "$close_timeout_current" ] && [ "$close_timeout_current" != "0" ] && [ "$close_timeout_current" != "$close_timeout" ]) || ([ -n "$pm_type_current" ] && [ "$pm_type_current" != "0" ] && [ "$pm_type_current" != "$pm_type" ]) || ([ -n "$stale_loss_cnt_current" ] && [ "$stale_loss_cnt_current" != "0" ] && [ "$stale_loss_cnt_current" != "$stale_loss_cnt" ]) || [ "$nanbbr_changed" = "1" ] || ([ -n "$syn_retrans_current" ] && [ "$syn_retrans_current" != "0" ] && [ "$syn_retrans_current" != "$syn_retrans_before_tcp_fallback" ]); then
+		settings='{"enabled" : "'$mptcp_enabled'", "checksum": "'$checksum'","path_manager": "'$path_manager'","scheduler": "'$scheduler'","syn_retries": "'$syn_retries'","congestion_control": "'$congestion'","version": "'$mptcp_version'","close_timeout": "'$close_timeout'","pm_type": "'$pm_type'","stale_loss_cnt": "'$stale_loss_cnt'","syn_retrans_before_tcp_fallback": "'$syn_retrans_before_tcp_fallback'"'$nanbbr_json'}'
+		response="$(_set_json "mptcp" "$settings")"
+		api_result="$(echo "$response" | jsonfilter -q -e '@.result')"
+		if [ "$api_result" = "done" ]; then
+			echo 1
+		else
+			api_reason="$(echo "$response" | jsonfilter -q -e '@.reason')"
+			logger -t "OMR-VPS" "MPTCP sync failed on VPS: $api_reason"
+			echo 0
+		fi
 	else
 		echo 1
 	fi
@@ -1747,6 +1739,7 @@ _set_vpn_vps() {
 	[ -z "$vps_config" ] && return
 	vpn_current="$(echo "$vps_config" | jsonfilter -q -e '@.vpn.current')"
 	vpn="$(uci -q get openmptcprouter.settings.vpn)"
+	case "$vpn" in mlvpn|openvpn_bonding|openvpn-bonding) echo 1; return ;; esac
 	if [ "$vpn_current" != "$vpn" ]; then
 		settings='{"vpn" : "'$vpn'"}'
 		echo $(_set_json "vpn" "$settings")
@@ -1849,7 +1842,7 @@ set_bypass_ips() {
 _set_vpn_ip() {
 	local settings
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
-	[ -z "$vps_config" ] && return
+	[ -z "$vps_config" ] && return 1
 	[ "$(uci -q get openmptcprouter.settings.vpn)" = "none" ] && return
 	vpnifname="$(uci -q get network.omrvpn.device)"
 	vpnip_local_current="$(echo "$vps_config" | jsonfilter -q -e '@.vpn.remoteip')"
@@ -1860,17 +1853,75 @@ _set_vpn_ip() {
 	[ -z "$vpnip_remote" ] && [ -n "$vpnifname" ] && vpnip_remote=$(ip -4 r list dev ${vpnifname} 2>/dev/null | grep -m 1 kernel | awk '{print $1}' | tr -d "\n")
 	[ -z "$vpnip_remote" ] && [ -n "$vpnifname" ] && vpnip_remote=$(ip -4 r list dev ${vpnifname} 2>/dev/null | grep -m 1 "proto static src" | awk '{print $3}' | tr -d "\n")
 	[ -z "$vpnip_remote" ] && vpnip_remote=$(ifstatus omrvpn | jsonfilter -e '@.route[0].nexthop')
-	[ -z "$vpnip_remote" ] && [ "$vpnifname" = "bonding-omrvpn" ] && vpnip_remote="10.255.248.1"
 	ula="$(uci -q get network.globals.ula_prefix)"
 	ula_current="$(echo "$vps_config" | jsonfilter -q -e '@.ip6in4.ula')"
 	if [ "$vpnip_remote" != "" ] && [ "$vpnip_local" != "" ] && ([ "$vpnip_remote" != "$vpnip_remote_current" ] || [ "$vpnip_local" != "$vpnip_local_current" ] || [ "$ula" != "$ula_current" ]); then
 		settings='{"remoteip" : "'$vpnip_local'","localip" : "'$vpnip_remote'","ula" : "'$ula'"}'
 		result=$(_set_json "vpnips" "$settings")
+		[ "$(echo "$result" | jsonfilter -q -e '@.result')" = "done" ]
+		return $?
+	fi
+	[ -n "$vpnip_remote" ] && [ -n "$vpnip_local" ]
+}
+
+# Hotplug invokes this command without _config_service's authenticated context.
+# Select one active VPS; never copy this tunnel address into a backup VPS.
+_vpn_ip_pick_server() {
+	local candidate="$1" priority=0
+	[ "$(uci -q get openmptcprouter."$candidate".disabled)" = "1" ] && return
+	[ -n "$(uci -q get openmptcprouter."$candidate".username)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".password)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".port)" ] || return
+	[ -n "$(uci -q get openmptcprouter."$candidate".ip)" ] || return
+	if [ "$(uci -q get openmptcprouter."$candidate".current)" = "1" ]; then
+		priority=3
+	elif [ "$(uci -q get openmptcprouter."$candidate".master)" = "1" ]; then
+		priority=2
+	elif [ "$(uci -q get openmptcprouter."$candidate".backup)" != "1" ]; then
+		priority=1
+	fi
+	[ "$priority" -gt 0 ] || return
+	if [ "$priority" -gt "$vpn_ip_priority" ]; then
+		vpn_ip_selected="$candidate"
+		vpn_ip_priority="$priority"
+		vpn_ip_candidates=1
+	elif [ "$priority" -eq "$vpn_ip_priority" ]; then
+		vpn_ip_candidates=$((vpn_ip_candidates + 1))
 	fi
 }
 
+_vpn_ip_sync_ip() {
+	[ "$vpn_ip_done" = "1" ] && return
+	server="$1"
+	vps_config=$(_get_json "config")
+	# A reachable API error is not an authenticated server configuration.
+	[ -n "$(echo "$vps_config" | jsonfilter -q -e '@.vpn.remoteip')" ] || return
+	[ -n "$(echo "$vps_config" | jsonfilter -q -e '@.vpn.localip')" ] || return
+	[ "$(echo "$vps_config" | jsonfilter -q -e '@.user.permission')" = "ro" ] && return
+	_set_vpn_ip && vpn_ip_done=1
+}
+
 set_vpn_ip() {
-	_set_vpn_ip
+	local vpn_ip_selected="" vpn_ip_priority=0 vpn_ip_candidates=0 vpn_ip_done=0
+	local servername server serverport token vps_config vpnifname
+	[ "$(uci -q get openmptcprouter.settings.vpn)" = "none" ] && return 0
+	vpnifname="$(uci -q get network.omrvpn.device)"
+	[ -n "$vpnifname" ] || return 0
+	# Do not fall back to a tracker WAN address while the tunnel is down.
+	[ -n "$(ip -4 -o addr show dev "$vpnifname" scope global 2>/dev/null)" ] || return 0
+	config_load openmptcprouter
+	config_foreach _vpn_ip_pick_server server
+	[ -n "$vpn_ip_selected" ] || return 0
+	if [ "$vpn_ip_candidates" != "1" ]; then
+		logger -t OMR-VPS "VPN IP synchronization skipped: active VPS is ambiguous"
+		return 1
+	fi
+	servername="$vpn_ip_selected"
+	serverport="$(uci -q get openmptcprouter."$servername".port)"
+	token="$(uci -q get openmptcprouter."$servername".token)"
+	vps_config=""
+	config_list_foreach "$servername" ip _vpn_ip_sync_ip
+	[ "$vpn_ip_done" = "1" ]
 }
 
 
@@ -1917,6 +1968,214 @@ _set_client2client() {
 	[ -n "$(uci -q changes network)" ] && uci -q commit network
 }
 
+
+# The forced forward uses its own XRay instance, independent of xray.main
+# and of the selected VPN/proxy. The public port is distinct from transport
+# port 65444 on the VPS. Only TCP is sent through this reverse bridge.
+XRAY_RPF_PORT=65444
+XRAY_RPF_CONFIG=/etc/xray/omr-rpf.json
+XRAY_RPF_READY=0
+XRAY_RPF_RULES_TMP=""
+XRAY_RPF_RULES_COUNT=0
+XRAY_RPF_SEEN_PORTS=""
+XRAY_RPF_CONFLICT=0
+
+_xray_rpf_collect_rule() {
+    local section src enabled force proto public_port dest_ip dest_port dmz target family src_dip src_ip
+    section="$1"
+    config_get src "$section" src
+    config_get enabled "$section" enabled "1"
+    config_get force "$section" force_xray_pf "0"
+    config_get proto "$section" proto "tcp udp"
+    config_get public_port "$section" src_dport
+    config_get dest_ip "$section" dest_ip
+    config_get dest_port "$section" dest_port
+    config_get dmz "$section" dmz "0"
+    config_get target "$section" target "DNAT"
+    config_get family "$section" family "ipv4"
+    config_get src_dip "$section" src_dip
+    config_get src_ip "$section" src_ip
+    [ -z "$src_dip" ] && [ -z "$src_ip" ] || return
+    [ "$src" = "vpn" ] && [ "$enabled" != "0" ] && [ "$force" = "1" ] || return
+    [ "$family" = "ipv4" ] && [ "$dmz" != "1" ] || return
+    [ "$target" != "MARK" ] && [ "$target" != "DSCP" ] || return
+    case " $proto " in
+        *" tcp "*|*" all "*) ;;
+        *) return ;;
+    esac
+    [ -n "$public_port" ] || public_port="$dest_port"
+    [ -n "$dest_port" ] || dest_port="$public_port"
+    case "$public_port:$dest_port" in
+        *[!0-9:]*|:*|*:) return ;;
+    esac
+    [ "$public_port" -ge 1 ] && [ "$public_port" -le 64999 ] || return
+    case "$XRAY_RPF_SEEN_PORTS" in
+        *" $public_port "*) XRAY_RPF_CONFLICT=1; return ;;
+    esac
+    XRAY_RPF_SEEN_PORTS="$XRAY_RPF_SEEN_PORTS $public_port "
+    [ "$dest_port" -ge 1 ] && [ "$dest_port" -le 65535 ] || return
+    case "$dest_ip" in
+        ""|*[!0-9.]*|*:*|*/*) return ;;
+    esac
+    # Reject malformed IPv4 without depending on external network state.
+    echo "$dest_ip" | awk -F. 'NF==4 {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i>255) exit 1; exit 0} {exit 1}' || return
+    [ "$XRAY_RPF_RULES_COUNT" -gt 0 ] && printf ',\n' >> "$XRAY_RPF_RULES_TMP"
+    printf '          { "action": "allow", "network": "tcp", "ip": ["%s/32"], "port": "%s" }' "$dest_ip" "$dest_port" >> "$XRAY_RPF_RULES_TMP"
+    XRAY_RPF_RULES_COUNT=$((XRAY_RPF_RULES_COUNT + 1))
+}
+
+_xray_rpf_disable_client() {
+    local was_enabled
+    was_enabled="$(uci -q get xray.rpf.enabled)"
+    uci -q delete xray.rpf
+    uci -q commit xray
+    rm -f "$XRAY_RPF_CONFIG"
+    [ "$was_enabled" = "1" ] && [ -x /etc/init.d/xray ] && /etc/init.d/xray restart >/dev/null 2>&1
+}
+
+_xray_rpf_sync_client() {
+    local uuid host rpf_pin tmp_config tmp_base oldsum newsum
+    XRAY_RPF_READY=0
+    XRAY_RPF_RULES_TMP="$(mktemp /tmp/omr-xray-rpf-rules.XXXXXX)" || return
+    XRAY_RPF_RULES_COUNT=0
+    XRAY_RPF_SEEN_PORTS=""
+    XRAY_RPF_CONFLICT=0
+    : > "$XRAY_RPF_RULES_TMP"
+    config_foreach _xray_rpf_collect_rule redirect
+    config_foreach _xray_rpf_collect_rule rule
+    if [ "$XRAY_RPF_CONFLICT" = "1" ]; then
+        logger -t OMR-VPS "Forced XRay rules reuse a public TCP port"
+        rm -f "$XRAY_RPF_RULES_TMP"
+        return
+    fi
+    if [ "$XRAY_RPF_RULES_COUNT" -eq 0 ]; then
+        rm -f "$XRAY_RPF_RULES_TMP"
+        _xray_rpf_disable_client
+        return
+    fi
+    if [ ! -x /usr/bin/xray ] || [ ! -x /etc/init.d/xray ]; then
+        logger -t OMR-VPS "Forced XRay port forwarding needs xray-core and xray-core-config"
+        rm -f "$XRAY_RPF_RULES_TMP"
+        return
+    fi
+    [ -z "$vps_config" ] && vps_config=$(_get_json "config")
+    uuid="$(echo "$vps_config" | jsonfilter -q -e '@.xray.config.key')"
+    host="$server"
+    case "$uuid" in
+        ""|*[!0-9a-fA-F-]*) rm -f "$XRAY_RPF_RULES_TMP"; return ;;
+    esac
+    case "$host" in
+        ""|*[!0-9a-zA-Z.:-]*) rm -f "$XRAY_RPF_RULES_TMP"; return ;;
+    esac
+    # The same server certificate is used by omrin-tunnel and the RPF
+    # listener. Pin it before allowing a reverse connection over the WAN.
+    rpf_pin="$(uci -q get xray.omrout.ss_tls_pinned_sha256)"
+    case "$rpf_pin" in
+        *[!0-9a-fA-F]*|"") rpf_pin="" ;;
+    esac
+    [ "${#rpf_pin}" = "64" ] || rpf_pin="$(echo Q | timeout 5 openssl s_client -connect "${host}:65248" 2>/dev/null | openssl x509 -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $2}')"
+    if [ "${#rpf_pin}" != "64" ] || [ "$rpf_pin" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+        logger -t OMR-VPS "XRay RPF cannot pin the VPS certificate"
+        rm -f "$XRAY_RPF_RULES_TMP"
+        return
+    fi
+    tmp_base="$(mktemp /tmp/omr-xray-rpf-config.XXXXXX)" || {
+        rm -f "$XRAY_RPF_RULES_TMP"
+        return
+    }
+    tmp_config="${tmp_base}.json"
+    rm -f "$tmp_base"
+    mkdir -p /etc/xray
+    cat > "$tmp_config" <<-EOF
+{
+  "log": { "loglevel": "warning" },
+  "routing": { "rules": [
+    { "type": "field", "inboundTag": ["omr-rpf-reverse-in"], "outboundTag": "omr-rpf-lan-direct" }
+  ] },
+  "outbounds": [
+    {
+      "tag": "omr-rpf-lan-direct",
+      "protocol": "freedom",
+      "settings": { "finalRules": [
+$(cat "$XRAY_RPF_RULES_TMP"),
+        { "action": "block" }
+      ] }
+    },
+    {
+      "tag": "omr-rpf-dialer",
+      "protocol": "vless",
+      "settings": {
+        "address": "$host",
+        "port": $XRAY_RPF_PORT,
+        "id": "$uuid",
+        "encryption": "none",
+        "reverse": { "tag": "omr-rpf-reverse-in" }
+      },
+      "streamSettings": { "network": "tcp", "security": "tls",
+        "tlsSettings": { "pinnedPeerCertSha256": "$rpf_pin" },
+        "sockopt": { "tcpMptcp": true, "mark": 0 } }
+    }
+  ]
+}
+EOF
+    rm -f "$XRAY_RPF_RULES_TMP"
+    if ! /usr/bin/xray run -test -config "$tmp_config" >/tmp/omr-xray-rpf-test.log 2>&1; then
+        logger -t OMR-VPS "XRay RPF config validation failed"
+        rm -f "$tmp_config"
+        return
+    fi
+    oldsum="$(md5sum "$XRAY_RPF_CONFIG" 2>/dev/null | awk '{print $1}')"
+    newsum="$(md5sum "$tmp_config" | awk '{print $1}')"
+    if [ "$oldsum" != "$newsum" ] || [ "$(uci -q get xray.rpf.enabled)" != "1" ]; then
+        mv "$tmp_config" "$XRAY_RPF_CONFIG"
+        uci -q batch <<-EOF >/dev/null
+            set xray.rpf='xray'
+            set xray.rpf.enabled='1'
+            set xray.rpf.xray_file='/usr/bin/xray'
+            set xray.rpf.config_file='$XRAY_RPF_CONFIG'
+            set xray.rpf.mem_percentage='0'
+            commit xray
+EOF
+        /etc/init.d/xray enable >/dev/null 2>&1
+        /etc/init.d/xray restart >/dev/null 2>&1 || return
+    else
+        rm -f "$tmp_config"
+    fi
+    XRAY_RPF_READY=1
+}
+
+_xray_rpf_drop_stale_proxy() {
+    local public_port line old_dest old_ip old_port settings
+    public_port="$1"
+    # A port previously served by normal V2Ray/XRay must be released before
+    # the forced listener binds it. The firewall list carries the old target.
+    while IFS= read -r line; do
+        case "$line" in
+            *"open router ${public_port} port tcp --- V2Ray to "*|*"open router ${public_port} port tcp --- XRay to "*)
+                old_dest="${line##* to }"
+                old_ip="${old_dest%:*}"
+                old_port="${old_dest##*:}"
+                settings='{"name":"router '"$public_port"'","port":"'"$public_port"'","proto":"tcp","destip":"'"$old_ip"'","destport":"'"$old_port"'"}'
+                case "$line" in
+                    *"--- V2Ray to "*) _set_json "v2rayunredirect" "$settings" >/dev/null ;;
+                    *"--- XRay to "*) _set_json "xrayunredirect" "$settings" >/dev/null ;;
+                esac
+                ;;
+        esac
+    done <<-EOF
+$vpsfwlist
+EOF
+}
+
+_xray_rpf_drop_stale_rpf() {
+    local public_port settings
+    public_port="$1"
+    echo "$vpsfwlist" | grep -Fq "open router ${public_port} port tcp --- XRay RPF to " || return
+    settings='{"name":"router '"$public_port"'","port":"'"$public_port"'","proto":"tcp"}'
+    _set_json "xrayrpfunredirect" "$settings" >/dev/null
+    vpsfwlist="$(echo "$vpsfwlist" | grep -Fv "open router ${public_port} port tcp --- XRay RPF to ")"
+}
+
 _vps_firewall_redirect_port() {
 	local src proto src_dport section sectype
 	section=$1
@@ -1930,6 +2189,7 @@ _vps_firewall_redirect_port() {
 	config_get dest_port $1 dest_port
 	config_get src_ip $1 src_ip
 	config_get v2ray $1 v2ray "0"
+	config_get force_xray_pf $1 force_xray_pf "0"
 	config_get name $1 name
 	config_get dmz $1 dmz "0"
 	config_get sectype $1 TYPE
@@ -1963,12 +2223,44 @@ _vps_firewall_redirect_port() {
 		#return
 	fi
 	xray="$v2ray"
+	[ "$force_xray_pf" = "1" ] && v2ray="0" && xray="0"
 	([ "$(uci -q get v2ray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.v2ray)" = "down" ]) && v2ray="0"
 	([ "$(uci -q get xray.main.enabled)" != "1" ] || [ "$(uci -q get openmptcprouter.omr.xray)" = "down" ]) && xray="0"
 	[ "$proto" = "all" ] && proto="tcp udp"
 	[ "$proto" = "" ] && proto="tcp udp"
 	[ "$src" = "vpn" ] && [ -n "$proto" ] && [ -n "$src_dport" ] && [ "$enabled" != "0" ] && [ "$name" != "Allow-DHCP-Request-VPN" ] && {
 		for protoi in $proto; do
+            if [ "$protoi" = "tcp" ] && [ "$force_xray_pf" = "1" ]; then
+                # No fallback to a VPN or the active proxy if the dedicated
+                # reverse client did not validate and start.
+                [ "$family" = "ipv4" ] && [ "$XRAY_RPF_READY" = "1" ] || continue
+                [ "$dmz" != "1" ] && [ -z "$src_dip" ] && [ -z "$src_ip" ] || {
+                    logger -t OMR-VPS "Forced XRay TCP forward cannot use DMZ or source filters"
+                    continue
+                }
+                [ -n "$dest_port" ] || dest_port="$src_dport"
+                case "$src_dport:$dest_port" in
+                    *[!0-9:]*|:*|*:) continue ;;
+                esac
+                [ "$src_dport" -ge 1 ] && [ "$src_dport" -le 64999 ] || continue
+                [ "$dest_port" -ge 1 ] && [ "$dest_port" -le 65535 ] || continue
+                case "$dest_ip" in
+                    ""|*[!0-9.]*|*:*|*/*) continue ;;
+                esac
+                echo "$dest_ip" | awk -F. 'NF==4 {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i>255) exit 1; exit 0} {exit 1}' || continue
+                _xray_rpf_drop_stale_proxy "$src_dport"
+                settings='{"name":"router '"$src_dport"'","port":"'"$src_dport"'","proto":"tcp","destip":"'"$dest_ip"'","destport":"'"$dest_port"'"}'
+                result=$(_set_json "xrayrpfredirect" "$settings")
+                if [ "$(echo "$result" | jsonfilter -q -e '@.result')" = "done" ]; then
+                    # The endpoint owns its ACCEPT entry; suppress closing the
+                    # old line now that this port has been reconciled.
+                    vpsfwlist="$(echo "$vpsfwlist" | grep -Fv "open router ${src_dport} port tcp")"
+                else
+                    logger -t OMR-VPS "XRay RPF API rejected TCP port $src_dport"
+                fi
+                continue
+            fi
+            [ "$protoi" = "tcp" ] && _xray_rpf_drop_stale_rpf "$src_dport"
 			if [ "$v2ray" = "0" ] && [ "$xray" = "0" ]; then
 				checkfw=""
 				if [ "$family" = "ipv4" ]; then
@@ -2193,6 +2485,9 @@ _vps_firewall_close_port() {
 					settings='{"name" : "router '$src_dport'","port" : "'$src_dport'","proto" : "'$proto'","destip" : "'$destip'","destport": "'$destport'"}'
 					result=$(_set_json "v2rayunredirect" "$settings")
 					result=$(_set_json "xrayunredirect" "$settings")
+					case "$comment" in
+						"XRay RPF to "*) _set_json "xrayrpfunredirect" "$settings" >/dev/null ;;
+					esac
 				}
 			}
 		done
@@ -2288,6 +2583,7 @@ _set_vps_firewall() {
 		vpsfw6list="$(echo $fw6_list | jsonfilter -q -e '@.list[*]' | sed '/^[[:space:]]*$/d')"
 	fi
 	config_load firewall
+	_xray_rpf_sync_client
 	config_foreach _vps_firewall_redirect_port redirect
 	config_foreach _vps_firewall_redirect_port rule
 	[ -n "$vpsfwlist" ] || [ -n "$vpsfw6list" ] && {
@@ -2387,7 +2683,7 @@ _set_openvpn_server() {
 
 
 _set_config_from_vps() {
-	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect mlvpn_key openvpn_key dsvpn_key mqvpn_key mqvpn_port mqvpn_user mqvpn_cc mqvpn_scheduler mqvpn_fec_enable_raw mqvpn_fec_enable mqvpn_fec_scheme mqvpn_reinjection_control_raw mqvpn_reinjection_control mqvpn_reinjection_mode mqvpn_reorder_enabled_raw mqvpn_reorder_enabled mqvpn_reorder_max_wait_ms mqvpn_reorder_cap_packets mqvpn_reorder_rules_json mqvpn_rule_idx mqvpn_rule_proto mqvpn_rule_port mqvpn_rule_profile proxy_before
+	local shadowsocks_disabled vpn glorytun_state redirect shorewall_redirect openvpn_key dsvpn_key mqvpn_key mqvpn_port mqvpn_user mqvpn_cc mqvpn_scheduler mqvpn_fec_enable_raw mqvpn_fec_enable mqvpn_fec_scheme mqvpn_reinjection_control_raw mqvpn_reinjection_control mqvpn_reinjection_mode mqvpn_reorder_enabled_raw mqvpn_reorder_enabled mqvpn_reorder_max_wait_ms mqvpn_reorder_cap_packets mqvpn_reorder_rules_json mqvpn_rule_idx mqvpn_rule_proto mqvpn_rule_port mqvpn_rule_profile proxy_before
 	[ -z "$vps_config" ] && vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
 
@@ -2852,27 +3148,6 @@ _set_config_from_vps() {
 		fi
 	}
 
-	# MLVPN settings
-	mlvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.mlvpn.key')"
-	if [ -n "$(uci -q get mlvpn.general)" ] && [ -n "$mlvpn_key" ] && [ "$mlvpn_key" != "$(uci -q get mlvpn.general.password)" ] && [ -f /etc/init.d/mlvpn ]; then
-		vpn="$(uci -q get openmptcprouter.settings.vpn)"
-		mlvpn_state=0
-		if [ "$vpn" = "mlvpn" ]; then
-			mlvpn_state=1
-		fi
-		uci -q batch <<-EOF >/dev/null
-			set mlvpn.general.password=$mlvpn_key
-			set mlvpn.general.enable=$mlvpn_state
-			commit mlvpn
-		EOF
-		uci -q set mlvpn.general.host="$vpsip"
-		if [ -n "$(uci -q changes mlvpn)" ]; then
-			uci -q commit mlvpn
-			logger -t "OMR-VPS" "MLVPN restart..."
-			/etc/init.d/mlvpn restart
-		fi
-	fi
-
 	# DSVPN settings
 	dsvpn_key="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.key')"
 	dsvpn_port="$(echo "$vps_config" | jsonfilter -q -e '@.dsvpn.port')"
@@ -3004,8 +3279,8 @@ _set_config_from_vps() {
 
 	# Shorewall settings
 	shorewall_redirect="$(echo "$vps_config" | jsonfilter -q -e '@.shorewall.redirect_ports')"
+	redirect="0"
 	[ "$shorewall_redirect" = "enable" ] && redirect="1"
-	[ "$shorewall_redirect" = "disable" ] && redirect="0"
 	uci -q batch <<-EOF >/dev/null
 		set openmptcprouter.${servername}.redirect_ports=$redirect
 	EOF
@@ -3027,6 +3302,20 @@ _set_config_from_vps() {
 	else
 		mptcp_enabled="enable"
 	fi
+	nanbbr_aggressiveness="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.nanbbr_aggressiveness')"
+	nanbbr_capable="$(echo "$vps_config" | jsonfilter -q -e '@.mptcp.nanbbr_aggressiveness_capable')"
+	case "$nanbbr_aggressiveness" in
+		''|*[!0-9]*) nanbbr_aggressiveness="" ;;
+		*)
+			if [ "$nanbbr_aggressiveness" -lt 1 ] || [ "$nanbbr_aggressiveness" -gt 100 ]; then
+				nanbbr_aggressiveness=""
+			fi
+			;;
+	esac
+	case "$nanbbr_capable" in
+		0|false) ;;
+		*) [ -n "$nanbbr_aggressiveness" ] && uci -q set network.globals.nanbbr_aggressiveness="$nanbbr_aggressiveness" ;;
+	esac
 	congestion="$(echo "$vps_config" | jsonfilter -q -e '@.network.congestion_control')"
 	uci -q batch <<-EOF >/dev/null
 		set network.globals.multipath=$mptcp_enabled
@@ -3153,133 +3442,6 @@ _set_config_from_vps() {
 		EOF
 	fi
 }
-
-_backup_send() {
-	servername=$1
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	sysupgrade -k -b /tmp/backup.tar.gz
-	backup_data="$(cat /tmp/backup.tar.gz | base64 | tr -d '\n')"
-	backup_sha256sum="$(sha256sum /tmp/backup.tar.gz | awk '{print $1}')"
-	[ -n "$backup_data" ] && {
-		logger -t "OMR-VPS" "Send backup file to server $servername"
-		local backupjson
-		backupjson='{"data": "'$backup_data'","sha256sum": "'$backup_sha256sum'"}'
-		echo "$backupjson" > /tmp/backupjson
-		result=$(_set_json "backuppost" "@/tmp/backupjson")
-		rm -f /tmp/backupjson
-		uci -q set openmptcprouter.$servername.lastbackup=$(date +%s)
-	}
-}
-
-backup_send() {
-	config_load openmptcprouter
-	config_foreach _backup_send server
-}
-
-
-_backup_get() {
-	servername=$1
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	[ -z "$lastbackup" ] || [ "$lastbackup" -lt "$(uci -q get openmptcprouter.$servername.lastbackup)" ] && {
-		lastbackup="$(uci -q get openmptcprouter.$servername.lastbackup)"
-		serverbackup="$servername"
-	}
-}
-
-_backup_get_and_apply() {
-	servername=$1
-	backupfile=$2
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	if [ -n "$backupfile" ]; then
-		echo "get $backupfile"
-		vps_backup=$(_get_json "backupget?filename=${backupfile}")
-	else
-		vps_backup=$(_get_json "backupget")
-	fi
-	[ -z "$vps_backup" ] && return
-	backup_data="$(echo "$vps_backup" | jsonfilter -q -e '@.data')"
-	backup_sha256sum="$(echo "$vps_backup" | jsonfilter -q -e '@.sha256sum')"
-	[ -n "$backup_data" ] && {
-		echo $backup_data | base64 -d > /tmp/backup.tar.gz
-		sysupgrade -r /tmp/backup.tar.gz
-	}
-}
-
-backup_get() {
-	backuptoapply=$2
-	if [ -n "$backuptoapply" ]; then
-		_backup_get_and_apply $1 $2
-	else
-		lastbackup=""
-		serverbackup=""
-		config_load openmptcprouter
-		config_foreach _backup_get server
-		[ -n "$serverbackup" ] && _backup_get_and_apply $serverbackup
-	fi
-}
-
-_backup_list() {
-	bservername=$1
-	[ -z "$servername" ] && servername=$bservername
-	[ -z "$(uci -q get openmptcprouter.${servername}.username)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.password)" ] && return
-	[ -z "$(uci -q get openmptcprouter.${servername}.port)" ] && return
-	token=""
-	vps_config=""
-	_login
-	[ -z "$token" ] && {
-		[ "$(logread | tail -n 3 | grep -c 'vps token')" -lt 3 ] && logger -t "OMR-VPS" "Can't get ${servername} token, try later"
-		uci -q batch <<-EOF >/dev/null
-			set openmptcprouter.${servername}.admin_error=1
-		EOF
-		return
-	}
-	vps_backup=$(_get_json "backuplist")
-	[ -z "$vps_backup" ] && return
-	backup_lastmodif="$(echo "$vps_backup" | jsonfilter -q -e '@.modif')"
-	[ -n "$backup_lastmodif" ] && {
-		uci -q set openmptcprouter.$servername.lastbackup=$backup_lastmodif
-		backup_all="$(echo "$vps_backup" | jsonfilter -q -e '@.sorted[*]')"
-		uci -q del openmptcprouter.$servername.allbackup
-		echo "$vps_backup" | jsonfilter -q -e '@.sorted[*]' | while read backup; do
-			name=$(echo "$backup" | jsonfilter -q -e '@[0]' | tr -d '\n')
-			modiftime=$(echo "$backup" | jsonfilter -q -e '@[1]' | tr -d '\n')
-			uci -q add_list openmptcprouter.$servername.allbackup="${name}|${modiftime}"
-		done
-	}
-}
-
-
-
-backup_list() {
-	config_load openmptcprouter
-	config_foreach _backup_list server
-	[ -n "$(uci -q changes openmptcprouter)" ] && uci -q commit openmptcprouter
-}
-
 
 _count_server() {
 	local servername=$1
@@ -3423,15 +3585,13 @@ _config_service() {
 		[ -n "$(uci -q get xray.omr)" ] && _set_xray_server_vps
 		([ -n "$(uci -q get glorytun.vpn)" ] || [ -n "$(uci -q get glorytun-udp.vpn)" ]) && [ -z "$(_set_glorytun_vps)" ] && error=1
 		[ -n "$(uci -q get openvpn.omr)" ] && [ -z "$(_set_openvpn_vps)" ] && error=1
-		[ -n "$(uci -q get mlvpn.general)" ] && [ -z "$(_set_mlvpn_vps)" ] && error=1
 		[ -n "$(uci -q get mqvpn.server)" ] && [ -z "$(_set_mqvpn_vps)" ] && error=1
 		[ -n "$(uci -q get softethervpn.openmptcprouter)" ] && [ -z "$(_set_softethervpn_vps)" ] && error=1
 		_set_vps_firewall
 		[ -n "$(uci -q show network | grep wireguard)" ] && [ -z "$(_set_wireguard_vps)" ] && error=1
 	fi
-	_backup_list
 	redirect_port="0"
-	if [ "$(uci -q get openmptcprouter.${servername}.redirect_ports)" = "1" ] || [ "$(uci -q get upnpd.config.enabled)" = "1" ]; then
+	if [ "$(uci -q get openmptcprouter.${servername}.redirect_ports)" = "1" ]; then
 		redirect_port="1"
 	fi
 	if [ "$user_permission" != "ro" ]; then
@@ -3497,6 +3657,85 @@ set_pihole() {
 	config_foreach _set_pihole_server server
 }
 
+# Read-only proxy for the authenticated VPS diagnostic endpoint.
+_diagnostic_pick() {
+	local candidate="$1"
+	[ "$(uci -q get openmptcprouter."$candidate".disabled)" = "1" ] && return
+	[ -z "$(uci -q get openmptcprouter."$candidate".port)" ] && return
+	[ -z "$diagnostic_selected" ] && diagnostic_selected="$candidate"
+	if [ "$(uci -q get openmptcprouter."$candidate".current)" = "1" ] ||
+	   [ "$(uci -q get openmptcprouter."$candidate".master)" = "1" ]; then
+		diagnostic_selected="$candidate"
+	fi
+}
+
+_diagnostic_fetch_ip() {
+	[ -n "$diagnostic_payload" ] && return
+	server="$1"
+	diagnostic_payload=$(_get_json "diagnostic/logs?limit=$diagnostic_limit")
+}
+
+diagnostic_logs() {
+	diagnostic_limit="$1"
+	[ -z "$diagnostic_limit" ] && diagnostic_limit=300
+	case "$diagnostic_limit" in
+		''|*[!0-9]*) printf '{"entries":[],"error":"Invalid limit"}\n'; return 1 ;;
+	esac
+	if [ "$diagnostic_limit" -lt 1 ] || [ "$diagnostic_limit" -gt 1000 ]; then
+		printf '{"entries":[],"error":"Invalid limit"}\n'
+		return 1
+	fi
+	diagnostic_selected=""
+	diagnostic_payload=""
+	config_load openmptcprouter
+	config_foreach _diagnostic_pick server
+	if [ -n "$diagnostic_selected" ]; then
+		servername="$diagnostic_selected"
+		serverport="$(uci -q get openmptcprouter."$servername".port)"
+		token="$(uci -q get openmptcprouter."$servername".token)"
+		config_list_foreach "$servername" ip _diagnostic_fetch_ip
+	fi
+	[ -n "$diagnostic_payload" ] && {
+		printf '%s\n' "$diagnostic_payload"
+		return 0
+	}
+	printf '{"entries":[],"error":"VPS diagnostics unavailable"}\n'
+	return 1
+}
+
+_wireguard_remote_access_ip() {
+	[ -n "$wireguard_remote_result" ] && return
+	server="$1"
+	if [ "$wireguard_remote_action" = "status" ]; then
+		wireguard_remote_result=$(_get_json "wireguard/remote-access")
+	else
+		[ "$wireguard_remote_action" = "allow" ] && wireguard_remote_value=true || wireguard_remote_value=false
+		wireguard_remote_result=$(_set_json "wireguard/remote-access" "{\"lan_access\":${wireguard_remote_value}}")
+	fi
+}
+
+# Explicit action and UCI section only; this command is called by rpcd.
+wireguard_remote_access() {
+	wireguard_remote_action="$1"
+	servername="$2"
+	case "$wireguard_remote_action" in status|allow|deny) ;; *) printf '{"error":"Invalid action"}\n'; return 1 ;; esac
+	case "$servername" in ''|*[!a-zA-Z0-9_-]*) printf '{"error":"Invalid server"}\n'; return 1 ;; esac
+	[ "$(uci -q get openmptcprouter."$servername")" = "server" ] || {
+		printf '{"error":"Server not found"}\n'; return 1;
+	}
+	[ "$(uci -q get openmptcprouter."$servername".disabled)" != "1" ] || {
+		printf '{"error":"Server disabled"}\n'; return 1;
+	}
+	serverport="$(uci -q get openmptcprouter."$servername".port)"
+	[ -n "$serverport" ] || { printf '{"error":"Server port unavailable"}\n'; return 1; }
+	token="$(uci -q get openmptcprouter."$servername".token)"
+	wireguard_remote_result=""
+	config_load openmptcprouter
+	config_list_foreach "$servername" ip _wireguard_remote_access_ip
+	[ -n "$wireguard_remote_result" ] || { printf '{"error":"VPS unavailable"}\n'; return 1; }
+	[ "${#wireguard_remote_result}" -le 4096 ] || { printf '{"error":"VPS response too large"}\n'; return 1; }
+	printf '%s\n' "$wireguard_remote_result"
+}
 token() {
 	config_load openmptcprouter
 	config_foreach _get_token server
@@ -3527,8 +3766,8 @@ start_service() {
 }
 
 service_triggers() {
-	#procd_add_reload_trigger openmptcprouter network shadowsocks-libev v2ray glorytun glorytun-udp mlvpn openvpn dsvpn
-	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp mlvpn dsvpn mqvpn
+	#procd_add_reload_trigger openmptcprouter network shadowsocks-libev v2ray glorytun glorytun-udp openvpn dsvpn
+	procd_add_reload_trigger shadowsocks-libev shadowsocks-rust v2ray xray glorytun glorytun-udp dsvpn mqvpn
 	procd_add_config_trigger "config.change" "firewall" /etc/init.d/openmptcprouter-vps set_vps_firewall
 	#procd_add_config_trigger "config.change" "network" /etc/init.d/openmptcprouter-vps set_gre_tunnel
 	#procd_add_reload_trigger openmptcprouter shadowsocks-libev network upnpd

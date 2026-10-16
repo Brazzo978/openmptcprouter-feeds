@@ -1,0 +1,10 @@
+#!/bin/sh
+# MQVPN 0.16.2 uses wall-clock deadlines for tunnel setup/reconnect.
+# Rebase those deadlines when ntpd has actually stepped the system clock.
+# Ordinary stratum/periodic events must not interrupt a healthy tunnel.
+[ "$ACTION" = "step" ] || exit 0
+[ "$(uci -q get mqvpn.settings.enable)" = "1" ] || exit 0
+/etc/init.d/mqvpn running >/dev/null 2>&1 || exit 0
+
+logger -t mqvpn "NTP stepped system clock; restarting MQVPN to reset tunnel timers"
+/etc/init.d/mqvpn restart

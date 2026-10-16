@@ -3,7 +3,7 @@
 		"description": "OpenMPTCProuter API",
 		"read": {
 			"ubus": {
-				"openmptcprouter": [ "*" ]
+				"openmptcprouter": [ "diagnostic_logs", "support_report", "getrootfs", "getefi", "status", "statusinterfaces", "getmptcpconfig", "wireguardRemoteAccessStatus" ]
 			}
 		},
 		"write": {

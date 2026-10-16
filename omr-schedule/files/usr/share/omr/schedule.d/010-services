@@ -100,21 +100,6 @@ if [ -n "$(printf '%s\n' "$_omr_snapshot" | awk -F= '/password/ { gsub("\047",""
 		fi
 	fi
 
-	if [ "$(pgrep mlvpn)" = "" ] && [ "$(uci -q get mlvpn.general.enable)" = "1" ] && [ -f /etc/init.d/mlvpn ] && [ "$(uci -q get mlvpn.general.password)" != "" ] && [ "$omr_schedule_vpn_setting" != "none" ]; then
-		# Shared restart cooldown with omr-tracker's 002-error hook (see the
-		# MQVPN watchdog further below for the full rationale)
-		mlvpn_last_restart="$(cat /tmp/omr-mlvpn-last-restart 2>/dev/null)"
-		[ -z "$mlvpn_last_restart" ] && mlvpn_last_restart=0
-		mlvpn_now="$(date +%s)"
-		if [ "$((mlvpn_now - mlvpn_last_restart))" -ge 60 ]; then
-			_log "Can't find MLVPN, restart it..."
-			echo "$mlvpn_now" > /tmp/omr-mlvpn-last-restart
-			/etc/init.d/mlvpn restart >/dev/null 2>&1
-			sleep 5
-		else
-			_log "Can't find MLVPN, restart skipped (already restarted less than 60s ago)"
-		fi
-	fi
 	if [ "$(pgrep mqvpn)" = "" ] && [ "$(uci -q get mqvpn.settings.enable)" = "1" ] && [ -f /etc/init.d/mqvpn ] && [ "$(uci -q get mqvpn.auth.key)" != "" ] && [ "$omr_schedule_vpn_setting" != "none" ]; then
 		# Rate-limit: omr-tracker's post-tracking 002-error hook also restarts
 		# MQVPN as soon as its interface reports down. Without this shared
@@ -387,23 +372,6 @@ if [ "$(pgrep uhttpd)" = "" ] && [ -f /etc/init.d/uhttpd ]; then
 	_log "Can't find uhttpd, restart it..."
 	/etc/init.d/uhttpd restart >/dev/null 2>&1
 	sleep 5
-fi
-
-if [ "$(uci -q get openmptcprouter.settings.disable_modemmanager)" != "1" ]; then
-	if [ -z "$(pgrep ModemManager)" ] && [ -f /etc/init.d/modemmanager ] && [ -n "$(uci -q show network | grep modemmanager)" ]; then
-		_log "Can't find ModemManager, restart it..."
-		/etc/init.d/modemmanager restart >/dev/null 2>&1
-		sleep 5
-	elif [ -n "$(pgrep ModemManager)" ] && [ -f /etc/init.d/modemmanager ] && [ -n "$(uci -q show network | grep modemmanager)" ] && [ -z "$(timeout 2 mmcli -L)" ]; then
-		_log "ModemManager doesn't answer, restart it..."
-		/etc/init.d/modemmanager restart >/dev/null 2>&1
-		sleep 5
-	#elif [ -n "$(pgrep ModemManager)" ] && [ -f /etc/init.d/modemmanager ] && [ -z "$(uci -q show network | grep modemmanager)" ]; then
-	#	_log "ModemManager not used, stop it..."
-	#	/etc/init.d/modemmanager stop >/dev/null 2>&1
-	#	sleep 5
-	fi
-	/etc/init.d/modemmanager enable >/dev/null 2>&1
 fi
 
 # pgrep -f matches the tracker daemon AND its short-lived bash subshells
