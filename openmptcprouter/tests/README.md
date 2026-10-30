@@ -6,9 +6,9 @@ Run in Linux/WSL from the feed root:
 python3 -m unittest discover -s openmptcprouter/tests -v
 ```
 
-The suite currently contains 22 cases:
+The suite currently contains 23 cases:
 
-- 18 source/fixture cases: real shared shell helper and init/tracker functions,
+- 19 source/fixture cases: real shared shell helper and init/tracker functions,
   Bash and Dash, separate mock-curl processes, actual concurrent selection and
   cancellation. Covers default/backup/subflow/signal candidates, stale paths,
   a winner published during the completion scan, IPv6 URL/interface handling,
