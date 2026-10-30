@@ -10,7 +10,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=omr-tracker
 PKG_VERSION:=2.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -19,7 +19,7 @@ define Package/$(PKG_NAME)
   CATEGORY:=Network
   TITLE:=OpenMPTCProuter tracker
   PKGARCH:=all
-  DEPENDS:=+bind-dig +httping +whois +shadowsocks-libev-ss-local
+  DEPENDS:=+bind-dig +httping +whois +shadowsocks-libev-ss-local +omr-api-paths
 endef
 
 define Package/$(PKG_NAME)/description

@@ -1,0 +1,730 @@
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -217,6 +217,13 @@
+ 
+     /* Connection (Level 2, NULL when disconnected) */
+     cli_conn_t *conn;
++
++    /* A validated path can subsequently blackhole while carrier stays up.
++     * After retiring path 0, require an authenticated PING ACK within a
++     * bounded window before considering the survivor usable. */
++    uint64_t failover_probe_deadline_us;
++    uint64_t failover_probe_next_us;
++    uintptr_t failover_probe_generation;
+ 
+     /* Server address */
+     struct sockaddr_storage server_addr;
+@@ -1466,6 +1473,7 @@
+     cli_conn_t *conn = (cli_conn_t *)user_data;
+     mqvpn_client_t *c = conn->client;
+ 
++    c->failover_probe_deadline_us = 0;
+     int err = xqc_h3_conn_get_errno(h3_conn);
+     LOG_I(c, "connection closed (errno=%d)", err);
+ 
+@@ -1485,6 +1493,25 @@
+ 
+     client_set_state(c, MQVPN_STATE_CLOSED);
+     return 0;
++}
++
++/* An ACK is authenticated by xquic. Match the generation and connection
++ * so a delayed ACK from a prior probe cannot certify a later failover. */
++static void
++cb_h3_failover_ping_acked(xqc_h3_conn_t *h3_conn, const xqc_cid_t *cid,
++                          void *ping_user_data, void *user_data)
++{
++    (void)h3_conn;
++    (void)cid;
++    cli_conn_t *conn = (cli_conn_t *)user_data;
++    if (!conn || !conn->client) return;
++    mqvpn_client_t *c = conn->client;
++    uintptr_t generation = (uintptr_t)ping_user_data;
++    if (c->conn == conn && c->failover_probe_deadline_us && generation &&
++        generation == c->failover_probe_generation) {
++        c->failover_probe_deadline_us = 0;
++        LOG_I(c, "failover probe acknowledged; survivor reachable");
++    }
+ }
+ 
+ /* ─── MASQUE tunnel start ─── */
+@@ -3390,6 +3417,7 @@
+                 .h3_conn_create_notify = cb_h3_conn_create,
+                 .h3_conn_close_notify = cb_h3_conn_close,
+                 .h3_conn_handshake_finished = cb_h3_conn_handshake_finished,
++                .h3_conn_ping_acked = cb_h3_failover_ping_acked,
+             },
+         .h3r_cbs =
+             {
+@@ -3876,6 +3904,58 @@
+     return MQVPN_OK;
+ }
+ 
++/* A path can be created in xquic before its challenge completes. Preserve
++ * the connection only if a different path was actually validated and remains
++ * attached; xquic_path_live by itself does not imply validation or reachability.
++ * The most recent validation is not a guarantee that it is reachable now. */
++static int
++client_has_validated_alternate(const mqvpn_client_t *c, const path_entry_t *failed)
++{
++    for (int i = 0; i < c->n_paths; i++) {
++        const path_entry_t *other = &c->paths[i];
++        if (other != failed && other->state == PATH_LC_ACTIVE &&
++            other->platform_attached && other->fd >= 0 && other->xquic_path_live)
++            return 1;
++    }
++    return 0;
++}
++
++/* Shared by the control API and platform/netlink paths. On the initial path,
++ * preserve the original recovery fallback unless an alternate was validated.
++ * xqc_conn_close_path sends PATH_ABANDON on the survivor and returns queued
++ * packets for rescheduling. An immediate PING wakes both peers promptly;
++ * failure to queue it is logged but should not destroy an otherwise usable
++ * connection. If xquic cannot retire the path, force the existing reconnect. */
++static void
++client_retire_failed_path(mqvpn_client_t *c, path_entry_t *p)
++{
++    if (!path_xquic_abandon_due(p) || !c->engine || !c->conn) return;
++    if (p->xqc_path_id == 0 && !client_has_validated_alternate(c, p)) {
++        LOG_I(c, "initial path removed with no validated alternate; reconnecting");
++        xqc_h3_conn_close(c->engine, &c->conn->cid);
++        return;
++    }
++
++    xqc_int_t rc = xqc_conn_close_path(c->engine, &c->conn->cid, p->xqc_path_id);
++    if (rc != XQC_OK) {
++        LOG_W(c, "xqc_conn_close_path(path_id=%" PRIu64 ") rc=%d; "
++              "closing connection for recovery", p->xqc_path_id, (int)rc);
++        if (c->engine && c->conn) xqc_h3_conn_close(c->engine, &c->conn->cid);
++        return;
++    }
++    if (p->xqc_path_id == 0 && c->engine && c->conn) {
++        LOG_I(c, "initial path retired; probing validated alternate");
++        uint64_t now = client_now_us(c);
++        if (++c->failover_probe_generation == 0) ++c->failover_probe_generation;
++        c->failover_probe_deadline_us = now + 12000000ULL;
++        c->failover_probe_next_us = now + 2000000ULL;
++        rc = xqc_h3_conn_send_ping(c->engine, &c->conn->cid,
++                                   (void *)c->failover_probe_generation);
++        if (rc != XQC_OK)
++            LOG_W(c, "failed to queue failover PING: rc=%d", (int)rc);
++    }
++}
++
+ int
+ mqvpn_client_remove_path(mqvpn_client_t *c, mqvpn_path_handle_t path)
+ {
+@@ -3886,35 +3966,8 @@
+     if (!p) return MQVPN_ERR_INVALID_ARG;
+     if (p->state == PATH_LC_CLOSED_FREE) return MQVPN_OK;
+ 
+-    /* Spec §5.0: REMOVE_API allows orderly xquic close. Issue before
+-     * dispatch so the FSM stays xquic-API-free (avoids layer leak).
+-     *
+-     * path_id=0 is the initial QUIC path (used for the TLS handshake).
+-     * xqc_conn_close_path(path_id=0) may return XQC_OK but leaves xquic's
+-     * multipath scheduler in a state where it stops forwarding DATA datagrams
+-     * on the remaining paths until the next 15-second PING keepalive fires.
+-     * This causes a ~15-second black-hole that is worse than a full reconnect.
+-     * Always use xqc_h3_conn_close() for path_id=0 so tick_reconnect()
+-     * rebuilds the connection on a secondary path (~5-7 s) with fresh
+-     * congestion state and immediate data flow.
+-     *
+-     * For secondary paths (path_id>0) xqc_conn_close_path() works correctly:
+-     * the primary path (path_id=0) keeps forwarding data without interruption.
+-     * Only fall back to xqc_h3_conn_close() if the secondary close fails. */
+-    if (path_xquic_abandon_due(p) && c->engine && c->conn) {
+-        if (p->xqc_path_id == 0) {
+-            LOG_I(c, "removing initial path (path_id=0 iface=%s): "
+-                  "closing connection for clean failover to secondary", p->name);
+-            xqc_h3_conn_close(c->engine, &c->conn->cid);
+-        } else {
+-            xqc_int_t rc = xqc_conn_close_path(c->engine, &c->conn->cid, p->xqc_path_id);
+-            if (rc != XQC_OK) {
+-                LOG_W(c, "xqc_conn_close_path(path_id=%" PRIu64 ") rc=%d; "
+-                      "closing connection to force clean failover", p->xqc_path_id, (int)rc);
+-                xqc_h3_conn_close(c->engine, &c->conn->cid);
+-            }
+-        }
+-    }
++    /* Retire the path while its platform socket is still open. */
++    client_retire_failed_path(c, p);
+ 
+     path_event_ctx_t ctx = {.now_us = client_now_us(c)};
+     path_on_event(c, p, PATH_EVENT_REMOVE_API, &ctx);
+@@ -3945,12 +3998,8 @@
+               (long long)handle, info->iface, (int)info->reason);
+     }
+ 
+-    /* Draft-21 PATH_ABANDON: tell xquic to abandon the dead path so its
+-     * CID/path_id slot is released for reuse. Non-blocking (queues frame
+-     * on an alternate path). Fails gracefully if this is the only active
+-     * path or if the connection is already closing. */
+-    if (path_xquic_abandon_due(p) && c->engine && c->conn)
+-        xqc_conn_close_path(c->engine, &c->conn->cid, p->xqc_path_id);
++    /* Use the same retirement/reconnect policy as an API removal. */
++    client_retire_failed_path(c, p);
+ 
+     path_event_ctx_t ctx = {.now_us = client_now_us(c)};
+     path_on_event(c, p, PATH_EVENT_PLATFORM_DROP, &ctx);
+@@ -4548,6 +4597,32 @@
+     }
+ }
+ 
++/* Multiple PINGs tolerate ordinary packet loss; a single lost probe must not
++ * close a healthy tunnel. If none is ACKed for 12 seconds, the previously
++ * validated survivor is not demonstrably usable: fall back to reconnect. */
++static void
++tick_failover_probe(mqvpn_client_t *c)
++{
++    if (!c->failover_probe_deadline_us) return;
++    if (!c->engine || !c->conn || c->state != MQVPN_STATE_ESTABLISHED) {
++        c->failover_probe_deadline_us = 0;
++        return;
++    }
++    uint64_t now = client_now_us(c);
++    if (now >= c->failover_probe_deadline_us) {
++        c->failover_probe_deadline_us = 0;
++        LOG_W(c, "failover probe timed out; reconnecting");
++        xqc_h3_conn_close(c->engine, &c->conn->cid);
++        return;
++    }
++    if (now >= c->failover_probe_next_us) {
++        c->failover_probe_next_us = now + 2000000ULL;
++        xqc_int_t rc = xqc_h3_conn_send_ping(c->engine, &c->conn->cid,
++                            (void *)c->failover_probe_generation);
++        if (rc != XQC_OK) LOG_W(c, "failed to retry failover PING: rc=%d", (int)rc);
++    }
++}
++
+ /* ─── Tick: reconnect ─── */
+ 
+ static void
+@@ -4569,20 +4644,24 @@
+     /* Reset path state for a fresh connection attempt. */
+     client_reset_paths_for_reconnect(c);
+ 
+-    /* Rotate to the next usable primary path (issue #4271 Bug 2).
+-     * Build a flags view where inactive paths (fd gone, active=0) are treated
+-     * as backup so mqvpn_rotate_primary_path() skips them.  This prevents
+-     * hammering a dead path when a live alternative exists. */
++    /* Prefer attached non-backup paths; if none is usable, an attached
++     * backup is still preferable to retrying a detached primary forever. */
+     if (c->n_paths > 0) {
+         uint32_t flags[MQVPN_MAX_PATHS];
++        int usable[MQVPN_MAX_PATHS];
+         for (int i = 0; i < c->n_paths; i++) {
+             flags[i] = c->paths[i].flags;
+-            if (!c->paths[i].platform_attached) flags[i] |= MQVPN_PATH_FLAG_BACKUP;
++            usable[i] = c->paths[i].platform_attached && c->paths[i].fd >= 0 &&
++                c->paths[i].state != PATH_LC_CLOSED_DROPPED &&
++                c->paths[i].state != PATH_LC_CLOSED_FREE;
+         }
+-        c->primary_path_idx =
+-            mqvpn_rotate_primary_path(c->primary_path_idx, flags, c->n_paths);
+-        LOG_I(c, "reconnect: using path[%d] iface=%s", c->primary_path_idx,
+-              c->paths[c->primary_path_idx].name);
++        int next = mqvpn_rotate_reconnect_path(c->primary_path_idx, flags, usable, c->n_paths);
++        if (next >= 0) {
++            c->primary_path_idx = next;
++            LOG_I(c, "reconnect: using path[%d] iface=%s", next, c->paths[next].name);
++        } else {
++            LOG_W(c, "reconnect: no attached path available");
++        }
+     }
+ 
+     int start_rc = cli_start_connection(c);
+@@ -4647,6 +4726,7 @@
+     tick_handshake_watchdog(c);
+     if (c->engine) xqc_engine_main_logic(c->engine);
+     tick_path_recovery(c);
++    tick_failover_probe(c);
+     tick_reconnect(c);
+ 
+     /* §5/§11.1: drive reorder RX gap timeouts + idle eviction. */
+diff --git a/src/path_rotation.c b/src/path_rotation.c
+--- a/src/path_rotation.c
++++ b/src/path_rotation.c
+@@ -23,3 +23,20 @@
+ 
+     return next;
+ }
++
++int
++mqvpn_rotate_reconnect_path(int cur_idx, const uint32_t *path_flags,
++                            const int *usable, int n_paths)
++{
++    if (n_paths <= 0 || !path_flags || !usable) return -1;
++    if (cur_idx < 0 || cur_idx >= n_paths) cur_idx = n_paths - 1;
++    for (int backup = 0; backup <= 1; backup++) {
++        for (int step = 1; step <= n_paths; step++) {
++            int i = (cur_idx + step) % n_paths;
++            if (!usable[i]) continue;
++            int is_backup = (path_flags[i] & MQVPN_PATH_FLAG_BACKUP) != 0;
++            if (is_backup == backup) return i;
++        }
++    }
++    return -1;
++}
+diff --git a/src/path_rotation.h b/src/path_rotation.h
+--- a/src/path_rotation.h
++++ b/src/path_rotation.h
+@@ -22,4 +22,9 @@
+  */
+ int mqvpn_rotate_primary_path(int cur_idx, const uint32_t *path_flags, int n_paths);
+ 
++/* Select an attached socket for a reconnect. Non-backup paths are preferred;
++ * if none is usable, consider attached backups. Returns -1 if none is usable. */
++int mqvpn_rotate_reconnect_path(int cur_idx, const uint32_t *path_flags,
++                                const int *usable, int n_paths);
++
+ #endif /* PATH_ROTATION_H */
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -1000,6 +1000,14 @@
+             continue;
+         }
+         mqvpn_path_t *mp = &ctx.path_mgr.paths[idx];
++        /* Backups must use their named WAN, just like ordinary and
++         * runtime-added paths. Otherwise Linux routes an unbound backup
++         * socket via the default WAN and can falsely validate it there. */
++        if (mp->iface[0] && linux_pin_socket_to_iface(mp->fd, mp->iface) < 0) {
++            LOG_WRN("backup path %s: interface pin failed, skipping", mp->iface);
++            mqvpn_path_mgr_remove_at(&ctx.path_mgr, idx);
++            continue;
++        }
+         mqvpn_path_desc_t desc = {0};
+         desc.struct_size = sizeof(desc);
+         desc.fd = mp->fd;
+diff --git a/tests/test_path_rotation.c b/tests/test_path_rotation.c
+--- a/tests/test_path_rotation.c
++++ b/tests/test_path_rotation.c
+@@ -153,6 +153,36 @@
+         ASSERT_EQ(next, (idx + 1) % 4);
+         idx = next;
+     }
++}
++
++/* A single usable primary must be picked even if the previous index is dead. */
++TEST(reconnect_single_surviving_primary)
++{
++    uint32_t f[2] = {0, 0};
++    int usable[2] = {0, 1};
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 2), 1);
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(1, f, usable, 2), 1);
++}
++
++TEST(reconnect_backup_only_when_primaries_unusable)
++{
++    uint32_t f[3] = {0, MQVPN_PATH_FLAG_BACKUP, 0};
++    int usable[3] = {0, 1, 1};
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 3), 2);
++    usable[2] = 0;
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 3), 1);
++    usable[1] = 0;
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 3), -1);
++}
++
++TEST(reconnect_rotates_only_usable_paths)
++{
++    uint32_t f[3] = {0, 0, 0};
++    int usable[3] = {1, 0, 1};
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 3), 2);
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(2, f, usable, 3), 0);
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(-1, f, usable, 3), 0);
++    ASSERT_EQ(mqvpn_rotate_reconnect_path(0, f, usable, 0), -1);
+ }
+ 
+ /* ── Runner ── */
+@@ -172,6 +202,9 @@
+     run_all_backup_no_rotation();
+     run_issue_4257_first_dead_rotates_to_second();
+     run_four_primaries_full_cycle();
++    run_reconnect_single_surviving_primary();
++    run_reconnect_backup_only_when_primaries_unusable();
++    run_reconnect_rotates_only_usable_paths();
+ 
+     printf("\n%d/%d tests passed\n", g_passed, g_run);
+     return (g_passed == g_run) ? 0 : 1;
+diff --git a/scripts/ci_e2e/run_3k_smooth_failover.py b/scripts/ci_e2e/run_3k_smooth_failover.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/ci_e2e/run_3k_smooth_failover.py
+@@ -0,0 +1,374 @@
++#!/usr/bin/env python3
++"""Exercise an actual MQVPN tunnel entirely inside disposable Linux netns.
++
++The two WANs are veth pairs, not host interfaces. The test sends an ordered TCP
++echo stream inside MQVPN and periodically checks the client's TUN ifindex. Run
++as root with the built mqvpn binary, iproute2, ping, openssl and Python 3.
++
++Example: sudo python3 run_3k_smooth_failover.py /path/to/mqvpn --event remove
++"""
++import argparse
++import datetime
++import hashlib
++import json
++import os
++import re
++import secrets
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++from pathlib import Path
++
++parser = argparse.ArgumentParser()
++parser.add_argument('binary', type=lambda x: str(Path(x).resolve()))
++parser.add_argument('--server-binary', type=lambda x: str(Path(x).resolve()),
++                    help='different server binary for compatibility testing')
++parser.add_argument('--event', choices=('remove', 'link', 'blackhole'), default='remove')
++parser.add_argument('--failed-path', choices=('initial', 'secondary'), default='initial')
++parser.add_argument('--readd', action='store_true', help='restore failed path, then remove the survivor')
++parser.add_argument('--no-alternate', action='store_true', help='blackhole the secondary before handshake; expect reconnect')
++parser.add_argument('--wan-latency', action='store_true', help='add unequal latency and 0.2%% loss on both WANs')
++parser.add_argument('--backup', action='store_true', help='configure the second WAN as BackupPath under minrtt')
++parser.add_argument('--fec', action='store_true', help='enable XOR FEC on client and server')
++parser.add_argument('--all-down', action='store_true', help='blackhole both WANs after validation, then restore one')
++parser.add_argument('--observe-seconds', type=int, default=8, help='observation interval for preserved session')
++parser.add_argument('--survivor-drop-seconds', type=float, default=0,
++                    help='briefly blackhole the validated survivor through the first probe')
++parser.add_argument('--keep-logs', action='store_true')
++parser.add_argument('--report', type=Path, help='write a sanitized JSON result')
++args = parser.parse_args()
++
++result = {'status':'FAIL', 'event':args.event, 'failed_path':args.failed_path,
++          'readd':args.readd, 'backup':args.backup, 'no_alternate':args.no_alternate,
++          'wan_latency':args.wan_latency, 'fec_requested':args.fec,
++          'all_down':args.all_down, 'observe_seconds':args.observe_seconds,
++          'survivor_drop_seconds':args.survivor_drop_seconds,
++          'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
++          'binary_sha256':hashlib.sha256(Path(args.binary).read_bytes()).hexdigest(),
++          'server_binary_sha256':hashlib.sha256(Path(args.server_binary or args.binary).read_bytes()).hexdigest(),
++          'scope':'isolated Linux netns, real MQVPN client/server and xquic; synthetic TCP/UDP',
++          'failure':None}
++
++tag = secrets.token_hex(3)
++ns_c, ns_s = 'omrc' + tag, 'omrs' + tag
++a0, a1, b0, b1 = ('c' + tag + 'a', 's' + tag + 'a', 'c' + tag + 'b', 's' + tag + 'b')
++created_ns, created_links, children = [], [], []
++directory = tempfile.TemporaryDirectory(prefix='omr3k-failover-')
++work = Path(directory.name)
++
++def run(*cmd, check=True, timeout=15, env=None):
++    return subprocess.run(cmd, check=check, timeout=timeout, text=True,
++                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
++
++def ip(*cmd, **kwargs):
++    return run('ip', *cmd, **kwargs)
++
++def inside(ns, *cmd, **kwargs):
++    return ip('netns', 'exec', ns, *cmd, **kwargs)
++
++def start(ns, name, *cmd):
++    log = (work / (name + '.log')).open('w')
++    proc = subprocess.Popen(['ip', 'netns', 'exec', ns, *cmd], stdout=log,
++                            stderr=subprocess.STDOUT, start_new_session=True)
++    children.append((proc, log))
++    return proc
++
++def tun_index():
++    out = inside(ns_c, 'ip', '-j', 'link', 'show', 'mqvpn0', check=False)
++    try: return json.loads(out.stdout)[0]['ifindex']
++    except (ValueError, IndexError, KeyError): return None
++
++def control(command):
++    script = ('import socket,sys; s=socket.create_connection(("127.0.0.1",9091),2); '
++              's.sendall((sys.argv[1]+"\\n").encode()); data=b""; '
++              'exec("while True:\\n b=s.recv(65536)\\n if not b: break\\n data+=b"); '
++              'sys.stdout.write(data.decode())')
++    p = inside(ns_c, sys.executable, '-c', script, json.dumps(command), check=False, timeout=5)
++    if p.returncode: return None
++    try: return json.loads(p.stdout)
++    except ValueError: return None
++
++def wait_for(predicate, seconds, label):
++    until = time.monotonic() + seconds
++    while time.monotonic() < until:
++        val = predicate()
++        if val: return val
++        time.sleep(.2)
++    raise RuntimeError('timeout waiting for ' + label)
++
++def setup_pair(left, right, cidr_c, cidr_s):
++    ip('link', 'add', left, 'type', 'veth', 'peer', 'name', right)
++    created_links.extend((left, right))
++    ip('link', 'set', left, 'netns', ns_c)
++    ip('link', 'set', right, 'netns', ns_s)
++    inside(ns_c, 'ip', 'addr', 'add', cidr_c, 'dev', left)
++    inside(ns_s, 'ip', 'addr', 'add', cidr_s, 'dev', right)
++    inside(ns_c, 'ip', 'link', 'set', left, 'up')
++    inside(ns_s, 'ip', 'link', 'set', right, 'up')
++
++echo_server = '''import socket
++s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
++s.bind(("10.0.0.1",18080));s.listen(1);c,_=s.accept()
++while True:
++ d=c.recv(4096)
++ if not d: break
++ c.sendall(d)
++'''
++echo_client = '''import socket,time,sys
++s=socket.create_connection(("10.0.0.1",18080),5);s.settimeout(4)
++for i in range(200):
++ try:
++  m=(str(i)+"\\n").encode();s.sendall(m);r=b""
++  while not r.endswith(b"\\n"):
++   q=s.recv(4096)
++   if not q: raise RuntimeError("EOF")
++   r+=q
++  if r!=m: raise RuntimeError("reply mismatch")
++  print("ok",i,time.monotonic(),flush=True)
++  time.sleep(.2)
++ except Exception as e:
++  print("error",repr(e),flush=True);sys.exit(1)
++'''
++udp_server = '''import socket
++s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(("10.0.0.1",18081))
++while True:
++ d,a=s.recvfrom(2048);s.sendto(d,a)
++'''
++udp_client = '''import socket,time
++s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.8)
++for i in range(200):
++ m=str(i).encode();s.sendto(m,("10.0.0.1",18081))
++ try:
++  d,_=s.recvfrom(2048)
++  if d==m: print("ok",i,time.monotonic(),flush=True)
++ except TimeoutError: print("loss",i,time.monotonic(),flush=True)
++ time.sleep(.2)
++'''
++
++try:
++    if os.geteuid() != 0: raise RuntimeError('must run as root')
++    if args.all_down and (args.event != 'blackhole' or args.failed_path != 'initial' or args.no_alternate):
++        raise RuntimeError('--all-down requires initial blackhole with two validated paths')
++    if args.survivor_drop_seconds and (args.all_down or args.event != 'blackhole' or args.failed_path != 'initial'):
++        raise RuntimeError('--survivor-drop-seconds requires initial blackhole and cannot combine with --all-down')
++    for ns in (ns_c, ns_s):
++        ip('netns', 'add', ns)
++        created_ns.append(ns)
++        inside(ns, 'ip', 'link', 'set', 'lo', 'up')
++    setup_pair(a0, a1, '10.114.0.2/24', '10.114.0.1/24')
++    setup_pair(b0, b1, '10.214.0.2/24', '10.214.0.1/24')
++    if args.wan_latency:
++        for ns, iface, delay in ((ns_c,a0,'15ms'),(ns_s,a1,'15ms'),
++                                 (ns_c,b0,'45ms'),(ns_s,b1,'45ms')):
++            inside(ns, 'tc', 'qdisc', 'add', 'dev', iface, 'root', 'netem',
++                   'delay', delay, '2ms', 'loss', '0.2%')
++    if args.no_alternate:
++        inside(ns_c, 'tc', 'qdisc', 'replace', 'dev', b0, 'root', 'netem', 'loss', '100%')
++    inside(ns_s, 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1')
++    inside(ns_c, 'ip', 'route', 'add', '10.114.0.0/24', 'via', '10.214.0.1',
++           'dev', b0, 'metric', '200')
++    psk = run(args.binary, '--genkey').stdout.strip()
++    if not psk: raise RuntimeError('mqvpn --genkey returned an empty key')
++    run('openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
++        '-keyout', str(work/'key.pem'), '-out', str(work/'cert.pem'), '-days', '1',
++        '-nodes', '-subj', '/CN=isolated-test')
++    fec_args = ('--fec-enable', '--fec-scheme', 'xor') if args.fec else ()
++    server = start(ns_s, 'server', args.server_binary or args.binary, '--mode', 'server', '--listen', '0.0.0.0:4433',
++                   '--subnet', '10.0.0.0/24', '--cert', str(work/'cert.pem'), '--key', str(work/'key.pem'),
++                   '--auth-key', psk, '--scheduler', 'minrtt', *fec_args, '--log-level', 'debug')
++    time.sleep(.5)
++    if server.poll() is not None: raise RuntimeError('server exited')
++    if args.backup:
++        cfg = work/'client.ini'
++        cfg.write_text('[Multipath]\nPath = '+a0+'\nBackupPath = '+b0+'\n')
++        path_args = ('--config', str(cfg))
++    else:
++        path_args = ('--path', a0, '--path', b0)
++    client = start(ns_c, 'client', args.binary, '--mode', 'client', '--server', '10.114.0.1:4433',
++                   *path_args, '--auth-key', psk, '--insecure', '--no-routes',
++                   '--control-port', '9091', '--scheduler', 'minrtt', *fec_args, '--log-level', 'debug')
++    wait_for(lambda: tun_index(), 25, 'client TUN')
++    wait_for(lambda: inside(ns_c, 'ping', '-c', '1', '-W', '1', '10.0.0.1', check=False).returncode == 0,
++             25, 'tunnel ping')
++    def paths_ready():
++        response = control({'cmd': 'list_paths'})
++        if not response: return None
++        paths = response.get('paths', [])
++        if len(paths) < 2: return None
++        # This log is emitted only after xquic reports the secondary ACTIVE;
++        # the initial path is authenticated by the established TUN handshake.
++        log = (work/'client.log').read_text(errors='replace')
++        return response if re.search(r'path\[\d+\] activated: path_id=[1-9]', log) else None
++    if args.no_alternate:
++        if args.failed_path != 'initial' or args.readd:
++            raise RuntimeError('--no-alternate requires initial target without --readd')
++        paths = wait_for(lambda: control({'cmd':'list_paths'}), 10, 'control API')
++    else:
++        paths = wait_for(paths_ready, 30, 'both validated MQVPN paths')
++    initial_index = tun_index()
++    initial_log = (work/'client.log').read_text(errors='replace')
++    ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', initial_log)
++    if not ids: raise RuntimeError('cannot identify established QUIC connection')
++    initial_conn = ids[-1]
++    if args.fec:
++        fec_status=control({'cmd':'get_all_fec_stats'})
++        result['fec_status']=fec_status
++        if (not fec_status or not fec_status.get('clients') or
++            not fec_status['clients'][0].get('enable_fec')):
++            raise RuntimeError('XOR FEC was requested but not reported enabled')
++    result.update({'client_pid':client.pid, 'server_pid':server.pid, 'tun_ifindex_before':initial_index,
++                   'mqvpn_connection_id_before':initial_conn})
++    server_echo = start(ns_s, 'echo-server', sys.executable, '-u', '-c', echo_server)
++    time.sleep(.3)
++    client_echo = start(ns_c, 'echo-client', sys.executable, '-u', '-c', echo_client)
++    start(ns_s, 'udp-server', sys.executable, '-u', '-c', udp_server)
++    start(ns_c, 'udp-client', sys.executable, '-u', '-c', udp_client)
++    echo_log = work/'echo-client.log'
++    wait_for(lambda: echo_log.exists() and echo_log.read_text().count('ok ') >= 5, 10, 'TCP echo')
++    target = a0 if args.failed_path == 'initial' else b0
++    print('paths before:', json.dumps(paths), flush=True)
++    print('event:', args.event, 'target:', target, 'tun_ifindex:', initial_index, flush=True)
++    if args.no_alternate:
++        print('secondary qdisc:', inside(ns_c, 'tc', '-s', 'qdisc', 'show', 'dev', b0).stdout.strip(), flush=True)
++    before = echo_log.read_text().count('ok ')
++    udp_log = work/'udp-client.log'
++    wait_for(lambda: udp_log.exists() and udp_log.read_text().count('ok ') >= 2, 10, 'UDP echo')
++    udp_before = udp_log.read_text().count('ok ')
++    if args.all_down or args.survivor_drop_seconds:
++        inside(ns_c, 'tc', 'qdisc', 'replace', 'dev', b0, 'root', 'netem', 'loss', '100%')
++    event_at = time.monotonic()
++    result['event_monotonic'] = event_at
++    if args.event == 'remove':
++        response = control({'cmd':'remove_path', 'iface':target})
++        if not response or not response.get('ok'): raise RuntimeError('remove_path: ' + str(response))
++    elif args.event == 'link':
++        inside(ns_c, 'ip', 'link', 'set', target, 'down')
++    else:
++        inside(ns_c, 'tc', 'qdisc', 'replace', 'dev', target, 'root', 'netem', 'loss', '100%')
++        response = control({'cmd':'remove_path', 'iface':target})
++        if not response or not response.get('ok'): raise RuntimeError('remove_path: ' + str(response))
++    if args.all_down:
++        wait_for(lambda: 'failover probe timed out' in (work/'client.log').read_text(errors='replace'),
++                 18, 'bounded failover probe timeout')
++        wait_for(lambda: tun_index() != initial_index, 10, 'TUN teardown after failed probe')
++        inside(ns_c, 'tc', 'qdisc', 'del', 'dev', b0, 'root')
++        wait_for(lambda: tun_index() is not None and tun_index() != initial_index,
++                 30, 'tunnel reconnect after one WAN returns')
++        wait_for(lambda: inside(ns_c, 'ping', '-c', '1', '-W', '1', '10.0.0.1', check=False).returncode == 0,
++                 15, 'traffic after the WAN returns')
++        ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', (work/'client.log').read_text(errors='replace'))
++        if not ids or ids[-1] == initial_conn: raise RuntimeError('expected new connection after timeout')
++        result.update({'status':'PASS', 'fallback':'probe_timeout_reconnected',
++                       'tun_ifindex_after':tun_index(), 'mqvpn_connection_id_after':ids[-1],
++                       'recovery_seconds':round(time.monotonic()-event_at,3)})
++        print('PASS: both WANs blackholed with carrier up; bounded probe triggered reconnect and restored traffic', flush=True)
++        sys.exit(0)
++    if args.no_alternate:
++        wait_for(lambda: 'no validated alternate' in (work/'client.log').read_text(errors='replace'),
++                 5, 'bounded fallback decision')
++        wait_for(lambda: tun_index() != initial_index, 10, 'TUN recreation/reconnect')
++        inside(ns_c, 'tc', 'qdisc', 'del', 'dev', b0, 'root')
++        wait_for(lambda: tun_index() is not None and tun_index() != initial_index,
++                 30, 'tunnel reconnect on restored/backup path')
++        wait_for(lambda: inside(ns_c, 'ping', '-c', '1', '-W', '1', '10.0.0.1', check=False).returncode == 0,
++                 15, 'traffic after fallback reconnect')
++        ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', (work/'client.log').read_text(errors='replace'))
++        if not ids or ids[-1] == initial_conn: raise RuntimeError('expected a new QUIC connection after fallback')
++        result.update({'status':'PASS', 'fallback':'reconnected',
++                       'tun_ifindex_after':tun_index(), 'mqvpn_connection_id_after':ids[-1],
++                       'recovery_seconds':round(time.monotonic()-event_at,3)})
++        print('PASS: unvalidated alternate triggers full reconnect; traffic recovers on remaining path', flush=True)
++        sys.exit(0)
++    if args.survivor_drop_seconds:
++        time.sleep(args.survivor_drop_seconds)
++        inside(ns_c, 'tc', 'qdisc', 'del', 'dev', b0, 'root')
++    samples = []
++    for _ in range(args.observe_seconds * 5):
++        samples.append(tun_index())
++        if client_echo.poll() is not None: break
++        time.sleep(.2)
++    after = echo_log.read_text().count('ok ')
++    udp_after = udp_log.read_text().count('ok ')
++    times = [float(row.split()[2]) for row in echo_log.read_text().splitlines()
++             if row.startswith('ok ') and len(row.split()) == 3]
++    gaps = [b-a for a,b in zip(times,times[1:]) if b >= event_at]
++    ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', (work/'client.log').read_text(errors='replace'))
++    result.update({'tun_samples':len(samples), 'tun_ifindex_after':tun_index(),
++                   'tcp_round_trips_after':after-before, 'udp_replies_after':udp_after-udp_before,
++                   'udp_timeouts_total':udp_log.read_text().count('loss '),
++                   'max_tcp_echo_gap_ms':round(max(gaps)*1000,2) if gaps else None,
++                   'mqvpn_connection_ids_seen':ids})
++    if client.poll() is not None or server.poll() is not None: raise RuntimeError('mqvpn process exited')
++    if client_echo.poll() is not None: raise RuntimeError('long-running TCP echo disconnected')
++    if any(x != initial_index for x in samples): raise RuntimeError('TUN was destroyed/recreated or disappeared')
++    if set(ids) != {initial_conn}: raise RuntimeError('QUIC connection identity changed')
++    if args.failed_path == 'initial' and 'failover probe acknowledged' not in (work/'client.log').read_text(errors='replace'):
++        raise RuntimeError('no ACK observed for failover probe')
++    if after - before < 10: raise RuntimeError('insufficient TCP echo progress after failure')
++    if udp_after - udp_before < 10: raise RuntimeError('insufficient UDP echo progress after failure')
++    print('PASS: same TUN ifindex; existing TCP session progressed', after-before,
++          'round trips; UDP replies:', udp_after-udp_before, 'samples:', len(samples), flush=True)
++    if args.readd:
++        if args.failed_path != 'initial': raise RuntimeError('--readd requires initial target')
++        if args.event == 'link': inside(ns_c, 'ip', 'link', 'set', a0, 'up')
++        if args.event == 'blackhole': inside(ns_c, 'tc', 'qdisc', 'del', 'dev', a0, 'root')
++        before_log = (work/'client.log').read_text(errors='replace')
++        if args.event == 'link':
++            # The netlink monitor reattaches paths automatically on carrier-up.
++            wait_for(lambda: a0 in (control({'cmd':'list_paths'}) or {}).get('paths', []),
++                     15, 'automatic path re-add')
++        else:
++            response = control({'cmd':'add_path', 'iface':a0})
++            if not response or not response.get('ok'): raise RuntimeError('add_path: ' + str(response))
++        def reactivated():
++            later = (work/'client.log').read_text(errors='replace')[len(before_log):]
++            return re.search(r'activated: path_id=[1-9][0-9]* iface='+re.escape(a0), later)
++        wait_for(reactivated, 20, 'restored path validation')
++        response = control({'cmd':'remove_path', 'iface':b0})
++        if not response or not response.get('ok'): raise RuntimeError('remove surviving path: '+str(response))
++        prior = echo_log.read_text().count('ok ')
++        time.sleep(5)
++        if tun_index() != initial_index or client_echo.poll() is not None:
++            raise RuntimeError('TUN or TCP session lost while switching back')
++        if echo_log.read_text().count('ok ') - prior < 10:
++            raise RuntimeError('TCP echo did not progress after switching back')
++        print('PASS: restored path revalidated and served the existing TCP session after survivor removal', flush=True)
++        ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', (work/'client.log').read_text(errors='replace'))
++        if set(ids) != {initial_conn}: raise RuntimeError('QUIC connection identity changed on switch back')
++        result['switch_back']='PASS'
++    result['status']='PASS'
++except SystemExit:
++    raise
++except BaseException as exc:
++    result['failure']=str(exc)
++    print('FAIL:', str(exc), file=sys.stderr)
++    for name in ('client', 'server', 'echo-client'):
++        path = work/(name+'.log')
++        if path.exists():
++            print('--- '+name+' log tail ---', file=sys.stderr)
++            print('\n'.join(path.read_text(errors='replace').splitlines()[-50:]), file=sys.stderr)
++    raise
++finally:
++    for proc, log in reversed(children):
++        if proc.poll() is None:
++            try: os.killpg(proc.pid, signal.SIGTERM)
++            except ProcessLookupError: pass
++    for proc, log in reversed(children):
++        try: proc.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            try: os.killpg(proc.pid, signal.SIGKILL)
++            except ProcessLookupError: pass
++            proc.wait()
++        log.close()
++    for ns in reversed(created_ns): ip('netns', 'del', ns, check=False)
++    for link in created_links: ip('link', 'del', link, check=False)
++    if args.report:
++        result['finished_utc']=datetime.datetime.now(datetime.timezone.utc).isoformat()
++        args.report.parent.mkdir(parents=True,exist_ok=True)
++        args.report.write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
++    if args.keep_logs:
++        directory._finalizer.detach()
++        print('logs:', work)
++    else: directory.cleanup()

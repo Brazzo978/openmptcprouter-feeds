@@ -4,6 +4,7 @@
 basename="${0##*/}"
 
 . /usr/lib/unbound/iptools.sh
+. /usr/share/omr/api-paths.sh
 
 export OMR_TRACKER_STATUS
 export OMR_TRACKER_STATUS_MSG
@@ -102,25 +103,15 @@ _check_server() {
 }
 
 _check_server_intf() {
-	local host=$1 port=$2 valid_ip6 intf k url
-	valid_ip6=$(valid_subnet6 "$host")
-	for intf in $mp_default_intfs; do
-		if [ "$valid_ip6" = "ok" ]; then
-			url="https://[${host}%${intf}]:${port}/"
-		else
-			url="https://${host}:${port}/"
+	local host="$1" port="$2" k=0
+	while [ "$server_ping" = false ] && [ "$k" -le "$retry" ]; do
+		# Probe every WAN concurrently, including backup/subflow and IPv6.
+		# A slow/dead first interface cannot block a healthy alternative.
+		if omr_api_select_path "$(omr_api_base_url "$host" "$port")" "$OMR_TRACKER_TIMEOUT" >/dev/null; then
+			server_ping=true
 		fi
-		k=0
-		while [ "$server_ping" = false ] && [ "$k" -le "$retry" ]; do
-			if [ "$valid_ip6" = "ok" ]; then
-				ret=$(curl --max-time "$OMR_TRACKER_TIMEOUT" -s -k "$url")
-			else
-				ret=$(curl --max-time "$OMR_TRACKER_TIMEOUT" -s -k --interface "$intf" "$url")
-			fi
-			[ -n "$ret" ] && server_ping=true
-			k=$((k+1))
-			[ "$server_ping" = false ] && sleep "${intervaltries}"
-		done
+		k=$((k+1))
+		[ "$server_ping" = true ] || sleep "$intervaltries"
 	done
 }
 
@@ -498,24 +489,16 @@ waittest=${OMR_TRACKER_WAIT_TEST:-0}
 # Per-"server:ip" up/down state from the previous cycle, so the check
 # functions can tell a transition apart from the steady state
 declare -A _srv_prev_up
-# `multipath` is itself a shell script whose no-arg listing forks per network
-# device, so refresh the default-route interface list at most every 30s
-# instead of on every check. Worst case a hotplugged/removed WAN is seen up
-# to 30s late here; the per-interface checks tolerate a stale entry (a dead
-# interface just fails its probe and the loop moves on).
+# Re-enumerate eligible interfaces each cycle; backup/subflow paths and newly
+# recovered WANs must not remain invisible for a cached 30-second window.
 mp_default_intfs=""
-_mp_intfs_ts=0
 # Last value written to openmptcprouter.omr.server, so the global up/down
 # state is committed only on a transition, not every cycle
 _omr_server_state=""
 while true; do
 	server_ping=false
 	oneserverup="0"
-	printf -v _mp_now '%(%s)T' -1
-	if [ $((_mp_now - _mp_intfs_ts)) -ge 30 ]; then
-		mp_default_intfs="$(multipath 2>/dev/null | awk '/default/{print $1}')"
-		_mp_intfs_ts=$_mp_now
-	fi
+	mp_default_intfs="$(omr_api_interfaces)"
 	config_load openmptcprouter
 	config_foreach _check_master server
 	[ "$oneserverup" = "0" ] && {

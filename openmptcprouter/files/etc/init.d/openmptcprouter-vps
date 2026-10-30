@@ -9,6 +9,7 @@ USE_PROCD=1
 EXTRA_COMMANDS="wireguard_remote_access diagnostic_logs set_pihole set_vps_firewall get_openvpn_key set_gre_tunnel set_vxlan token set_bypass_ips set_vpn_ip set_mptcp_dscp_vps set_mptcp_weight_vps set_dscp_classify_vps"
 
 . /usr/lib/unbound/iptools.sh
+. /usr/share/omr/api-paths.sh
 
 if [ -e /usr/sbin/iptables-nft ]; then
 	IPTABLES="/usr/sbin/iptables-nft"
@@ -37,50 +38,29 @@ _parse_result() {
 }
 
 _login() {
-	local username password auth
-	#server="$(uci -q get openmptcprouter.${servername}.ip)"
-	#[ -z "$server" ] && server="$(uci -q get shadowsocks-libev.sss0.server)"
+	local username password auth rc login_rejected=0
 	username="$(uci -q get openmptcprouter.${servername}.username)"
 	password="$(uci -q get openmptcprouter.${servername}.password)"
 	serverport="$(uci -q get openmptcprouter.${servername}.port)"
-	#[ -z "$server" ] && server="$(uci -q get openmptcprouter.${servername}.ip)"
 	if [ -z "$username" ] || [ -z "$password" ]; then
-		logger -t "OMR-VPS" "No credentials for server ${servername} yet, not asking for a token"
+		logger -t OMR-VPS "No credentials for server ${servername} yet, not asking for a token"
 		return
 	fi
-	if [ -z "$token" ]; then
-		login_on_server() {
-			[ -n "$token" ] && return
-			server=$1
-			#auth=`curl --max-time 10 -s -k -H "Content-Type: application/json" -X POST -d '{"username":"'$username'","password":"'$password'"}' https://$server:$serverport/login`
-			#resolve="$(resolveip -t 5 $server)"
-			valid_ip6=$(valid_subnet6 $server)
-			if [ "$valid_ip6" = "ok" ]; then
-				auth=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://[$server]:$serverport/token`
-			else
-				auth=`curl --max-time 10 -s -k -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://$server:$serverport/token`
-			fi
-			# An answer that carries no access_token is the server rejecting
-			# us, not a broken path: retrying it once per interface only adds
-			# fail2ban strikes. Only retry when nothing came back at all.
-			if [ -z "$auth" ]; then
-				for intf in $(multipath 2>/dev/null | awk '/default/ { print $1 }'); do
-					if [ "$valid_ip6" = "ok" ]; then
-						auth=`curl -6 --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://[$server]:$serverport/token`
-					else
-						auth=`curl --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -X POST -d "username=${username}&password=${password}" https://$server:$serverport/token`
-					fi
-					[ -n "$auth" ] && break
-				done
-			fi
-			[ -n "$auth" ] && {
-				token="$(echo "$auth" | jsonfilter -q -e '@.access_token')"
-				uci -q set openmptcprouter.${servername}.token="$token"
-			}
-		}
-		config_load openmptcprouter
-		config_list_foreach ${servername} ip login_on_server
-	fi
+	[ -z "$token" ] || return 0
+	login_on_server() {
+		[ -z "$token" ] && [ "$login_rejected" = 0 ] || return 0
+		server="$1"
+		auth="$(omr_api_request LOGIN "$(omr_api_base_url "$server" "$serverport")" token '' "$username" "$password")"
+		rc=$?
+		# Authentication is never fanned out; do not multiply fail2ban strikes
+		# over the configured server addresses after a definite rejection.
+		[ "$rc" -ne 10 ] || { login_rejected=1; return; }
+		[ "$rc" -eq 0 ] || return
+		token="$(printf '%s' "$auth" | jsonfilter -q -e '@.access_token')"
+		[ -z "$token" ] || uci -q set "openmptcprouter.${servername}.token=$token"
+	}
+	config_load openmptcprouter
+	config_list_foreach "$servername" ip login_on_server
 }
 
 _ping_server() {
@@ -90,80 +70,54 @@ _ping_server() {
 }
 
 _get_json() {
-	local route result
-	route=$1
-	[ -z "$token" ] && _login
-	[ -n "$token" ] && {
-		#resolve="$(resolveip -t 5 $server)"
-		valid_ip6=$(valid_subnet6 $server)
-		if [ "$valid_ip6" = "ok" ]; then
-			result=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://[$server]:$serverport/$route`
-		else
-			result=`curl --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://$server:$serverport/$route`
-		fi
-		if [ -z "$result" ]; then
-			for intf in $(multipath 2>/dev/null | awk '/default/ { print $1 }'); do
-				if [ "$valid_ip6" = "ok" ]; then
-					result=`curl -6 --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Authorization: Bearer $token" https://[$server]:$serverport/$route`
-				else
-					result=`curl --max-time 10 -s -k --interface $intf -H "accept: application/json" -H "Authorization: Bearer $token" https://$server:$serverport/$route`
-				fi
-				[ -n "$result" ] && break
-			done
-		fi
-		if [ "$(echo $result | grep 'Could not validate credentials')" ]; then
-			token=''
-			_login
-			if [ "$valid_ip6" = "ok" ]; then
-				result=`curl -6 --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://[$server]:$serverport/$route`
-			else
-				result=`curl --max-time 10 -s -k -H "accept: application/json" -H "Authorization: Bearer $token" https://$server:$serverport/$route`
-			fi
-			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
-		fi
-		printf '%s\n' "$result"
-	} || {
-		echo ''
+	local route="$1" result rc
+	[ -n "$token" ] || _login
+	[ -n "$token" ] || {
+		case "$route" in config|config\?*) ;; *) printf '%s\n' '{"error":"VPS authentication unavailable"}';; esac
+		return 10
 	}
+	result="$(omr_api_request GET "$(omr_api_base_url "$server" "$serverport")" "$route" "$token")"
+	rc=$?
+	if [ "$rc" -eq 10 ]; then
+		token=''
+		_login
+		[ -n "$token" ] || {
+			case "$route" in config|config\?*) ;; *) printf '%s\n' '{"error":"VPS authentication unavailable"}';; esac
+			return 10
+		}
+		result="$(omr_api_request GET "$(omr_api_base_url "$server" "$serverport")" "$route" "$token")"
+		rc=$?
+	fi
+	if [ "$rc" -eq 0 ]; then
+		printf '%s\n' "$result"
+	else
+		# Config consumers must never treat an error object as configuration.
+		case "$route" in config|config\?*) return "$rc";; esac
+		[ "$rc" -ne 10 ] || result='{"error":"VPS authentication rejected"}'
+		[ -z "$result" ] || printf '%s\n' "$result"
+	fi
+	return "$rc"
 }
 
 _set_json() {
-	local route result settings
-	route=$1
-	settings="$2"
-	[ -z "$token" ] && _login
-	[ -n "$token" ] && {
-		#resolve="$(resolveip -t 5 $server)"
-		valid_ip6=$(valid_subnet6 $server)
-		if [ "$valid_ip6" = "ok" ]; then
-			result=`curl -6 --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://[$server]:$serverport/$route`
-		else
-			result=`curl --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://$server:$serverport/$route`
-		fi
-		if [ -z "$result" ]; then
-			for intf in $(multipath 2>/dev/null | awk '/default/ { print $1 }'); do
-				if [ "$valid_ip6" = "ok" ]; then
-					result=`curl -6 --max-time 10 -s -k --interface $intf -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://[$server]:$serverport/$route`
-				else
-					result=`curl --max-time 10 -s -k --interface $intf -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://$server:$serverport/$route`
-				fi
-				[ -n "$result" ] && break
-			done
-		fi
-		if [ "$(echo $result | grep 'Could not validate credentials')" ]; then
-			token=''
-			_login
-			if [ "$valid_ip6" = "ok" ]; then
-				result=`curl -6 --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://[$server]:$serverport/$route`
-			else
-				result=`curl --max-time 10 -s -k -H "Authorization: Bearer $token" -H "Content-Type: application/json" -X POST -d "$settings" https://$server:$serverport/$route`
-			fi
-			[ "$(echo $result | grep 'Could not validate credentials')" ] && result=''
-		fi
-		echo $result
-	} || {
-		echo ''
-	}
+	local route="$1" settings="$2" result rc
+	[ -n "$token" ] || _login
+	[ -n "$token" ] || { printf '%s\n' '{"error":"VPS authentication unavailable"}'; return 10; }
+	result="$(omr_api_request POST "$(omr_api_base_url "$server" "$serverport")" "$route" "$token" "$settings")"
+	rc=$?
+	if [ "$rc" -eq 10 ]; then
+		# A definite HTTP auth rejection did not apply the operation.
+		token=''
+		_login
+		[ -n "$token" ] || { printf '%s\n' '{"error":"VPS authentication unavailable"}'; return 10; }
+		result="$(omr_api_request POST "$(omr_api_base_url "$server" "$serverport")" "$route" "$token" "$settings")"
+		rc=$?
+	fi
+	# Preserve actionable server errors and uncertain-delivery results. A caller
+	# iterating VPS IPs must not mistake a lost reply for permission to replay.
+	[ "$rc" -ne 10 ] || result='{"error":"VPS authentication rejected"}'
+	[ -z "$result" ] || printf '%s\n' "$result"
+	return "$rc"
 }
 
 _set_glorytun_vps() {
@@ -1274,9 +1228,11 @@ _set_vxlan_service() {
 	([ "$(uci -q get openmptcprouter.${servername}.master)" = "1" ] || [ "$(uci -q get openmptcprouter.${servername}.current)" = "1" ]) || return
 	vps_config=""
 	tokenserver=$(_get_token $servername)
-	server="$(echo $tokenserver | cut -f1 -d:)"
-	serverport="$(echo $tokenserver | cut -f2 -d:)"
-	token="$(echo $tokenserver | cut -f3 -d:)"
+	# Split the final port/token fields; a server IPv6 literal contains colons.
+	server="${tokenserver%:*:*}"
+	serverport="${tokenserver%:*}"
+	serverport="${serverport##*:}"
+	token="${tokenserver##*:}"
 	[ -z "$token" ] && return
 	vps_config=$(_get_json "config")
 	[ -z "$vps_config" ] && return
@@ -3475,20 +3431,10 @@ _get_token() {
 		port="$(uci -q get openmptcprouter.${servername}.port)"
 		api_test() {
 			server="$1"
-			resolve="$(resolveip -t 5 $server)"
-			valid_ip6=$(valid_subnet6 $server)
-			if [ "$resolve" != "$server" ] || [ "$valid_ip6" != "ok" ]; then
-				if [ "$(curl -s -k -m 3 https://${server}:${port}/)" = "" ]; then
-					reason="$reason, no server API answer on $1"
-				else
-					reason="$reason, server API answer on $1"
-				fi
+			if omr_api_select_path "$(omr_api_base_url "$server" "$port")" 3 >/dev/null; then
+				reason="$reason, server API answer on $1"
 			else
-				if [ "$(curl -s -k -m 3 https://[${server}]:${port}/)" = "" ]; then
-					reason="$reason, no server API answer on $1"
-				else
-					reason="$reason, server API answer on $1"
-				fi
+				reason="$reason, no server API answer on $1"
 			fi
 		}
 		config_list_foreach "${servername}" ip api_test
