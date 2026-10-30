@@ -22,7 +22,7 @@ src/gz openmptcprouter_packages https://download.openmptcprouter.com/release/${V
 		# are published under the upstream base version plus kernel series.
 		# Keep the five official repositories and remove obsolete 3K URLs.
 		case "$VERSION_ID" in
-			v0.64.2-3k*|v0.64.2-3K*)
+			v0.64.2-3k*|v0.64.2-3K*|v0.64.3-3k*|v0.64.3-3K*)
 				KERNEL_SERIES="$(uname -r | cut -d. -f1,2)"
 				FEED_VERSION="v0.64.2-${KERNEL_SERIES}"
 				;;
