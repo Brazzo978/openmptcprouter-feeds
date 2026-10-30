@@ -1,0 +1,5 @@
+#!/usr/bin/lua
+local ok,runtime=pcall(require,'omr.profiles_runtime')
+if not ok then os.exit(1) end
+local success,active=pcall(function() return runtime.new():guard_active() end)
+os.exit(success and active and 0 or 1)

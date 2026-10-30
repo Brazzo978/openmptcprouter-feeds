@@ -1,0 +1,77 @@
+#!/usr/bin/lua
+-- Invoked only under flock on the real config. UCI's default delta path is
+-- global: committing "network" directly may commit an unrelated user's
+-- staged WAN changes. Import the latest locked file as a random package name,
+-- apply ONLY allowed tuning keys, then atomically replace the original file.
+local json=require 'luci.jsonc'
+local fs=require 'nixio.fs'
+-- The LuCI compatibility cursor delegates to ubus and deliberately refuses
+-- set_confdir/set_savedir. Use the native libuci Lua binding for isolation.
+local uci=require 'uci'
+local model=require 'omr.profiles'
+local package_name,mode=arg[1],arg[2]
+if (package_name~='network' and package_name~='mqvpn') or (mode~='read' and mode~='write') then os.exit(1) end
+local path='/etc/config/'..package_name
+local st=fs.stat(path)
+local lst=fs.lstat(path)
+if not st or st.type~='reg' or not lst or lst.type~='reg' then os.exit(1) end
+local original=fs.readfile(path)
+if not original then os.exit(1) end
+local urandom=io.open('/dev/urandom','rb')
+if not urandom then os.exit(1) end
+local bytes=urandom:read(16);urandom:close()
+if not bytes or #bytes~=16 then os.exit(1) end
+local id=(bytes:gsub('.',function(c) return string.format('%02x',string.byte(c)) end))
+local stagedir='/var/run/omr-profiles/uci-'..id
+local tempname='omrprofile_'..id
+local stage=stagedir..'/'..tempname
+local delta=stagedir..'/delta'
+local candidate='/etc/config/.omrprofile-'..id
+if not fs.mkdir(stagedir,'0700') then os.exit(1) end
+local function cleanup()
+  fs.unlink(delta..'/'..tempname);fs.rmdir(delta)
+  fs.unlink(stage); fs.unlink(stagedir..'/'..tempname..'.lock');fs.rmdir(stagedir)
+  fs.unlink(candidate)
+end
+if not fs.mkdir(delta,'0700') then cleanup();os.exit(1) end
+if not fs.copy(path,stage) or not fs.chmod(stage,'0600') then cleanup();os.exit(1) end
+local cur=uci.cursor()
+if not cur:set_confdir(stagedir) or not cur:set_savedir(delta) then cleanup();os.exit(1) end
+
+if mode=='read' then
+  local out={}
+  for key,spec in pairs(model.fields) do
+    if spec[1]==package_name then
+      local v=cur:get(tempname,spec[2],spec[3])
+      out[key]=type(v)=='string' and v or false
+    end
+  end
+  print(json.stringify(out));cleanup();os.exit(0)
+end
+
+local f=io.open('/var/run/omr-profiles/uci-request.json','rb')
+if not f then cleanup();os.exit(1) end
+local text=f:read(16385);f:close()
+if not text or #text>16384 then cleanup();os.exit(1) end
+local payload=json.parse(text)
+if type(payload)~='table' or type(payload.values)~='table' or type(payload.raw)~='boolean' then cleanup();os.exit(1) end
+for key,value in pairs(payload.values) do
+  local spec=model.fields[key]
+  if not spec or (value==false and not payload.raw) or
+     (value~=false and not model.allowed_values({[key]=value},false)) then cleanup();os.exit(1) end
+  if spec[1]==package_name then
+    local ok
+    if value==false then
+      ok=cur:delete(tempname,spec[2],spec[3])
+      if not ok and cur:get(tempname,spec[2],spec[3])~=nil then cleanup();os.exit(1) end
+    else
+      ok=cur:set(tempname,spec[2],spec[3],value)
+      if not ok then cleanup();os.exit(1) end
+    end
+  end
+end
+if not cur:commit(tempname) or not fs.copy(stage,candidate) or
+   not fs.chmod(candidate,st.modestr) or fs.readfile(path)~=original or not os.rename(candidate,path) then
+  cleanup();os.exit(1)
+end
+cleanup()

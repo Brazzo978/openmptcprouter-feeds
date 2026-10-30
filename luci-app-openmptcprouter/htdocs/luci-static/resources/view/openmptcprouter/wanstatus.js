@@ -2,6 +2,7 @@
 'require view';
 'require poll';
 'require rpc';
+'require omr.profiles as profiles';
 
 var callOMRStatus = rpc.declare({
 	object: 'openmptcprouter',
@@ -174,6 +175,7 @@ return view.extend({
 
 		var container = E('div', {}, [
 			E('h2', {}, _('Network overview')),
+			profiles.create({ full: false }),
 			E('fieldset', { 'id': 'interface_field', 'class': 'cbi-section' }, [
 				E('div', { 'id': 'omr-status-container' }, E('img', { 'src': L.resource('spinner.gif') }))
 			]),

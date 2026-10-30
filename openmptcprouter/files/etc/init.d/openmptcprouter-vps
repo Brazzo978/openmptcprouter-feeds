@@ -3454,14 +3454,27 @@ _get_token() {
 	echo "$server:$serverport:$token"
 }
 
+_parse_token_server() {
+	# The last two fields are port and JWT; the address may itself contain colons.
+	local context="$1"
+	token="${context##*:}"
+	context="${context%:*}"
+	serverport="${context##*:}"
+	server="${context%:*}"
+}
+
 _config_service() {
 	servername=$1
 	[ "$(uci -q get openmptcprouter.${servername}.disabled)" = "1" ] && return
+	# Profile transactions synchronize and verify their own allowlisted values.
+	# Ordinary synchronization must not race their apply/rollback window.
+	if [ -x /usr/libexec/omr-profiles/guard ] && /usr/libexec/omr-profiles/guard; then
+		logger -t OMR-VPS 'Connection profile transaction active; postponing ordinary VPS synchronization'
+		return 0
+	fi
 	vps_config=""
 	tokenserver=$(_get_token $servername)
-	server="$(echo $tokenserver | cut -f1 -d:)"
-	serverport="$(echo $tokenserver | cut -f2 -d:)"
-        token="$(echo $tokenserver | cut -f3 -d:)"
+	_parse_token_server "$tokenserver"
 	[ -z "$token" ] && return
 	error=0
 	if [ -n "$serial" ]; then

@@ -1,0 +1,15 @@
+{
+  "luci-app-omr-profiles": {
+    "description": "Read or manage OpenMPTCProuter connection profiles",
+    "read": {
+      "ubus": {
+        "omr.profiles": ["status"]
+      }
+    },
+    "write": {
+      "ubus": {
+        "omr.profiles": ["save", "apply", "confirm", "rollback", "delete"]
+      }
+    }
+  }
+}

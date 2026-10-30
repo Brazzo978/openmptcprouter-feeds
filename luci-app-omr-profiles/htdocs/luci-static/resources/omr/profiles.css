@@ -1,0 +1,23 @@
+.omr-profile-panel { margin: 1rem 0; }
+.omr-profile-panel .omr-profile-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
+.omr-profile-panel .omr-profile-current { margin: .35rem 0 .65rem; }
+.omr-profile-panel .omr-profile-help { color: var(--text-color-medium, #555); font-size: .9em; margin: .4rem 0 .8rem; }
+.omr-profile-panel .omr-profile-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: .65rem; }
+.omr-profile-panel.omr-profile-panel-full .omr-profile-grid { max-width: 1000px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.omr-profile-panel .omr-profile-card { border: 1px solid var(--border-color, #ccc); border-radius: .4rem; padding: .7rem; display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.omr-profile-panel .omr-profile-card.is-active { border-color: var(--primary-color-high, #0066cc); box-shadow: inset 0 0 0 1px var(--primary-color-high, #0066cc); }
+.omr-profile-panel .omr-profile-name { font-weight: 600; overflow-wrap: anywhere; }
+.omr-profile-panel .omr-profile-detail { color: var(--text-color-medium, #555); font-size: .88em; overflow-wrap: anywhere; }
+.omr-profile-panel .omr-profile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-top: .25rem; }
+.omr-profile-panel .omr-profile-message { margin: .65rem 0; padding: .65rem; border-left: 3px solid #31708f; background: rgba(49,112,143,.09); overflow-wrap: anywhere; }
+.omr-profile-panel .omr-profile-error { border-color: #bd3f3f; background: rgba(189,63,63,.09); }
+.omr-profile-panel .omr-profile-warning { border-color: #b67b18; background: rgba(182,123,24,.10); }
+.omr-profile-panel .omr-profile-save { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.omr-profile-panel .omr-profile-save input { max-width: 20rem; flex: 1 1 12rem; }
+.omr-profile-panel .omr-profile-summary { margin: .8rem 0; }
+.omr-profile-panel .omr-profile-summary dt { font-weight: 600; margin-top: .3rem; }
+.omr-profile-panel .omr-profile-summary dd { margin-left: 0; overflow-wrap: anywhere; }
+@media (max-width: 680px) {
+  .omr-profile-panel .omr-profile-grid,
+  .omr-profile-panel.omr-profile-panel-full .omr-profile-grid { grid-template-columns: minmax(0, 1fr); }
+}

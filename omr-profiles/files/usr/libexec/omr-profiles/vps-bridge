@@ -1,0 +1,51 @@
+#!/bin/sh
+# The init file defines functions; sourcing it does not execute start_service.
+# Keep credentials and the full VPS config in this short-lived process only.
+. /lib/functions.sh
+. /etc/init.d/openmptcprouter-vps
+
+action="$1"; servername="$2"; transaction="$3"
+case "$servername" in ''|*[!a-zA-Z0-9_-]*) echo '{"error":"Invalid server"}'; exit 1;; esac
+# `_login` normally stages a token in the shared UCI delta directory. This
+# isolated operation must not commit or leave changes belonging to another
+# LuCI session; retain the token only in this process and renew it if needed.
+uci() {
+	if [ "$1" = -q ] && [ "$2" = set ]; then
+		case "$3" in "openmptcprouter.${servername}.token="*) return 0;; esac
+	fi
+	command uci "$@"
+}
+case "$action" in
+	capabilities) route=profiles/capabilities; method=GET ;;
+	status|confirm|rollback)
+		case "$transaction" in *[!a-f0-9]*|'') echo '{"error":"Invalid transaction"}'; exit 1;; esac
+		[ "${#transaction}" = 32 ] || { echo '{"error":"Invalid transaction"}'; exit 1; }
+		route="profiles/$action"; method=POST
+		[ "$action" != status ] || { method=GET; route="profiles/status?transaction=$transaction"; }
+		payload="{\"transaction\":\"$transaction\"}" ;;
+	apply)
+		case "$transaction" in *[!a-f0-9]*|'') echo '{"error":"Invalid transaction"}'; exit 1;; esac
+		[ "${#transaction}" = 32 ] || { echo '{"error":"Invalid transaction"}'; exit 1; }
+		method=POST; route=profiles/apply
+		# Mode-0600 file contains only permitted tuning values, never keys.
+		payload="$(cat /var/run/omr-profiles/request.json 2>/dev/null)"
+		[ -n "$payload" ] || { echo '{"error":"Missing profile payload"}'; exit 1; } ;;
+	*) echo '{"error":"Invalid action"}'; exit 1 ;;
+esac
+serverport="$(uci -q get "openmptcprouter.$servername.port")"
+token="$(uci -q get "openmptcprouter.$servername.token")"
+[ -n "$serverport" ] || { echo '{"error":"VPS port unavailable"}'; exit 1; }
+result=""
+_profile_call_ip() {
+	[ -z "$result" ] || return
+	server="$1"
+	if [ "$method" = GET ]; then
+		result="$(_get_json "$route")"
+	else
+		result="$(_set_json "$route" "$payload")"
+	fi
+}
+config_load openmptcprouter
+config_list_foreach "$servername" ip _profile_call_ip
+[ -n "$result" ] || result='{"error":"VPS unavailable"}'
+printf '%s\n' "$result"

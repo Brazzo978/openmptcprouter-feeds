@@ -1,0 +1,31 @@
+#!/usr/bin/lua
+local runtime=require 'omr.profiles_runtime'
+local profiles=require 'omr.profiles'
+local a=runtime.new()
+local m=profiles.new(a)
+a:heartbeat()
+pcall(function() m:recover() end)
+local next_refresh=0
+local next_retry=0
+while true do
+  a:heartbeat()
+  local ok=pcall(function() m:tick() end)
+  if not ok then
+    -- Journal phases are durable before every side effect. A worker exception
+    -- must transition the interrupted transaction to recovery, not strand it.
+    pcall(function() m:recover() end)
+  end
+  local pending=a:read_journal()
+  local now=a:monotonic()
+  if pending and pending.phase=='rollback_failed' and now>=next_retry then
+    a:locked(function()
+      local j=a:read_journal()
+      if j and j.phase=='rollback_failed' then j.phase='rolling_back'; a:write_journal(j) end
+    end)
+    next_retry=now+30
+  elseif not pending and now>=next_refresh then
+    pcall(function() a:refresh_capabilities() end)
+    next_refresh=a:monotonic()+10
+  end
+  a:sleep(1)
+end

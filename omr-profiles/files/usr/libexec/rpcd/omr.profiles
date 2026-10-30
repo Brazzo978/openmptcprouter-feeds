@@ -1,0 +1,30 @@
+#!/usr/bin/lua
+local json=require 'luci.jsonc'
+local runtime=require 'omr.profiles_runtime'
+local profiles=require 'omr.profiles'
+
+if arg[1]=='list' then
+  -- rpcd's schemas are JSON objects; a Lua empty table serializes as [].
+  print('{"status":{},"save":{"name":""},"apply":{"id":""},"confirm":{"transaction":""},"rollback":{"transaction":""},"delete":{"id":""}}')
+  os.exit(0)
+end
+if arg[1]~='call' then os.exit(1) end
+local method=arg[2]
+if method~='status' and method~='save' and method~='apply' and method~='confirm' and method~='rollback' and method~='delete' then
+  print('{"ok":false,"error":"Unknown operation."}'); os.exit(0)
+end
+local input=io.stdin:read(8193) or ''
+if #input>8192 then print('{"ok":false,"error":"Request too large."}'); os.exit(0) end
+local request=json.parse(input)
+if type(request)~='table' then request={} end
+local m=profiles.new(runtime.new())
+local ok,result=pcall(function()
+  if method=='status' then return m:status() end
+  if method=='save' then return m:save(request.name) end
+  if method=='apply' then return m:apply(request.id) end
+  if method=='confirm' then return m:confirm(request.transaction) end
+  if method=='rollback' then return m:rollback(request.transaction) end
+  return m:delete(request.id)
+end)
+if not ok or type(result)~='table' then result={ok=false,error='Profiles service unavailable or busy.'} end
+print(json.stringify(result))

@@ -217,4 +217,11 @@ wireguard_remote_result='';wireguard_remote_action=allow
         self.assertIn('$(INSTALL_DATA) ./files/api-paths.sh $(1)/usr/share/omr/api-paths.sh',package)
         self.assertTrue(HELPER.exists())
 
+    def test_sync_token_context_preserves_ipv6_colons(self):
+        extra=extract(INIT,'_parse_token_server')
+        for address in ('192.0.2.1','vps.example.test','2001:db8::1','::1'):
+            command='_parse_token_server "'+address+':65500:fixture.jwt"; printf "%s|%s|%s" "$server" "$serverport" "$token"'
+            for p,_,_ in self.run_case(command,{},extra=extra):
+                self.assertEqual(p.stdout,address+'|65500|fixture.jwt',p.stderr)
+
 if __name__=='__main__':unittest.main(verbosity=2)

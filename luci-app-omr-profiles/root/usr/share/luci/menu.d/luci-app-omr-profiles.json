@@ -1,0 +1,13 @@
+{
+  "admin/system/openmptcprouter/profiles": {
+    "title": "Connection profiles",
+    "order": 4,
+    "action": {
+      "type": "view",
+      "path": "omr/connection_profiles"
+    },
+    "depends": {
+      "acl": ["luci-app-omr-profiles"]
+    }
+  }
+}
