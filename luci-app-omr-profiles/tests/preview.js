@@ -68,6 +68,8 @@ fetch('/profiles.js').then(r=>r.text()).then(code=>{
 const routes = {
 	'/': ['text/html; charset=utf-8', () => html],
 	'/profiles.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(base,'omr','profiles.js'))],
+	'/luci-static/resources/omr/icons/router.svg': ['image/svg+xml', () => fs.readFileSync(path.join(base,'omr','icons','router.svg'))],
+	'/luci-static/resources/omr/icons/cloud.svg': ['image/svg+xml', () => fs.readFileSync(path.join(base,'omr','icons','cloud.svg'))],
 	'/luci-static/resources/omr/profiles.css': ['text/css; charset=utf-8', () => fs.readFileSync(path.join(base,'omr','profiles.css'))]
 };
 const server=http.createServer((req,res)=>{

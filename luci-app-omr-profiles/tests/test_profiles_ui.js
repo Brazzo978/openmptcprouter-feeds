@@ -13,6 +13,7 @@ String.prototype.format = function() {
 class Element {
 	constructor(tag, attributes, children) {
 		this.tagName = tag;
+		this.isConnected = true;
 		this.attributes = attributes || {};
 		this.listeners = {};
 		this.childNodes = [];
@@ -99,20 +100,56 @@ function fixture(allowed) {
 			return Promise.resolve({ok:true});
 		};
 	}};
-	const document = {querySelector:()=>null,createElement:tag=>new Element(tag),head:new Element('head')};
+	const document = {querySelector:()=>null,createElement:tag=>new Element(tag),createElementNS:(ns,tag)=>new Element(tag),head:new Element('head')};
 	const window = {confirm:()=>true};
 	const poll = {add:fn=>polls.push(fn)};
 	const L = {resource:s=>'/luci-static/resources/'+s,url:s=>'/cgi-bin/luci/'+s};
 	const code = fs.readFileSync(path.join(__dirname,'../htdocs/luci-static/resources/omr/profiles.js'),'utf8');
-	const mod = new Function('baseclass','rpc','poll','L','E','_','document','window',code)(
-		{extend:x=>x},rpc,poll,L,E,s=>s,document,window);
+	let frameId=0, frameTime=0; const frames=new Map();
+	const requestFrame=callback=>{frames.set(++frameId,callback);return frameId;};
+	const mod = new Function('baseclass','rpc','poll','L','E','_','document','window','requestAnimationFrame','cancelAnimationFrame',code)(
+		{extend:x=>x},rpc,poll,L,E,s=>s,document,window,requestFrame,id=>frames.delete(id));
 	return {mod,state,calls,polls,setFailure:x=>{failure=x;},setStatusFailure:x=>{statusFailure=x;},
+		advance:milliseconds=>{while(milliseconds>0){const step=Math.min(16,milliseconds);frameTime+=step;milliseconds-=step;const callbacks=Array.from(frames.values());frames.clear();callbacks.forEach(callback=>callback(frameTime));}},
+		queuedFrames:()=>frames.size,
 		holdNextStatus:()=>{holdStatus=true;},releaseStatus:()=>releaseStatus()};
 }
 
 async function ready() { await tick(); await tick(); }
 async function refresh(f) { await Promise.all(f.polls.map(p=>p())); await ready(); }
 async function tests() {
+	{
+		const f=fixture({apply:true});f.state.presets[0].settings.mq_scheduler='minrtt';
+		const root=f.mod.create({full:true});await ready();
+		const preview=nodes(root).find(n=>n.attributes&&n.attributes.class==='omr-preview');
+		const select=nodes(preview).find(n=>n.attributes&&n.attributes['aria-label']==='Preview profile');
+		const tcp=nodes(preview).find(n=>n.attributes&&n.attributes['data-protocol']==='tcp');
+		const visible=()=>nodes(tcp).filter(n=>n.attributes&&String(n.attributes.class||'').startsWith('omr-preview-packet ')&&n.attributes.display!=='none');
+		const letters=()=>visible().map(n=>n.textContent).join('');
+		assert.strictEqual(letters(),'AB');f.advance(2700);assert.strictEqual(letters(),'CD');
+		const icmp=nodes(preview).find(n=>n.attributes&&n.attributes['data-protocol']==='icmp');
+		const bestPath=nodes(icmp).filter(n=>n.attributes&&String(n.attributes.class||'').startsWith('omr-preview-packet ')&&n.attributes.display!=='none');
+		assert.strictEqual(bestPath.length,1);assert.strictEqual(bestPath[0].textContent,'C');
+		f.advance(2600);assert.strictEqual(letters(),'AB');
+		select.value='performance';select.listeners.change({target:select});
+		assert.strictEqual(preview.attributes['data-preview-time'],'0');
+		assert.strictEqual(letters(),'ACBD');
+		for(let sample=0;sample<50;sample++){
+			f.advance(160);
+			for(const wan of ['1','2']){
+				const x=visible().filter(n=>n.attributes['data-wan']===wan).map(n=>parseFloat(n.attributes.transform.slice(10))).sort((a,b)=>a-b);
+				assert(x[1]-x[0]>=32, '24px packets require 8px clear space');
+			}
+		}
+		const before=preview.attributes['data-preview-time'];await refresh(f);
+		assert.strictEqual(preview.attributes['data-preview-time'],before,'poll must not reset shared clock');
+		find(preview,'button','Pause animation').click();f.advance(1000);
+		assert.strictEqual(preview.attributes['data-preview-time'],before,'pause must freeze time');
+		find(preview,'button','Resume animation').click();f.advance(200);
+		assert(Number(preview.attributes['data-preview-time'])>Number(before));
+		select.value='gaming';select.listeners.change({target:select});assert.strictEqual(letters(),'AA');
+		preview.isConnected=false;f.advance(16);assert.strictEqual(f.queuedFrames(),0,'detached preview must stop rendering');
+	}
 	{
 		const f=fixture({apply:true});
 		f.state.presets[1].settings.mq_scheduler='wlb';
@@ -130,11 +167,11 @@ async function tests() {
 		assert.strictEqual(profile.value,'default');
 		assert.strictEqual(diagrams.length,3);
 		assert(diagram('tcp').attributes.class.includes('is-automatic'));
-		assert(preview.textContent.includes('this sequence is one illustration'));
+		assert(preview.textContent.includes('actual scheduling depends on congestion'));
 		assert(preview.textContent.includes('WAN-bound diagnostic pings and bypass traffic are not shown'));
 		set(profile,'gaming');
 		assert(diagram('tcp').attributes.class.includes('is-duplicate'));
-		assert(preview.textContent.includes('same packet'));
+		assert(preview.textContent.includes('Same packet'));
 		assert(diagram('icmp').attributes.class.includes('is-minrtt'));
 		assert(diagram('udp').attributes.class.includes('is-minrtt'));
 		set(profile,'performance');
@@ -163,15 +200,15 @@ async function tests() {
 		const card=nodes(root).find(n=>n.attributes && n.attributes.class==='omr-profile-name' && n.textContent==='Performance').parentNode;
 		assert(find(card,'button','Use profile').disabled, 'preview of an unavailable profile does not enable apply');
 		find(preview,'button','Pause animation').click();
-		assert(diagrams.every(d=>d.attributes.class.includes('is-paused')));
+		assert.strictEqual(find(preview,'button','Resume animation').attributes['aria-pressed'],'true');
 		f.state.active.id='gaming'; await refresh(f);
 		assert.strictEqual(profile.value,'performance', 'poll preserves preview selection');
 		assert.strictEqual(nodes(root).find(n=>n===preview),preview, 'poll does not rebuild the preview');
 		find(preview,'button','Resume animation').click();
-		assert(diagrams.every(d=>!d.attributes.class.includes('is-paused')));
+		assert.strictEqual(find(preview,'button','Pause animation').attributes['aria-pressed'],'false');
 		const css=fs.readFileSync(path.join(__dirname,'../htdocs/luci-static/resources/omr/profiles.css'),'utf8');
-		assert(css.includes('.is-automatic .packet-a') && css.includes('.is-automatic .wan2 .omr-preview-packet'));
-		assert(css.includes('prefers-reduced-motion: reduce') && css.includes('animation: none'));
+		assert(css.includes('omr-preview-canvas') && css.includes('mask-image'));
+		assert(css.includes('prefers-reduced-motion: reduce'));
 		assert(root.textContent.includes('temporarily interrupting the tunnel'));
 	}
 	{

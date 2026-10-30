@@ -99,81 +99,177 @@ function phaseReady(pending) {
 		pending.phase === 'awaiting_confirm' || pending.phase === 'ready');
 }
 
-/* A CSS-only illustration: no traffic or WAN health is sampled.  Its DOM is
- * deliberately outside the periodically redrawn status panel. */
+/* One logical clock drives every protocol, lane and packet. */
 function createPreview() {
 	var selected = '', initialized = false, paused = false, presets = [], choicesSignature = '';
+	var elapsed = 0, lastTick = null, frame = 0, signature = '', disposed = false, wasConnected = false;
+	var raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+	var motion = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+	var resizeObserver = null, removalObserver = null;
 	var select = E('select', { 'aria-label': _('Preview profile') });
+	function svgNode(tag, attrs, text) {
+		var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+		Object.keys(attrs || {}).forEach(function(key) { node.setAttribute(key, String(attrs[key])); });
+		if (text != null) node.textContent = String(text);
+		return node;
+	}
 	function chart(label, protocol) {
 		var explanation = E('p', { 'class': 'omr-preview-explanation' });
-		var packets = [];
-		function track(wan) {
-			var dots = [0, 1, 2].map(function(i) {
-				var dot = E('span', { 'class': 'omr-preview-packet packet-' + String.fromCharCode(97 + i) });
-				packets.push(dot); return dot;
+		var canvas = svgNode('svg', { 'class': 'omr-preview-canvas', 'aria-hidden': 'true', height: 160 });
+		var packets = [], tracks = [];
+		[1, 2].forEach(function(wan) {
+			var group = svgNode('g', { 'class': 'omr-preview-track wan' + wan });
+			var line = svgNode('path', { 'class': 'omr-preview-line', fill: 'none' });
+			var title = svgNode('text', { 'class': 'omr-preview-wan-label' }, _('WAN ') + wan);
+			group.appendChild(line); group.appendChild(title);
+			[0, 1].forEach(function(slot) {
+				var mark = svgNode('g', { 'class': 'omr-preview-packet packet-' + (slot ? 'b' : 'a'), 'data-wan': wan, 'data-slot': slot });
+				var box = svgNode('rect', { x: -12, y: -12, width: 24, height: 24, rx: 12 });
+				var text = svgNode('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' });
+				mark.appendChild(box); mark.appendChild(text); group.appendChild(mark);
+				packets.push({ node: mark, box: box, text: text, wan: wan, slot: slot });
 			});
-			return E('div', { 'class': 'omr-preview-track wan' + wan }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN ') + wan) ].concat(dots));
-		}
+			canvas.appendChild(group); tracks.push({ line: line, title: title });
+		});
+		var routerLabel = svgNode('text', { 'class': 'omr-preview-node-label', x: 24, y: 124, 'text-anchor': 'middle' }, _('Router'));
+		var serverLabel = svgNode('text', { 'class': 'omr-preview-node-label', y: 124, 'text-anchor': 'middle' }, _('VPS'));
+		canvas.appendChild(routerLabel); canvas.appendChild(serverLabel);
 		var diagram = E('div', { 'class': 'omr-preview-diagram', 'aria-hidden': 'true', 'data-protocol': protocol }, [
-			E('span', { 'class': 'omr-preview-endpoint' }, _('Router')),
-			E('div', { 'class': 'omr-preview-wans' }, [ track(1), track(2) ]), E('span', { 'class': 'omr-preview-endpoint' }, _('VPS'))
+			canvas,
+			E('span', { 'class': 'omr-preview-symbol omr-preview-router' }, [ E('i', { 'data-lucide': 'router' }) ]),
+			E('span', { 'class': 'omr-preview-symbol omr-preview-cloud' }, [ E('i', { 'data-lucide': 'cloud' }) ])
 		]);
-		return { diagram: diagram, explanation: explanation, packets: packets, root: E('section', { 'class': 'omr-preview-chart' }, [ E('h5', {}, label), diagram, explanation ]) };
+		return { diagram: diagram, canvas: canvas, tracks: tracks, serverLabel: serverLabel, explanation: explanation, packets: packets,
+			root: E('section', { 'class': 'omr-preview-chart' }, [ E('h5', {}, label), diagram, explanation ]) };
 	}
-	var icmp = chart(_('ICMP'), 'icmp');
-	var tcp = chart(_('TCP'), 'tcp');
-	var udp = chart(_('UDP'), 'udp');
+	var icmp = chart(_('ICMP'), 'icmp'), tcp = chart(_('TCP'), 'tcp'), udp = chart(_('UDP'), 'udp');
+	var charts = [icmp, tcp, udp];
 	var pauseButton = button(_('Pause animation'), false, function() {
-		paused = !paused;
+		paused = !paused; lastTick = null;
 		pauseButton.textContent = paused ? _('Resume animation') : _('Pause animation');
-		render();
+		pauseButton.setAttribute('aria-pressed', paused ? 'true' : 'false');
+		paint(); schedule();
 	}, 'cbi-button-neutral');
+	pauseButton.setAttribute('aria-pressed', 'false');
 	var root = E('section', { 'class': 'omr-preview', 'aria-label': _('Packet path preview') }, [
 		E('h4', {}, _('Packet path preview')),
 		E('p', { 'class': 'omr-profile-detail' }, _('Illustration only — not live traffic, measured performance or WAN health. Preview selection does not apply a profile.')),
 		E('div', { 'class': 'omr-preview-controls' }, [ select, pauseButton ]),
-		E('p', { 'class': 'omr-profile-detail' }, _('Letters, colours and shapes distinguish packets; matching letters are copies. Packet density is illustrative, not measured speed. WAN-bound diagnostic pings and bypass traffic are not shown.')),
+		E('p', { 'class': 'omr-profile-detail' }, _('Distributed sequence: A on WAN 1, B on WAN 2, C on WAN 1, D on WAN 2, then repeat. Matching letters on both WANs are redundant copies. Density is illustrative. WAN-bound diagnostic pings and bypass traffic are not shown.')),
 		icmp.root, tcp.root, udp.root
 	]);
-	function render() {
-		var p = presets.filter(function(item) { return String(item.id) === selected; })[0];
-		var settings = p && p.settings || {};
-		var tcpPath = settings.tcp_scheduler === 'bpf_red' ? 'duplicate' : 'automatic';
-		var mqPath = settings.mq_scheduler === 'wlb' ? 'balanced' :
-			(settings.mq_scheduler === 'minrtt' ? 'minrtt' : 'automatic');
-		var oldTransport = settings.transport === 'glorytun_tcp';
-		var knownTransport = oldTransport || settings.transport === 'mqvpn';
-		var dense = p && (p.id === 'performance' || p.id === 'performance_old');
-		var descriptions = {
-			duplicate: _('Illustration: redundant MPTCP sends a copy of the same packet on both eligible paths.'),
-			balanced: _('Illustration: WLB distributes successive packets across two equally weighted paths.'),
-			minrtt: _('Illustration: minrtt chooses the eligible path with the lowest available RTT; WAN 1 is an example.'),
-			automatic: _('Automatic scheduling can use available paths according to congestion, window and latency; this sequence is one illustration.')
-		};
-		[ [icmp, oldTransport ? tcpPath : mqPath], [tcp, tcpPath], [udp, oldTransport ? tcpPath : mqPath] ].forEach(function(item) {
-			var chartItem = item[0], path = knownTransport ? item[1] : 'unknown', viaTcp = oldTransport || chartItem === tcp;
-			chartItem.diagram.setAttribute('class', 'omr-preview-diagram is-' + path + (dense && path === 'automatic' ? ' is-dense' : '') + (paused ? ' is-paused' : ''));
-			chartItem.packets.forEach(function(dot, index) { dot.textContent = String.fromCharCode(65 + (path === 'duplicate' ? index % 3 : index)); });
-			chartItem.explanation.textContent = !knownTransport ? _('Transport is not recorded in this profile; packet paths cannot be illustrated.') : (!viaTcp && path === 'automatic' ?
-				_('MQVPN path selection depends on its scheduler and eligible paths; this sequence is one illustration.') : descriptions[path]) + ' ' +
-				(oldTransport ? _('Illustration: IP traffic inside Glorytun TCP using MPTCP.') : (chartItem === tcp ? _('Illustration: TCP through the MPTCP proxy; TCP forced into the VPN is not shown.') : _('Illustration: IP traffic inside MQVPN.')));
+	function layout(item) {
+		var width = item.diagram.clientWidth || 320;
+		if (width === item.width) return;
+		item.width = width; item.start = 64; item.end = Math.max(96, width - 64);
+		item.canvas.setAttribute('viewBox', '0 0 ' + width + ' 160');
+		item.serverLabel.setAttribute('x', String(width - 24));
+		item.tracks.forEach(function(track, index) {
+			var y = index ? 112 : 48;
+			track.line.setAttribute('d', 'M42 80 H50 L64 ' + y + ' H' + (width - 64) + ' L' + (width - 50) + ' 80 H' + (width - 42));
+			track.title.setAttribute('x', '64'); track.title.setAttribute('y', String(y - 18));
 		});
 	}
+	function paint() {
+		var still = motion && motion.matches;
+		root.setAttribute('data-preview-time', String(elapsed));
+		charts.forEach(function(item) {
+			layout(item);
+			// Two 24px marks need at least 8px between them. Compact lanes use
+			// one pair at a time instead of squeezing or overlapping marks.
+			var dense = item.dense && item.end - item.start - 24 >= 64;
+			var period = dense ? 4000 : item.dense ? 1800 : 2600;
+			var current = Math.floor(elapsed / period);
+			item.packets.forEach(function(packet) {
+				var progress = (elapsed % period) / period, visible = item.mode !== 'unknown', letter;
+				if (item.mode === 'duplicate' || item.mode === 'minrtt') {
+					visible = visible && packet.slot === 0 && (item.mode === 'duplicate' || packet.wan === 1);
+					letter = item.mode === 'minrtt' ? 'AC'.charAt(still ? 0 : current % 2) : 'ABCD'.charAt(still ? 0 : current % 4);
+					if (still) progress = .5;
+				} else {
+					letter = 'ABCD'.charAt(packet.slot * 2 + packet.wan - 1);
+					if (dense) progress = still ? (.25 + packet.slot * .5) : ((elapsed + packet.slot * 2000) % 4000) / 4000;
+					else { visible = visible && packet.slot === (still ? 0 : current % 2); if (still) progress = .5; }
+				}
+				if (packet.letter !== letter) { packet.text.textContent = letter; packet.letter = letter; }
+				packet.box.setAttribute('rx', item.mode !== 'duplicate' && packet.wan === 2 ? '4' : '12');
+				packet.node.setAttribute('display', visible ? 'inline' : 'none');
+				packet.node.setAttribute('transform', 'translate(' + (item.start + 12 + (item.end - item.start - 24) * progress) + ',' + (packet.wan === 1 ? 48 : 112) + ')');
+			});
+		});
+	}
+	function cleanup() {
+		disposed = true;
+		if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+		frame = 0;
+		if (resizeObserver) resizeObserver.disconnect();
+		if (removalObserver) removalObserver.disconnect();
+		if (motion && motion.removeEventListener) motion.removeEventListener('change', onMotion);
+	}
+	function tick(now) {
+		frame = 0;
+		if (!root.isConnected) { if (wasConnected) cleanup(); lastTick = null; return; }
+		wasConnected = true;
+		if (lastTick != null && !paused && !(motion && motion.matches) && !document.hidden)
+			elapsed += Math.max(0, Math.min(100, now - lastTick));
+		lastTick = now; paint(); schedule();
+	}
+	function schedule() {
+		if (!disposed && !frame && raf && !paused && !(motion && motion.matches)) frame = raf(tick);
+	}
+	function onMotion() { lastTick = null; paint(); schedule(); }
+	if (motion && motion.addEventListener) motion.addEventListener('change', onMotion);
+	if (typeof ResizeObserver === 'function') {
+		resizeObserver = new ResizeObserver(function() { paint(); schedule(); });
+		charts.forEach(function(item) { resizeObserver.observe(item.diagram); });
+	}
+	if (typeof MutationObserver === 'function') {
+		removalObserver = new MutationObserver(function() {
+			if (root.isConnected) { wasConnected = true; schedule(); }
+			else if (wasConnected) cleanup();
+		});
+		removalObserver.observe(document.documentElement, { childList: true, subtree: true });
+	}
+	function render() {
+		var p = presets.filter(function(item) { return String(item.id) === selected; })[0];
+		var settings = p && p.settings || {}, oldTransport = settings.transport === 'glorytun_tcp';
+		var known = oldTransport || settings.transport === 'mqvpn';
+		var tcpPath = settings.tcp_scheduler === 'bpf_red' ? 'duplicate' : 'automatic';
+		var mqPath = settings.mq_scheduler === 'wlb' ? 'balanced' : settings.mq_scheduler === 'minrtt' ? 'minrtt' : 'automatic';
+		var dense = p && (p.id === 'performance' || p.id === 'performance_old');
+		var next = JSON.stringify([selected, oldTransport, known, tcpPath, mqPath, !!dense]);
+		if (next !== signature) { signature = next; elapsed = 0; lastTick = null; }
+		var descriptions = {
+			duplicate: _('Same packet copied on both eligible WANs.'),
+			balanced: _('WLB: successive packets distributed across equally weighted WANs.'),
+			minrtt: _('minrtt: the eligible path with the lowest RTT; WAN 1 is the example.'),
+			automatic: _('Different data on both eligible WANs; actual scheduling depends on congestion and RTT.')
+		};
+		charts.forEach(function(item) {
+			item.mode = known ? (oldTransport || item === tcp ? tcpPath : mqPath) : 'unknown';
+			item.dense = !!dense && (item.mode === 'automatic' || item.mode === 'balanced');
+			item.diagram.setAttribute('class', 'omr-preview-diagram is-' + item.mode + (item.dense ? ' is-dense' : ''));
+			item.explanation.textContent = !known ? _('Transport is not recorded in this profile; packet paths cannot be illustrated.') :
+				(oldTransport ? 'Glorytun TCP / MPTCP. ' : item === tcp ? 'MPTCP proxy. ' : 'MQVPN. ') + descriptions[item.mode];
+		});
+		paint(); schedule();
+	}
 	select.addEventListener('change', function(ev) { selected = ev.target.value; render(); });
-	return { root: root, update: function(state) {
+	return { root: root, dispose: cleanup, update: function(state) {
 		presets = Array.isArray(state.presets) ? state.presets.filter(function(p) { return p && p.id; }) : [];
 		if (!initialized) { selected = String((state.active || {}).id || ''); initialized = true; }
-		var signature = JSON.stringify(presets.map(function(p) { return [p.id, p.name]; }));
-		if (signature !== choicesSignature) {
-			choicesSignature = signature;
+		var names = JSON.stringify(presets.map(function(p) { return [p.id, p.name]; }));
+		if (names !== choicesSignature) {
+			choicesSignature = names;
 			while (select.firstChild) select.removeChild(select.firstChild);
-			presets.forEach(function(p) { select.appendChild(E('option', { value: String(p.id) }, [ String(p.name || p.id) ])); });
+			presets.forEach(function(p) { select.appendChild(E('option', { value: String(p.id) }, [String(p.name || p.id)])); });
 			if (!presets.some(function(p) { return String(p.id) === selected; })) selected = presets.length ? String(presets[0].id) : '';
 			select.value = selected;
 		}
 		render();
 	} };
 }
+
 
 return baseclass.extend({
 	create: function(options) {

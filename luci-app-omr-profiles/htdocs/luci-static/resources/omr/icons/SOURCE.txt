@@ -1,0 +1,4 @@
+Lucide icons, unmodified upstream assets.
+Commit: 5abef78c8ea22e3ab1e8be32508b4378c4f3c045
+Source: https://github.com/lucide-icons/lucide/tree/5abef78c8ea22e3ab1e8be32508b4378c4f3c045
+License: LICENSE.lucide
