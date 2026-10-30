@@ -94,6 +94,71 @@ function phaseReady(pending) {
 		pending.phase === 'awaiting_confirm' || pending.phase === 'ready');
 }
 
+/* A CSS-only illustration: no traffic or WAN health is sampled.  Its DOM is
+ * deliberately outside the periodically redrawn status panel. */
+function createPreview() {
+	var selected = '', initialized = false, paused = false, presets = [], choicesSignature = '';
+	var select = E('select', { 'aria-label': _('Preview profile') });
+	function chart(label, protocol) {
+		var explanation = E('p', { 'class': 'omr-preview-explanation' });
+		var diagram = E('div', { 'class': 'omr-preview-diagram', 'aria-hidden': 'true', 'data-protocol': protocol }, [
+			E('span', { 'class': 'omr-preview-endpoint' }, _('Router')),
+			E('div', { 'class': 'omr-preview-wans' }, [
+				E('div', { 'class': 'omr-preview-track wan1' }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN 1')), E('i', { 'class': 'omr-preview-packet packet-a' }) ]),
+				E('div', { 'class': 'omr-preview-track wan2' }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN 2')), E('i', { 'class': 'omr-preview-packet packet-a' }) ])
+			]), E('span', { 'class': 'omr-preview-endpoint' }, _('VPS'))
+		]);
+		return { diagram: diagram, explanation: explanation, root: E('section', { 'class': 'omr-preview-chart' }, [ E('h5', {}, label), diagram, explanation ]) };
+	}
+	var icmp = chart(_('ICMP / MQVPN'), 'icmp');
+	var tcp = chart(_('TCP / MPTCP proxy'), 'tcp');
+	var udp = chart(_('UDP / MQVPN'), 'udp');
+	var pauseButton = button(_('Pause animation'), false, function() {
+		paused = !paused;
+		pauseButton.textContent = paused ? _('Resume animation') : _('Pause animation');
+		render();
+	}, 'cbi-button-neutral');
+	var root = E('section', { 'class': 'omr-preview', 'aria-label': _('Packet path preview') }, [
+		E('h4', {}, _('Packet path preview')),
+		E('p', { 'class': 'omr-profile-detail' }, _('Illustration only — not live traffic, measured performance or WAN health. Preview selection does not apply a profile.')),
+		E('div', { 'class': 'omr-preview-controls' }, [ select, pauseButton ]),
+		E('p', { 'class': 'omr-profile-detail' }, _('ICMP and UDP illustrate IP traffic inside MQVPN. WAN-bound diagnostic pings are not shown. TCP forced inside the VPN is outside this illustration.')),
+		icmp.root, tcp.root, udp.root
+	]);
+	function render() {
+		var p = presets.filter(function(item) { return String(item.id) === selected; })[0];
+		var settings = p && p.settings || {};
+		var tcpPath = settings.tcp_scheduler === 'bpf_red' ? 'duplicate' : 'automatic';
+		var mqPath = settings.mq_scheduler === 'wlb' ? 'balanced' :
+			(settings.mq_scheduler === 'minrtt' ? 'minrtt' : 'automatic');
+		var descriptions = {
+			duplicate: _('Illustration: redundant MPTCP sends a copy of the same packet on both eligible paths.'),
+			balanced: _('Illustration: WLB distributes successive packets across two equally weighted paths.'),
+			minrtt: _('Illustration: minrtt chooses the lower-latency eligible path; WAN 1 is an example.'),
+			automatic: _('Automatic scheduling can use available paths according to congestion, window and latency; this sequence is one illustration.')
+		};
+		[ [icmp, mqPath], [tcp, tcpPath], [udp, mqPath] ].forEach(function(item) {
+			item[0].diagram.setAttribute('class', 'omr-preview-diagram is-' + item[1] + (paused ? ' is-paused' : ''));
+			item[0].explanation.textContent = item[0] !== tcp && item[1] === 'automatic' ?
+				_('MQVPN path selection depends on its scheduler and eligible paths; this sequence is one illustration.') : descriptions[item[1]];
+		});
+	}
+	select.addEventListener('change', function(ev) { selected = ev.target.value; render(); });
+	return { root: root, update: function(state) {
+		presets = Array.isArray(state.presets) ? state.presets.filter(function(p) { return p && p.id; }) : [];
+		if (!initialized) { selected = String((state.active || {}).id || ''); initialized = true; }
+		var signature = JSON.stringify(presets.map(function(p) { return [p.id, p.name]; }));
+		if (signature !== choicesSignature) {
+			choicesSignature = signature;
+			while (select.firstChild) select.removeChild(select.firstChild);
+			presets.forEach(function(p) { select.appendChild(E('option', { value: String(p.id) }, [ String(p.name || p.id) ])); });
+			if (!presets.some(function(p) { return String(p.id) === selected; })) selected = presets.length ? String(presets[0].id) : '';
+			select.value = selected;
+		}
+		render();
+	} };
+}
+
 return baseclass.extend({
 	create: function(options) {
 		installStyle();
@@ -112,7 +177,9 @@ return baseclass.extend({
 		var lastSignature = '', message = '', messageIsError = false, statusFailure = '';
 		var methods = [ 'apply', 'save', 'delete', 'confirm', 'rollback' ];
 		var customSelection = '';
+		var preview = full ? createPreview() : null;
 
+		if (preview) root.appendChild(preview.root);
 		root.appendChild(content);
 
 		function showMessage(text, isError) {
@@ -236,6 +303,7 @@ return baseclass.extend({
 				return;
 			}
 			var active = state.active || {};
+			if (preview) preview.update(state);
 			var pending = state.pending || null;
 			var activeName = active.name || _('Current configuration');
 			content.appendChild(E('div', { 'class': 'omr-profile-current' }, [
@@ -276,7 +344,7 @@ return baseclass.extend({
 					'role': state.last_result.ok === false ? 'alert' : 'status'
 				}, [ String(state.last_result.message) ]));
 			}
-			content.appendChild(E('p', { 'class': 'omr-profile-help' }, _('Profile changes can briefly interrupt connections. Performance depends on your links.')));
+			content.appendChild(E('p', { 'class': 'omr-profile-help' }, _('Applying a profile can restart router and VPS services, temporarily interrupting the tunnel and existing connections. Performance depends on your links.')));
 			if (accessLoaded && !access.apply)
 				content.appendChild(E('p', { 'class': 'omr-profile-detail' }, _('Your account can view profiles but cannot apply them.')));
 			var all = Array.isArray(state.presets) ? state.presets : [];

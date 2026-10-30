@@ -113,6 +113,47 @@ async function ready() { await tick(); await tick(); }
 async function refresh(f) { await Promise.all(f.polls.map(p=>p())); await ready(); }
 async function tests() {
 	{
+		const f=fixture({apply:true});
+		f.state.presets[1].settings.mq_scheduler='wlb';
+		f.state.presets[1].available=false;
+		f.state.presets[2].settings.mq_scheduler='minrtt';
+		const root=f.mod.create({full:true});
+		await ready();
+		const preview=nodes(root).find(n=>n.attributes && n.attributes.class==='omr-preview');
+		const profile=nodes(preview).find(n=>n.attributes && n.attributes['aria-label']==='Preview profile');
+		const diagrams=nodes(preview).filter(n=>n.attributes && n.attributes['data-protocol']);
+		const diagram=protocol=>diagrams.find(n=>n.attributes['data-protocol']===protocol);
+		const set=(element,value)=>{ element.value=value; element.listeners.change({target:element}); };
+		assert.strictEqual(profile.value,'default');
+		assert.strictEqual(diagrams.length,3);
+		assert(diagram('tcp').attributes.class.includes('is-automatic'));
+		assert(preview.textContent.includes('this sequence is one illustration'));
+		assert(preview.textContent.includes('WAN-bound diagnostic pings are not shown'));
+		set(profile,'gaming');
+		assert(diagram('tcp').attributes.class.includes('is-duplicate'));
+		assert(preview.textContent.includes('same packet'));
+		assert(diagram('icmp').attributes.class.includes('is-minrtt'));
+		assert(diagram('udp').attributes.class.includes('is-minrtt'));
+		set(profile,'performance');
+		assert(diagram('icmp').attributes.class.includes('is-balanced'));
+		assert(diagram('udp').attributes.class.includes('is-balanced'));
+		assert(preview.textContent.includes('equally weighted'));
+		assert.strictEqual(f.calls.filter(c=>c.method==='apply').length,0, 'preview must not apply');
+		const card=nodes(root).find(n=>n.attributes && n.attributes.class==='omr-profile-name' && n.textContent==='Performance').parentNode;
+		assert(find(card,'button','Use profile').disabled, 'preview of an unavailable profile does not enable apply');
+		find(preview,'button','Pause animation').click();
+		assert(diagrams.every(d=>d.attributes.class.includes('is-paused')));
+		f.state.active.id='gaming'; await refresh(f);
+		assert.strictEqual(profile.value,'performance', 'poll preserves preview selection');
+		assert.strictEqual(nodes(root).find(n=>n===preview),preview, 'poll does not rebuild the preview');
+		find(preview,'button','Resume animation').click();
+		assert(diagrams.every(d=>!d.attributes.class.includes('is-paused')));
+		const css=fs.readFileSync(path.join(__dirname,'../htdocs/luci-static/resources/omr/profiles.css'),'utf8');
+		assert(css.includes('.is-automatic .packet-a') && css.includes('.is-automatic .wan2 .packet-a'));
+		assert(css.includes('prefers-reduced-motion: reduce') && css.includes('animation: none'));
+		assert(root.textContent.includes('temporarily interrupting the tunnel'));
+	}
+	{
 		const f=fixture({}), root=f.mod.create({full:true}); await ready();
 		assert(find(root,'button','Restore default').disabled);
 		assert(find(root,'button','Use profile').disabled);

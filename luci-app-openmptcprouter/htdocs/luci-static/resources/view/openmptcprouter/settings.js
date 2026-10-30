@@ -204,7 +204,7 @@ return view.extend({
 		this._wireguardStates = wireguardStates;
 		o = s.option(form.Flag, '_wireguard_remote_lan',
 			_('Allow remote WireGuard access to LAN'),
-			_('Permit this server\'s WireGuard clients to reach the router LAN. Add the LAN subnet to the client AllowedIPs (or use 0/0). Internet access remains available; router HTTP and HTTPS at its VPN address remain available for recovery.'));
+			_('Global permission for remote WireGuard access to the router LAN. New clients created with omr-wg-manager also need an individual LAN grant; legacy clients follow this switch. Add the LAN subnet to the client AllowedIPs (or use 0/0). Internet access and router HTTP/HTTPS recovery remain available.'));
 		o.rmempty = false;
 		o.cfgvalue = function(section_id) {
 			var state = wireguardStates[section_id];
