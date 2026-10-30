@@ -1,0 +1,6 @@
+#!/bin/sh
+# Save only the VPN device, without committing other staged network changes.
+case "$1" in ''|*[!A-Za-z0-9_.-]*|.|..) exit 1;; esac
+[ "${#1}" -le 15 ] || exit 1
+exec /usr/bin/timeout 20 /usr/bin/flock -x -w 10 /etc/config/network \
+	/usr/bin/lua /usr/libexec/omr-profiles/uci-isolated network device "$1"

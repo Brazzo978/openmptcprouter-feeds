@@ -60,11 +60,11 @@ function fixture(allowed) {
 			fec_enable:'0',auth_key:'secret-must-not-render'},
 		remote_current: {mq_scheduler:'wlb',reorder_enabled:'0'},
 		presets: [
-			{id:'default',name:'Default',builtin:true,available:true,settings:{tcp_cc:'bbr'}},
-			{id:'performance',name:'Performance',builtin:true,available:true,settings:{tcp_cc:'nanbbr3_light'}},
-			{id:'gaming',name:'Gaming',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red'}},
+			{id:'default',name:'Default',builtin:true,available:true,settings:{tcp_cc:'bbr',transport:'mqvpn'}},
+			{id:'performance',name:'Performance',builtin:true,available:true,settings:{tcp_cc:'nanbbr3_light',transport:'mqvpn'}},
+			{id:'gaming',name:'Gaming',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',transport:'mqvpn'}},
 			{id:'p_1234',name:'<img src=x onerror=alert(1)>',builtin:false,available:true,settings:{mq_cc:'bbr2'},remote_settings:{reorder_enabled:'0'}}
-		], pending: null, last_result: null, capabilities:{age_seconds:4}
+		], pending: null, last_result: null, capabilities:{age_seconds:4}, quick:{a:'default',b:'gaming'}
 	};
 	let failure = null, statusFailure = false, holdStatus = false, releaseStatus = null;
 	const rpc = {declare: function(def) {
@@ -82,6 +82,7 @@ function fixture(allowed) {
 				return Promise.resolve(snapshot);
 			}
 			if (failure) return Promise.resolve({ok:false,error:failure});
+			if (def.method === 'set_quick') { state.quick={a:args[0],b:args[1]}; return Promise.resolve({ok:true}); }
 			if (def.method === 'apply') {
 				state.pending = {transaction:'abc123',id:args[0],name:'Candidate',phase:'awaiting_confirm',seconds_remaining:60};
 				return Promise.resolve({ok:true,transaction:'abc123'});
@@ -117,6 +118,8 @@ async function tests() {
 		f.state.presets[1].settings.mq_scheduler='wlb';
 		f.state.presets[1].available=false;
 		f.state.presets[2].settings.mq_scheduler='minrtt';
+		f.state.presets.push({id:'stability_old',name:'Stability old',builtin:true,available:true,settings:{transport:'glorytun_tcp',tcp_scheduler:'bpf_red'}});
+		f.state.presets.push({id:'performance_old',name:'Performance old',builtin:true,available:true,settings:{transport:'glorytun_tcp',tcp_scheduler:'default'}});
 		const root=f.mod.create({full:true});
 		await ready();
 		const preview=nodes(root).find(n=>n.attributes && n.attributes.class==='omr-preview');
@@ -128,16 +131,34 @@ async function tests() {
 		assert.strictEqual(diagrams.length,3);
 		assert(diagram('tcp').attributes.class.includes('is-automatic'));
 		assert(preview.textContent.includes('this sequence is one illustration'));
-		assert(preview.textContent.includes('WAN-bound diagnostic pings are not shown'));
+		assert(preview.textContent.includes('WAN-bound diagnostic pings and bypass traffic are not shown'));
 		set(profile,'gaming');
 		assert(diagram('tcp').attributes.class.includes('is-duplicate'));
 		assert(preview.textContent.includes('same packet'));
 		assert(diagram('icmp').attributes.class.includes('is-minrtt'));
 		assert(diagram('udp').attributes.class.includes('is-minrtt'));
 		set(profile,'performance');
+		set(profile,'p_1234');
+		assert(diagrams.every(d=>d.attributes.class.includes('is-unknown')));
+		assert(preview.textContent.includes('Transport is not recorded'));
+		set(profile,'performance');
 		assert(diagram('icmp').attributes.class.includes('is-balanced'));
 		assert(diagram('udp').attributes.class.includes('is-balanced'));
 		assert(preview.textContent.includes('equally weighted'));
+		set(profile,'stability_old');
+		assert(diagrams.every(d=>d.attributes.class.includes('is-duplicate')));
+		assert(preview.textContent.includes('Glorytun TCP'));
+		for (const d of diagrams) {
+			const packets=nodes(d).filter(n=>n.attributes&&String(n.attributes.class||'').includes('packet-a'));
+			assert.strictEqual(packets[0].textContent,packets[1].textContent);
+		}
+		set(profile,'performance_old');
+		assert(diagrams.every(d=>d.attributes.class.includes('is-dense')));
+		for (const d of diagrams) {
+			const packets=nodes(d).filter(n=>n.attributes&&String(n.attributes.class||'').includes('packet-a'));
+			assert.notStrictEqual(packets[0].textContent,packets[1].textContent);
+		}
+		set(profile,'performance');
 		assert.strictEqual(f.calls.filter(c=>c.method==='apply').length,0, 'preview must not apply');
 		const card=nodes(root).find(n=>n.attributes && n.attributes.class==='omr-profile-name' && n.textContent==='Performance').parentNode;
 		assert(find(card,'button','Use profile').disabled, 'preview of an unavailable profile does not enable apply');
@@ -149,9 +170,38 @@ async function tests() {
 		find(preview,'button','Resume animation').click();
 		assert(diagrams.every(d=>!d.attributes.class.includes('is-paused')));
 		const css=fs.readFileSync(path.join(__dirname,'../htdocs/luci-static/resources/omr/profiles.css'),'utf8');
-		assert(css.includes('.is-automatic .packet-a') && css.includes('.is-automatic .wan2 .packet-a'));
+		assert(css.includes('.is-automatic .packet-a') && css.includes('.is-automatic .wan2 .omr-preview-packet'));
 		assert(css.includes('prefers-reduced-motion: reduce') && css.includes('animation: none'));
 		assert(root.textContent.includes('temporarily interrupting the tunnel'));
+	}
+	{
+		const f=fixture({apply:true,set_quick:true,confirm:true,rollback:true}), root=f.mod.create({full:false}); await ready();
+		const toggle=()=>nodes(root).find(n=>n.tagName==='input' && n.attributes.role==='switch');
+		assert(!toggle().attributes.checked && !toggle().disabled);
+		assert(find(root,'button','A: Default').disabled);
+		assert(!find(root,'button','B: Gaming').disabled);
+		let a=nodes(root).find(n=>n.attributes&&n.attributes['aria-label']==='Quick profile A');
+		a.value='performance'; a.listeners.change({target:a});
+		f.holdNextStatus(); const oldPoll=f.polls[0]();
+		const saving=find(root,'button','Save quick profiles').click(); await ready();
+		f.releaseStatus(); await Promise.all([oldPoll,saving]); await ready();
+		assert.deepStrictEqual(f.state.quick,{a:'performance',b:'gaming'});
+		assert.strictEqual(nodes(root).find(n=>n.attributes&&n.attributes['aria-label']==='Quick profile A').value,'performance');
+		assert.strictEqual(f.calls.filter(c=>c.method==='apply').length,0, 'saving quick pair does not apply');
+		assert(root.textContent.includes('outside this pair'));
+		assert(toggle().disabled, 'outside pair must not imply A');
+		find(root,'button','A: Performance').click(); await ready();
+		assert.strictEqual(f.calls.filter(c=>c.method==='apply').length,1);
+		assert(root.textContent.includes('last confirmed profile remains unchanged'));
+		assert(find(root,'button','A: Performance').disabled && find(root,'button','B: Gaming').disabled && toggle().disabled);
+		assert.strictEqual(find(root,'button','A: Performance').attributes['aria-pressed'],'false', 'pending target is not shown as confirmed');
+		await find(root,'button','Keep profile').click(); await ready();
+		assert.strictEqual(find(root,'button','A: Performance').attributes['aria-pressed'],'true');
+		assert(!toggle().disabled && !toggle().attributes.checked);
+		toggle().listeners.change({target:toggle()}); await ready();
+		assert(!toggle().attributes.checked && toggle().disabled, 'switch remains on confirmed A during pending B');
+		await find(root,'button','Keep profile').click(); await ready();
+		assert(toggle().attributes.checked, 'switch moves to B after confirmation');
 	}
 	{
 		const f=fixture({}), root=f.mod.create({full:true}); await ready();
@@ -219,7 +269,7 @@ async function tests() {
 		assert(!root.textContent.includes('Unable to contact the profile service.'));
 	}
 	{
-		const f=fixture({apply:true}), root=f.mod.create({full:false}); await ready();
+		const f=fixture({apply:true}), root=f.mod.create({full:true}); await ready();
 		f.state.active={id:'performance',name:'Performance',modified:false,server_match:false};
 		await refresh(f);
 		assert(root.textContent.includes('VPS settings differ from this profile.'));

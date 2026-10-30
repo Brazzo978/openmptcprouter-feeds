@@ -66,8 +66,15 @@ start_instance() {
 	key=""
 
 	if [ "$(uci -q get network.omrvpn)" != "" ]; then
-		uci -q set network.omrvpn.device=${dev}
-		uci -q commit network
+		if [ -x /usr/libexec/omr-profiles/network-device ]; then
+			/usr/libexec/omr-profiles/network-device "$dev" || {
+				_err "Unable to safely update the tunnel device"
+				return 1
+			}
+		else
+			uci -q set network.omrvpn.device="${dev}"
+			uci -q commit network
+		fi
 	fi
 
 	_log "starting ${PROG_NAME} ${1} instance $*"

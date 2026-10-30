@@ -17,6 +17,18 @@
 .omr-profile-panel .omr-profile-summary { margin: .8rem 0; }
 .omr-profile-panel .omr-profile-summary dt { font-weight: 600; margin-top: .3rem; }
 .omr-profile-panel .omr-profile-summary dd { margin-left: 0; overflow-wrap: anywhere; }
+.omr-profile-panel .omr-quick-switch { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; }
+.omr-profile-panel .omr-quick-choice { max-width: 100%; overflow-wrap: anywhere; border: 1px solid #aab5c2; border-radius: 5px; padding: .45em .7em; cursor: pointer; }
+.omr-profile-panel .omr-quick-choice.is-active { border-color: #1686c7; background: rgba(22,134,199,.1); opacity: 1; }
+.omr-profile-panel .omr-quick-toggle { appearance: none; -webkit-appearance: none; display: inline-block; flex: 0 0 auto; box-sizing: border-box; position: relative; width: 54px; height: 30px; margin: 0; padding: 0; border: 1px solid #708397; border-radius: 18px; background: #b3beca; cursor: pointer; }
+.omr-profile-panel .omr-quick-toggle::before { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.4); transition: transform .15s ease; }
+.omr-profile-panel .omr-quick-toggle:checked { background: #1686c7; }
+.omr-profile-panel .omr-quick-toggle:checked::before { transform: translateX(24px); }
+.omr-profile-panel .omr-quick-toggle:focus-visible { outline: 3px solid #174f9b; outline-offset: 2px; }
+.omr-profile-panel .omr-quick-toggle:disabled { opacity: .48; cursor: not-allowed; }
+.omr-profile-panel .omr-quick-config { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; }
+.omr-profile-panel .omr-quick-choice { max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.omr-profile-panel .omr-quick-config select { max-width: 100%; min-width: 0; }
 @media (max-width: 680px) {
   .omr-profile-panel .omr-profile-grid,
   .omr-profile-panel.omr-profile-panel-full .omr-profile-grid { grid-template-columns: minmax(0, 1fr); }
@@ -32,21 +44,24 @@
 .omr-profile-panel .omr-preview-wans { flex: 1; min-width: 80px; }
 .omr-profile-panel .omr-preview-track { position: relative; height: 35px; border-bottom: 2px solid #a7b9c8; margin: 0 .35em 1em; }
 .omr-profile-panel .omr-preview-wan-label { position: absolute; bottom: 5px; left: 0; font-size: .8em; color: #596b78; }
-.omr-profile-panel .omr-preview-packet { position: absolute; bottom: -6px; left: 0; width: 10px; height: 10px; border-radius: 50%; background: #1686c7; display: none; animation: omr-preview-packet 3s linear infinite; }
+.omr-profile-panel .omr-preview-packet { position: absolute; bottom: -9px; left: 0; width: 18px; height: 18px; line-height: 18px; text-align: center; color: white; font-size: 11px; font-weight: bold; border-radius: 50%; background: #1686c7; display: none; animation: omr-preview-packet 3s linear infinite; }
 .omr-profile-panel .omr-preview-diagram[data-protocol="icmp"] .omr-preview-packet { background: #a15ec4; }
 .omr-profile-panel .omr-preview-diagram[data-protocol="udp"] .omr-preview-packet { background: #188858; }
 .omr-profile-panel .omr-preview-diagram.is-automatic .packet-a,
 .omr-profile-panel .omr-preview-diagram.is-minrtt .wan1 .packet-a,
 .omr-profile-panel .omr-preview-diagram.is-duplicate .packet-a,
 .omr-profile-panel .omr-preview-diagram.is-balanced .packet-a { display: block; }
-.omr-profile-panel .omr-preview-diagram.is-balanced .packet-a,
-.omr-profile-panel .omr-preview-diagram.is-automatic .packet-a { animation: omr-preview-alternate 6s linear infinite; }
-.omr-profile-panel .omr-preview-diagram.is-balanced .wan2 .packet-a,
-.omr-profile-panel .omr-preview-diagram.is-automatic .wan2 .packet-a { animation-delay: -3s; }
+.omr-profile-panel .omr-preview-diagram.is-automatic .wan2 .omr-preview-packet { background: #df7420; border-radius: 2px; }
+.omr-profile-panel .omr-preview-diagram.is-automatic.is-dense .omr-preview-packet { display: block; }
+.omr-profile-panel .omr-preview-diagram.is-dense .packet-b { animation-delay: -1s; }
+.omr-profile-panel .omr-preview-diagram.is-dense .packet-c { animation-delay: -2s; }
+.omr-profile-panel .omr-preview-diagram.is-balanced .packet-a { animation: omr-preview-alternate 6s linear infinite; }
+.omr-profile-panel .omr-preview-diagram.is-balanced .wan2 .packet-a { animation-delay: -3s; }
 .omr-profile-panel .omr-preview-diagram.is-paused .omr-preview-packet { animation-play-state: paused; }
 .omr-profile-panel .omr-preview-explanation { margin: 0; font-size: .9em; }
-@keyframes omr-preview-packet { from { left: 0; } to { left: calc(100% - 10px); } }
-@keyframes omr-preview-alternate { 0% { left: 0; visibility: visible; } 49.9% { left: calc(100% - 10px); visibility: visible; } 50%, 100% { left: calc(100% - 10px); visibility: hidden; } }
+@keyframes omr-preview-packet { from { left: 0; } to { left: calc(100% - 18px); } }
+@keyframes omr-preview-alternate { 0% { left: 0; visibility: visible; } 49.9% { left: calc(100% - 18px); visibility: visible; } 50%, 100% { left: calc(100% - 18px); visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) {
 	.omr-profile-panel .omr-preview .omr-preview-diagram .omr-preview-packet { animation: none; left: 45%; }
+	.omr-profile-panel .omr-quick-toggle::before { transition: none; }
 }

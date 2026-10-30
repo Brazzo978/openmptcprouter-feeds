@@ -22,13 +22,15 @@ button{cursor:pointer;background:#e6eef8}button:disabled{opacity:.48;cursor:defa
 'use strict';
 String.prototype.format=function(){let i=0,args=arguments;return this.replace(/%s/g,()=>String(args[i++]));};
 const state={
- ok:true, active:{id:'default',name:'Default',modified:false,server_match:true}, pending:null,last_result:null,capabilities:{age_seconds:2},
+ ok:true, active:{id:'default',name:'Default',modified:false,server_match:true}, pending:null,last_result:null,capabilities:{age_seconds:2},quick:{a:'default',b:'gaming'},
  current:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',fec_enable:'0',fec_scheme:'xor',reinjection_control:'0',reorder_enabled:'1'},
  remote_current:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'0'},
  presets:[
-  {id:'default',name:'Default',builtin:true,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'1'},remote_settings:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'0'}},
-  {id:'performance',name:'Performance',builtin:true,available:true,settings:{tcp_scheduler:'default',tcp_cc:'nanbbr3_light',mq_scheduler:'wlb',mq_cc:'bbr2'}},
-  {id:'gaming',name:'Gaming',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2'}},
+  {id:'default',name:'Default',builtin:true,available:true,settings:{transport:'mqvpn',tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'1'},remote_settings:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'0'}},
+  {id:'performance',name:'Performance',builtin:true,available:true,settings:{transport:'mqvpn',tcp_scheduler:'default',tcp_cc:'nanbbr3_light',mq_scheduler:'wlb',mq_cc:'bbr2'}},
+  {id:'gaming',name:'Stability / Gaming',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',transport:'mqvpn'}},
+  {id:'performance_old',name:'Performance (old)',builtin:true,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',transport:'glorytun_tcp',proxy:'none'}},
+  {id:'stability_old',name:'Stability (old)',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',tcp_cc:'bbr',transport:'glorytun_tcp',proxy:'none'}},
   {id:'p_123',name:'Evening',builtin:false,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',fec_enable:'1'},remote_settings:{mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'0'}}
  ]
 };
@@ -43,6 +45,7 @@ function E(tag,attrs,children){
 const rpc={declare:d=>function(...args){
  if(d.object==='session')return Promise.resolve(true);
  if(d.method==='status')return Promise.resolve(JSON.parse(JSON.stringify(state)));
+ if(d.method==='set_quick'){state.quick={a:args[0],b:args[1]};return Promise.resolve({ok:true});}
  if(d.method==='apply'){
   const p=state.presets.find(x=>x.id===args[0]);state.pending={transaction:'preview',id:p.id,name:p.name,phase:'awaiting_confirm',seconds_remaining:60};state.last_result=null;
  }

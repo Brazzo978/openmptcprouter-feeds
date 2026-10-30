@@ -25,6 +25,7 @@ local function paired()
     assert(server=='vps1')
     local route=action;local method='GET';local body
     if action=='status' then route='status?transaction='..tx
+    elseif action=='capabilities' then route='capabilities?version=2'
     elseif action~='capabilities' then
       method='POST';body=clone(payload or {});body.transaction=tx
     end
@@ -42,6 +43,10 @@ local function paired()
   return a,m
 end
 local function check(v,message) assert(v,message or 'Contract assertion failed') end
+local function fixture_action(name)
+  local p=assert(io.popen('curl -s --max-time 3 -X POST '..quote(base..'/fixtures/'..name)))
+  local response=p:read('*a');p:close();check(response=='ok')
+end
 local function apply(a,m,id)
   local r=m:apply(id);check(r and r.ok,r and r.error);m:tick();return r.transaction
 end
@@ -72,13 +77,66 @@ a,m=paired();local saved=m:save('Asymmetric current');check(saved.ok,saved.error
 local p=m:find_profile(saved.id);check(p.remote_settings.mqvpn.reorder.enabled=='off')
 tx=apply(a,m,saved.id);check(a.journal.phase=='awaiting_confirm')
 check(m:rollback(tx).ok);m:tick();check(not a.journal)
-print('PASS: Default asymmetry, Performance + lost confirm, Gaming timeout rollback, custom save/revert across Lua and Python managers')
+
+-- Switch to both old presets; restore the previous Xray proxy and its flags.
+fixture_action('xray')
+a,m=paired();a.transport.proxy='xray';a.transport.xray_enabled='1'
+a.transport.ss_rules_disabled='1';a.transport['ssserver:sss0']='1'
+check(m:set_quick('performance_old','stability_old').ok)
+check(m:status().quick.a=='performance_old' and m:status().quick.b=='stability_old')
+tx=apply(a,m,'performance_old');check(a.journal.phase=='awaiting_confirm')
+check(a.transport.vpn=='glorytun_tcp' and a.transport.proxy=='none' and a.transport.glory_mptcp=='1')
+check(m:confirm(tx).ok);m:tick();check(a.baseline.proxy=='xray')
+tx=apply(a,m,'gaming');check(a.journal.phase=='awaiting_confirm')
+check(a.transport.vpn=='mqvpn' and a.transport.proxy=='xray' and a.transport.xray_enabled=='1')
+check(m:confirm(tx).ok);m:tick()
+tx=apply(a,m,'stability_old');check(a.journal.phase=='awaiting_confirm')
+check(a.raw.tcp_scheduler=='bpf_red' and a.transport.proxy=='none')
+check(m:rollback(tx).ok);m:tick();check(a.transport.vpn=='mqvpn' and a.transport.proxy=='xray')
+
+-- A failed route update must roll back the server selection and local flags.
+fixture_action('fail_route')
+tx=apply(a,m,'performance_old');check(a.journal.phase=='rolling_back')
+m:tick();check(not a.journal and a.transport.vpn=='mqvpn' and a.transport.proxy=='xray')
+check(a:cached_capabilities().current.selection.vpn=='mqvpn')
+print('PASS: five profiles, asymmetric custom, quick pair, route failure, timeout, lost confirm and transport rollback across Lua/Python')
 '''
+
+
+class TransportRuntime(FakeRuntime):
+    """Kernel/service effects are simulated; ProfileManager is the real code."""
+    def __init__(self):
+        super().__init__()
+        self.value['selection']={'vpn':'mqvpn','proxy':'shadowsocks-rust',
+                                 'global_vpn':'mqvpn','global_proxy':'shadowsocks-rust'}
+        self.remote_ip='10.255.220.2'
+        self.fail_route=False
+    def availability(self):
+        return {**super().availability(),'transports':['mqvpn','glorytun_tcp'],
+                'proxies':['none','shadowsocks-rust','xray']}
+    def snapshot(self,target):
+        return {'value':copy.deepcopy(self.value),'remote_ip':self.remote_ip}
+    def apply(self,target):
+        self.applies+=1
+        self.value['mptcp'].update(target['mptcp'])
+        if target.get('mqvpn') is not None:self.value['mqvpn'].update(target['mqvpn'])
+        self.value['selection']={'vpn':target['transport'],'proxy':target['proxy'],
+             'global_vpn':target['transport'],'global_proxy':target['proxy']}
+    def restore(self,old):
+        self.restores+=1
+        self.value=copy.deepcopy(old['value']);self.remote_ip=old['remote_ip']
+    def expected_remote(self,vpn):
+        return {'mqvpn':'10.255.220.2','glorytun_tcp':'10.255.255.2'}[vpn]
+    def apply_route(self,vpn,remote):
+        if self.fail_route:
+            self.fail_route=False
+            raise RuntimeError('injected route failure')
+        self.remote_ip=remote
 
 class PairedContract(unittest.TestCase):
     def test_router_and_vps_transactions(self):
         with tempfile.TemporaryDirectory(prefix='omr-profile-contract-') as td:
-            runtime=FakeRuntime();initial_secrets=copy.deepcopy(runtime.secrets)
+            runtime=TransportRuntime();initial_secrets=copy.deepcopy(runtime.secrets)
             # All three algorithms are intentionally supported by the kernel fixture.
             manager=omr_profiles.ProfileManager(runtime,Path(td)/'journal',Path(td)/'lock',
                 window=240,clock=lambda:1000.,monotonic=lambda:200.,boot_id=lambda:'contract',enable_timer=False)
@@ -92,16 +150,23 @@ class PairedContract(unittest.TestCase):
                 def do_GET(self):
                     route=urlparse(self.path)
                     try:
-                        if route.path=='/profiles/capabilities':value=manager.capabilities()
+                        if route.path=='/profiles/capabilities':value=manager.capabilities(int(parse_qs(route.query).get('version',['1'])[0]))
                         elif route.path=='/profiles/status':value=manager.status(parse_qs(route.query)['transaction'][0])
                         else:raise AssertionError(route.path)
                         self.respond(200,value)
                     except omr_profiles.ProfileError as e:self.respond(e.status,{'error':e.detail})
                 def do_POST(self):
+                    if self.path=='/fixtures/xray':
+                        runtime.value['selection'].update({'proxy':'xray','global_proxy':'xray'})
+                        body=b'ok';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+                    if self.path=='/fixtures/fail_route':
+                        runtime.fail_route=True
+                        body=b'ok';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
                     data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                     tx=data.pop('transaction');events.append((self.path,copy.deepcopy(data)))
                     try:
                         if self.path=='/profiles/apply':value=manager.apply(tx,data)
+                        elif self.path=='/profiles/route':value=manager.route(tx,data['vpnremoteip'])
                         elif self.path=='/profiles/confirm':
                             value=manager.finish(tx,True)
                             if not dropped_confirm[0] and runtime.current()['mptcp']['congestion_control']=='nanbbr3_light':
@@ -124,8 +189,8 @@ class PairedContract(unittest.TestCase):
                 self.assertIn('PASS:',result.stdout)
                 self.assertTrue(dropped_confirm[0])
                 self.assertEqual(runtime.secrets,initial_secrets)
-                self.assertEqual(runtime.applies,4)
-                self.assertEqual(runtime.restores,2)
+                self.assertEqual(runtime.applies,8)
+                self.assertEqual(runtime.restores,4)
                 for path,body in events:
                     self.assertNotIn('auth_key',json.dumps(body))
                 print(result.stdout.strip())

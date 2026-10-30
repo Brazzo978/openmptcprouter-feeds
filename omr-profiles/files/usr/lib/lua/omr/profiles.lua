@@ -1,6 +1,7 @@
 -- 3K profiles: transaction logic. All storage, UCI and network operations are
 -- provided by an adapter, so failure/recovery behavior can be tested offline.
 local M = {}
+local transport = require 'omr.profile_transport'
 
 local fields = {
   tcp_scheduler = {"network", "globals", "mptcp_scheduler", "default"},
@@ -20,14 +21,19 @@ M.fields = fields
 
 local builtins = {
   {id="default", name="Default", builtin=true, settings={
+    transport="mqvpn", proxy="shadowsocks-rust",
     tcp_scheduler="default", tcp_cc="bbr", tcp_nanbbr_aggressiveness="50",
     mq_scheduler="minrtt", mq_cc="bbr2", fec_enable="0", fec_scheme="reed_solomon",
     reinjection_control="0", reinjection_mode="default", reorder_enabled="1",
     reorder_max_wait_ms="30", reorder_cap_packets="1024"}},
   {id="performance", name="Performance", builtin=true, settings={
-    tcp_scheduler="default", tcp_cc="nanbbr3_light", mq_scheduler="wlb", mq_cc="bbr2"}},
-  {id="gaming", name="Gaming", builtin=true, settings={
-    tcp_scheduler="bpf_red", tcp_cc="bbr", mq_scheduler="minrtt", mq_cc="bbr2"}}
+    transport="mqvpn", tcp_scheduler="default", tcp_cc="nanbbr3_light", mq_scheduler="wlb", mq_cc="bbr2"}},
+  {id="gaming", name="Stability / Gaming", builtin=true, settings={
+    transport="mqvpn", tcp_scheduler="bpf_red", tcp_cc="bbr", mq_scheduler="minrtt", mq_cc="bbr2"}},
+  {id="performance_old", name="Performance (old)", builtin=true, settings={
+    transport="glorytun_tcp", proxy="none", tcp_scheduler="default", tcp_cc="bbr"}},
+  {id="stability_old", name="Stability (old)", builtin=true, settings={
+    transport="glorytun_tcp", proxy="none", tcp_scheduler="bpf_red", tcp_cc="bbr"}}
 }
 local lookup = {}
 for _, p in ipairs(builtins) do lookup[p.id] = p end
@@ -74,11 +80,13 @@ local function allowed_values(s, complete)
   if type(s) ~= 'table' then return false end
   local count = 0
   for k, v in pairs(s) do
-    if not fields[k] or type(v) ~= 'string' then return false end
+    if not fields[k] and k~='transport' and k~='proxy' or type(v) ~= 'string' then return false end
     count = count + 1
   end
   if complete then for key in pairs(fields) do if s[key] == nil then return false end end end
   if count == 0 then return false end
+  if s.transport and not transport.vpn(s.transport) then return false end
+  if s.proxy and not transport.proxy(s.proxy) then return false end
   if s.tcp_scheduler and (not s.tcp_scheduler:match('^[a-zA-Z0-9_]+$') or #s.tcp_scheduler > 32) then return false end
   if s.tcp_cc and (not s.tcp_cc:match('^[a-zA-Z0-9_]+$') or #s.tcp_cc > 32) then return false end
   if s.tcp_nanbbr_aggressiveness and not integer(s.tcp_nanbbr_aggressiveness, 1, 100) then return false end
@@ -137,6 +145,8 @@ end
 
 local function to_remote(settings)
   local p = {mptcp={}, mqvpn={}}
+  p.transport=settings.transport
+  p.proxy=settings.proxy
   if settings.tcp_scheduler then p.mptcp.scheduler = settings.tcp_scheduler end
   if settings.tcp_cc then p.mptcp.congestion_control = settings.tcp_cc end
   if settings.tcp_nanbbr_aggressiveness then
@@ -154,6 +164,7 @@ local function to_remote(settings)
     if settings.reorder_max_wait_ms then p.mqvpn.reorder.max_wait_ms = tonumber(settings.reorder_max_wait_ms) end
     if settings.reorder_cap_packets then p.mqvpn.reorder.cap_packets = tonumber(settings.reorder_cap_packets) end
   end
+  if settings.transport=='glorytun_tcp' then p.mqvpn=nil end
   return p
 end
 M.to_remote = to_remote
@@ -161,8 +172,20 @@ M.to_remote = to_remote
 -- Only these scalar tuning settings may be persisted. In particular, reject
 -- rather than save a full /config response containing addresses or credentials.
 local function sanitize_remote(current)
-  if type(current)~='table' or type(current.mptcp)~='table' or type(current.mqvpn)~='table' then return nil end
+  if type(current)~='table' or type(current.mptcp)~='table' then return nil end
   local m,q=current.mptcp,current.mqvpn
+  local selection=current.selection
+  if selection~=nil and (type(selection)~='table' or not transport.vpn(selection.vpn) or not transport.proxy(selection.proxy)) then return nil end
+  if selection and ((selection.global_vpn~=nil and not transport.vpn(selection.global_vpn)) or
+     (selection.global_proxy~=nil and not transport.proxy(selection.global_proxy))) then return nil end
+  if not q and selection and selection.vpn=='glorytun_tcp' then
+    local flat={tcp_scheduler=m.scheduler,tcp_cc=m.congestion_control}
+    if m.nanbbr_aggressiveness~=nil then flat.tcp_nanbbr_aggressiveness=tostring(m.nanbbr_aggressiveness) end
+    if not allowed_values(flat,false) then return nil end
+    return {mptcp=to_remote(flat).mptcp,selection={vpn=selection.vpn,proxy=selection.proxy,
+      global_vpn=selection.global_vpn,global_proxy=selection.global_proxy}}
+  end
+  if type(q)~='table' then return nil end
   if type(m.scheduler)~='string' or type(m.congestion_control)~='string' or
      type(q.scheduler)~='string' or type(q.cc)~='string' or type(q.fec_enable)~='boolean' or
      type(q.fec_scheme)~='string' or type(q.reinjection_control)~='boolean' or
@@ -179,12 +202,20 @@ local function sanitize_remote(current)
   if not allowed_values(flat, false) then return nil end
   local clean=to_remote(flat)
   clean.mqvpn.reorder.enabled=r.enabled -- preserve server-only "auto"
+  if selection then clean.selection={vpn=selection.vpn,proxy=selection.proxy,
+    global_vpn=selection.global_vpn,global_proxy=selection.global_proxy} end
   return clean
 end
 M.sanitize_remote = sanitize_remote
 
 local function remote_for_profile(p)
-  if not p.builtin then return sanitize_remote(p.remote_settings) end
+  if not p.builtin then
+    local result=sanitize_remote(p.remote_settings)
+    if not result or not result.selection then return nil end
+    result.transport=result.selection.vpn;result.proxy=result.selection.proxy;result.selection=nil
+    if result.transport=='glorytun_tcp' then result.mqvpn=nil end
+    return result
+  end
   local settings=to_remote(p.settings)
   if p.id=='default' then
     -- The 3K client UCI enables reorder and defaults to reed_solomon; the
@@ -197,11 +228,17 @@ local function remote_for_profile(p)
 end
 
 local function remote_matches(current, desired)
-  if type(current) ~= 'table' then return false end
+  if type(current) ~= 'table' or type(desired)~='table' then return false end
+  if desired.transport and (type(current.selection)~='table' or current.selection.vpn~=desired.transport) then return false end
+  if desired.proxy and (type(current.selection)~='table' or current.selection.proxy~=desired.proxy) then return false end
+  if desired.transport and current.selection.global_vpn~=desired.transport then return false end
+  if desired.proxy and current.selection.global_proxy~=desired.proxy then return false end
   local function deep(actual, wanted)
     if type(actual) ~= 'table' or type(wanted) ~= 'table' then return false end
     for k, v in pairs(wanted) do
-      if type(v) == 'table' then
+      if k=='transport' or k=='proxy' then
+        -- These correspond to current.selection above.
+      elseif type(v) == 'table' then
         if not deep(actual[k], v) then return false end
       elseif tostring(actual[k]) ~= tostring(v) then return false end
     end
@@ -211,11 +248,13 @@ local function remote_matches(current, desired)
 end
 
 local function remote_available(cap, settings)
-  if type(cap) ~= 'table' or cap.supported ~= true or tonumber(cap.version) ~= 1 or
+  if type(cap) ~= 'table' or cap.supported ~= true or tonumber(cap.version) ~= 2 or
      type(cap.current) ~= 'table' or type(cap.availability) ~= 'table' then
     return false, 'VPS profile API unavailable; update the VPS before switching profiles.'
   end
   local a = cap.availability
+  if settings.transport and not contains(a.transports,settings.transport) then return false,'Selected VPN transport is unavailable on the VPS.' end
+  if settings.proxy and not contains(a.proxies,settings.proxy) then return false,'Selected proxy is unavailable on the VPS.' end
   for _, pair in ipairs({{'tcp_scheduler','tcp_schedulers'},{'tcp_cc','tcp_cc'},
       {'mq_scheduler','mq_schedulers'},{'mq_cc','mq_cc'},{'fec_scheme','fec_schemes'}}) do
     if settings[pair[1]] and not (pair[1]=='fec_scheme' and settings.fec_enable=='0') and
@@ -227,20 +266,24 @@ local function remote_available(cap, settings)
 end
 
 local function remote_flat(settings)
-  if type(settings)~='table' or type(settings.mptcp)~='table' or type(settings.mqvpn)~='table' then return {} end
-  return {tcp_scheduler=settings.mptcp.scheduler,tcp_cc=settings.mptcp.congestion_control,
-    mq_scheduler=settings.mqvpn.scheduler,mq_cc=settings.mqvpn.cc,fec_scheme=settings.mqvpn.fec_scheme,
-    fec_enable=settings.mqvpn.fec_enable==nil and nil or (settings.mqvpn.fec_enable and '1' or '0')}
+  if type(settings)~='table' or type(settings.mptcp)~='table' then return {} end
+  local q=settings.mqvpn or {}
+  local out={tcp_scheduler=settings.mptcp.scheduler,tcp_cc=settings.mptcp.congestion_control,
+    transport=settings.transport,proxy=settings.proxy,mq_scheduler=q.scheduler,mq_cc=q.cc,fec_scheme=q.fec_scheme}
+  if q.fec_enable~=nil then out.fec_enable=q.fec_enable and '1' or '0' end
+  return out
 end
 
 local function remote_display(settings)
-  if type(settings)~='table' or type(settings.mptcp)~='table' or type(settings.mqvpn)~='table' then return nil end
-  local m,q=settings.mptcp,settings.mqvpn
+  if type(settings)~='table' or type(settings.mptcp)~='table' then return nil end
+  local m,q=settings.mptcp,settings.mqvpn or {}
   local r=q.reorder or {}
   local out={tcp_scheduler=m.scheduler,tcp_cc=m.congestion_control,mq_scheduler=q.scheduler,mq_cc=q.cc,
     fec_scheme=q.fec_scheme,reinjection_mode=q.reinjection_mode,
     reorder_max_wait_ms=r.max_wait_ms and tostring(r.max_wait_ms),
     reorder_cap_packets=r.cap_packets and tostring(r.cap_packets)}
+  out.transport=settings.transport or (settings.selection and settings.selection.vpn)
+  out.proxy=settings.proxy or (settings.selection and settings.selection.proxy)
   if m.nanbbr_aggressiveness~=nil then out.tcp_nanbbr_aggressiveness=tostring(m.nanbbr_aggressiveness) end
   if q.fec_enable~=nil then out.fec_enable=q.fec_enable and '1' or '0' end
   if q.reinjection_control~=nil then out.reinjection_control=q.reinjection_control and '1' or '0' end
@@ -252,14 +295,23 @@ local Model = {}
 Model.__index = Model
 function M.new(adapter) return setmetatable({a=adapter}, Model) end
 
-function Model:profiles()
+function Model:profiles(state)
   local result = {}
-  for _, p in ipairs(builtins) do result[#result+1] = {id=p.id,name=p.name,builtin=true,settings=shallow_copy(p.settings)} end
+  state=state or self.a:read_transport()
+  local baseline=self.a:get_mq_baseline()
+  for _, p in ipairs(builtins) do
+    local settings=shallow_copy(p.settings)
+    if not settings.proxy then
+      settings.proxy=(state and state.vpn=='mqvpn' and state.proxy) or
+        (baseline and baseline.proxy) or (state and state.proxy)
+    end
+    result[#result+1] = {id=p.id,name=p.name,builtin=true,settings=settings}
+  end
   for _, p in ipairs(self.a:custom_list() or {}) do
     if valid_id(p.id) and p.id:match('^p_') and safe_name(p.name) and allowed_values(p.settings, true)
        and sanitize_remote(p.remote_settings) then
       result[#result+1] = {id=p.id,name=p.name,builtin=false,settings=shallow_copy(p.settings),
-        remote_settings=sanitize_remote(p.remote_settings)}
+        transport_state=p.transport_state,remote_settings=sanitize_remote(p.remote_settings)}
     end
   end
   return result
@@ -270,27 +322,69 @@ function Model:find_profile(id)
   for _, p in ipairs(self:profiles()) do if p.id == id then return p end end
 end
 
+function Model:quick(excluded, profiles)
+  local stored=self.a:get_quick() or {}
+  profiles=profiles or self:profiles()
+  local function exists(id)
+    if id==excluded then return false end
+    for _,profile in ipairs(profiles) do if profile.id==id then return true end end
+    return false
+  end
+  local a=exists(stored.a) and stored.a or nil
+  local b=exists(stored.b) and stored.b or nil
+  if not a then a=b~='default' and 'default' or 'gaming' end
+  if not b or b==a then b=a~='gaming' and 'gaming' or 'default' end
+  return {a=a,b=b}
+end
+
+function Model:set_quick(a,b)
+  if not valid_id(a) or not valid_id(b) or a==b then
+    return {ok=false,error='Choose two different existing profiles.'}
+  end
+  return self.a:locked(function()
+    local pending,err=self.a:read_journal()
+    if pending or err then return {ok=false,error='Finish the pending profile change first.'} end
+    if not self:find_profile(a) or not self:find_profile(b) then
+      return {ok=false,error='Choose two different existing profiles.'}
+    end
+    if not self.a:set_quick({a=a,b=b}) then return {ok=false,error='Unable to save quick profiles.'} end
+    return {ok=true}
+  end)
+end
+
 function Model:status()
   local a = self.a
   local raw = a:read_raw()
   if not raw then return {ok=false,error='Unable to read the current router settings.'} end
   local current = a:current_effective(raw)
   if not current then return {ok=false,error='Unable to read active router tuning.'} end
+  local local_transport=a:read_transport()
+  if not transport.snapshot_valid(local_transport) then return {ok=false,error='Unable to read active router transport.'} end
+  current.transport=local_transport.vpn;current.proxy=local_transport.proxy
   local active_id = a:get_active() or 'default'
-  local active = self:find_profile(active_id) or self:find_profile('default')
   local cap, cap_reason, cap_age = a:cached_capabilities()
-  local local_ok, local_reason = a:local_ready()
-  local list = self:profiles()
+  local local_ok, local_reason = a:local_ready(local_transport)
+  local list = self:profiles(local_transport)
+  local active
+  for _,profile in ipairs(list) do if profile.id==active_id then active=profile end end
+  if not active then active=list[1] end
+  -- Keep raw, nested VPS data separately before transforming rows for the UI.
+  local remote_active=remote_for_profile(active)
+  local quick=self:quick(nil,list)
   for _, p in ipairs(list) do
     local reasons = {}
     if not local_ok then reasons[#reasons+1] = local_reason end
     local have_local, why_local = a:local_available(p.settings)
     if not have_local then reasons[#reasons+1] = why_local end
+    if not p.builtin and (not p.settings.transport or not p.settings.proxy or not transport.snapshot_valid(p.transport_state)) then
+      reasons[#reasons+1]='This older custom profile lacks transport settings; save it again.'
+    end
     local have_remote, why_remote = remote_available(cap, remote_flat(remote_for_profile(p)))
     if not have_remote then reasons[#reasons+1] = cap_reason or why_remote end
     p.available = #reasons == 0
     p.unavailable_reasons = reasons
     p.remote_settings = remote_display(remote_for_profile(p))
+    p.transport_state=nil
   end
   local pending, journal_err = a:read_journal()
   local public = nil
@@ -303,11 +397,11 @@ function Model:status()
     public = {phase='rollback_failed',error='The recovery journal is unreadable. Restore the configuration before changing profiles.',seconds_remaining=0}
   end
   local remote_match = nil
-  if cap then remote_match = remote_matches(cap.current,remote_for_profile(active)) end
+  if cap then remote_match = remote_matches(cap.current,remote_active) end
   return {ok=true,active={id=active.id,name=active.name,
       modified=not matches(current,active.settings) or remote_match==false,server_match=remote_match},
-    presets=list,current=current,remote_current=cap and remote_display(cap.current),pending=public,last_result=a:read_last(),capabilities={
-      local_ready=local_ok, vps_ready=type(cap)=='table' and cap.supported==true and tonumber(cap.version)==1,
+    presets=list,quick=quick,current=current,remote_current=cap and remote_display(cap.current),pending=public,last_result=a:read_last(),capabilities={
+      local_ready=local_ok, vps_ready=type(cap)=='table' and cap.supported==true and tonumber(cap.version)==2,
       age_seconds=cap_age}}
 end
 
@@ -320,6 +414,9 @@ function Model:save(name)
     if not raw then return {ok=false,error='Unable to read the current router settings.'} end
     local settings = self.a:current_effective(raw)
     if not settings then return {ok=false,error='Unable to read active router tuning.'} end
+    local local_transport=self.a:read_transport()
+    if not transport.snapshot_valid(local_transport) then return {ok=false,error='Unable to read active router transport.'} end
+    settings.transport=local_transport.vpn;settings.proxy=local_transport.proxy
     if not allowed_values(settings, true) then return {ok=false,error='The current settings cannot be saved safely.'} end
     local ready, why = self.a:local_ready()
     if not ready then return {ok=false,error=why} end
@@ -330,20 +427,34 @@ function Model:save(name)
     -- can race this snapshot. Abort if the router values changed meanwhile.
     local cap = self.a:remote(server,'capabilities','00000000000000000000000000000000',nil,8)
     local remote = cap and sanitize_remote(cap.current)
-    if not cap or cap.supported~=true or tonumber(cap.version)~=1 or not remote then
+    if not cap or cap.supported~=true or tonumber(cap.version)~=2 or not remote or not remote.selection then
       return {ok=false,error='Unable to read current VPS settings. Try again when the VPS is reachable.'}
+    end
+    if remote.selection.global_vpn~=remote.selection.vpn or remote.selection.global_proxy~=remote.selection.proxy then
+      return {ok=false,error='VPS user and global transport selections differ; reconcile them before saving.'}
+    end
+    if remote.selection.vpn~=local_transport.vpn or remote.selection.proxy~=local_transport.proxy then
+      return {ok=false,error='Router and VPS transport selections differ; reconcile them before saving.'}
     end
     local after=self.a:read_raw()
     if not after then return {ok=false,error='Unable to read the current router settings.'} end
     for key in pairs(fields) do
       if raw[key]~=after[key] then return {ok=false,error='Router settings changed while saving; try again.'} end
     end
+    local after_transport=self.a:read_transport()
+    if not after_transport then return {ok=false,error='Unable to read active router transport.'} end
+    for key,value in pairs(local_transport) do
+      if after_transport[key]~=value then return {ok=false,error='Router settings changed while saving; try again.'} end
+    end
+    for key in pairs(after_transport) do
+      if local_transport[key]==nil then return {ok=false,error='Router settings changed while saving; try again.'} end
+    end
     local profiles = self.a:custom_list() or {}
     if #profiles >= 32 then return {ok=false,error='The custom profile limit is 32.'} end
-    for _, p in ipairs(self:profiles()) do if p.name:lower() == name:lower() then return {ok=false,error='A profile with this name already exists.'} end end
+    for _, p in ipairs(self:profiles(local_transport)) do if p.name:lower() == name:lower() then return {ok=false,error='A profile with this name already exists.'} end end
     local id = 'p_' .. (self.a:random_id() or '')
     if not valid_id(id) then return {ok=false,error='Unable to create a profile identifier.'} end
-    if not self.a:save_custom(id, name, settings, remote) then return {ok=false,error='Unable to save the profile.'} end
+    if not self.a:save_custom(id, name, settings, remote, local_transport) then return {ok=false,error='Unable to save the profile.'} end
     return {ok=true,id=id}
   end)
 end
@@ -354,7 +465,8 @@ function Model:delete(id)
     local pending, err = self.a:read_journal()
     if pending or err then return {ok=false,error='Finish the pending profile change first.'} end
     if not self:find_profile(id) then return {ok=false,error='Profile not found.'} end
-    if not self.a:delete_custom(id) then return {ok=false,error='Unable to delete the profile.'} end
+    local replacement=self:quick(id)
+    if not self.a:delete_custom(id,replacement) then return {ok=false,error='Unable to delete the profile.'} end
     if self.a:get_active() == id then self.a:set_active('default') end
     return {ok=true}
   end)
@@ -381,12 +493,22 @@ function Model:apply(id)
     if not raw then return {ok=false,error='Unable to read the current router settings.'} end
     local before_effective=self.a:current_effective(raw)
     if not before_effective then return {ok=false,error='Unable to read active router tuning.'} end
+    local before_transport=self.a:read_transport()
+    if not transport.snapshot_valid(before_transport) then return {ok=false,error='Unable to read active router transport.'} end
+    before_effective.transport=before_transport.vpn;before_effective.proxy=before_transport.proxy
+    if not profile.builtin and not transport.snapshot_valid(profile.transport_state) then
+      return {ok=false,error='This older custom profile lacks transport settings; save it again.'}
+    end
+    local target_transport=transport.plan(before_transport,profile.settings.transport,profile.settings.proxy,
+      self.a:get_mq_baseline(),profile.transport_state)
+    if not target_transport then return {ok=false,error='Transport settings are unavailable or conflict with another VPN.'} end
     local target = target_from(before_effective, profile.settings)
     if not allowed_values(target, true) then return {ok=false,error='Profile settings are invalid.'} end
     local id128 = self.a:random_id()
     if not valid_tx(id128) then return {ok=false,error='Unable to create a transaction.'} end
     local j = {transaction=id128,id=profile.id,name=profile.name,server=server,phase='queued',
       boot_id=self.a:boot_id(),created_mono=self.a:monotonic(),before=raw,before_effective=before_effective,changes=profile.settings,
+      before_transport=before_transport,target_transport=target_transport,
       target=target,remote_target=remote_target,remote_started=false,local_started=false}
     if not self.a:write_journal(j) then return {ok=false,error='Unable to start profile transaction.'} end
     self.a:heartbeat()
@@ -470,13 +592,20 @@ function Model:run_apply(j)
     cur.local_started=true; cur.step='local_apply'; return a:write_journal(cur)
   end)
   if not marked_local then return end
-  local ok = a:write_effective(j.changes) and a:restart_and_verify(j.target)
+  local ok = a:write_effective(j.changes) and a:write_transport(j.target_transport) and
+    a:restart_and_verify(j.target,nil,j.target_transport,j.before_transport,j.id=='default')
+  if ok then
+    local address=a:route_ip(j.target)
+    local route=address and a:remote(j.server,'route',j.transaction,{vpnremoteip=address})
+    ok=route and route.result=='done' and route.transaction==j.transaction and
+      route.state=='pending' and route.route_ready==true
+  end
   if ok then
     local verify = a:remote(j.server, 'capabilities', j.transaction)
     ok = verify and remote_matches(verify.current, remote_target)
   end
   local server_status = ok and a:remote(j.server,'status',j.transaction) or nil
-  ok = ok and server_status and server_status.result=='done' and server_status.state=='pending' and
+  ok = ok and server_status and server_status.result=='done' and server_status.state=='pending' and server_status.route_ready==true and
        type(server_status.seconds_remaining)=='number' and server_status.seconds_remaining>=70
   a:locked(function()
     local cur=a:read_journal()
@@ -496,7 +625,7 @@ function Model:run_rollback(j)
   -- Restore local configuration first, then remote settings, then restart the
   -- local tunnel. Verifying the old local tunnel against the still-new VPS
   -- settings would otherwise cause a spurious rollback failure.
-  local local_restored = not j.local_started or a:restore_raw(j.before)
+  local local_restored = not j.local_started or (a:restore_raw(j.before) and a:restore_transport(j.before_transport))
   local remote_ok = not j.remote_started
   if j.remote_started then
     local reply=a:remote(j.server,'rollback',j.transaction)
@@ -504,7 +633,7 @@ function Model:run_rollback(j)
     remote_ok = (status and status.result=='done' and status.state=='rolled_back') or
                 (reply and reply.result=='done' and reply.state=='rolled_back')
   end
-  local local_ok = local_restored and (not j.local_started or a:restart_and_verify(j.before_effective,j.before))
+  local local_ok = local_restored and (not j.local_started or a:restart_and_verify(j.before_effective,j.before,j.before_transport,j.target_transport))
   a:locked(function()
     local cur=a:read_journal()
     if not cur or cur.transaction~=j.transaction or cur.phase~='rolling_back' then return end
@@ -529,7 +658,7 @@ function Model:run_confirm(j)
     local cur=a:read_journal()
     if not cur or cur.transaction~=j.transaction or cur.phase~='confirming' then return end
     if state=='confirmed' then
-      if a:set_active(cur.id) then
+      if a:set_active(cur.id,cur) then
         a:write_last({ok=true,message='Profile applied.',profile_id=cur.id}); a:clear_journal()
       else
         cur.error='VPS confirmed; waiting to save the local active profile.'; a:write_journal(cur)

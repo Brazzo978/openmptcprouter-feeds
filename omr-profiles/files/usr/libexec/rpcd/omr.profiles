@@ -5,12 +5,12 @@ local profiles=require 'omr.profiles'
 
 if arg[1]=='list' then
   -- rpcd's schemas are JSON objects; a Lua empty table serializes as [].
-  print('{"status":{},"save":{"name":""},"apply":{"id":""},"confirm":{"transaction":""},"rollback":{"transaction":""},"delete":{"id":""}}')
+  print('{"status":{},"save":{"name":""},"apply":{"id":""},"confirm":{"transaction":""},"rollback":{"transaction":""},"delete":{"id":""},"set_quick":{"a":"","b":""}}')
   os.exit(0)
 end
 if arg[1]~='call' then os.exit(1) end
 local method=arg[2]
-if method~='status' and method~='save' and method~='apply' and method~='confirm' and method~='rollback' and method~='delete' then
+if method~='status' and method~='save' and method~='apply' and method~='confirm' and method~='rollback' and method~='delete' and method~='set_quick' then
   print('{"ok":false,"error":"Unknown operation."}'); os.exit(0)
 end
 local input=io.stdin:read(8193) or ''
@@ -24,6 +24,7 @@ local ok,result=pcall(function()
   if method=='apply' then return m:apply(request.id) end
   if method=='confirm' then return m:confirm(request.transaction) end
   if method=='rollback' then return m:rollback(request.transaction) end
+  if method=='set_quick' then return m:set_quick(request.a,request.b) end
   return m:delete(request.id)
 end)
 if not ok or type(result)~='table' then result={ok=false,error='Profiles service unavailable or busy.'} end

@@ -8,7 +8,7 @@
     },
     "write": {
       "ubus": {
-        "omr.profiles": ["save", "apply", "confirm", "rollback", "delete"]
+        "omr.profiles": ["save", "apply", "confirm", "rollback", "delete", "set_quick"]
       }
     }
   }

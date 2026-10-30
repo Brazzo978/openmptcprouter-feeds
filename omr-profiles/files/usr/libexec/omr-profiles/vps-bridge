@@ -16,17 +16,17 @@ uci() {
 	command uci "$@"
 }
 case "$action" in
-	capabilities) route=profiles/capabilities; method=GET ;;
+	capabilities) route='profiles/capabilities?version=2'; method=GET ;;
 	status|confirm|rollback)
 		case "$transaction" in *[!a-f0-9]*|'') echo '{"error":"Invalid transaction"}'; exit 1;; esac
 		[ "${#transaction}" = 32 ] || { echo '{"error":"Invalid transaction"}'; exit 1; }
 		route="profiles/$action"; method=POST
 		[ "$action" != status ] || { method=GET; route="profiles/status?transaction=$transaction"; }
 		payload="{\"transaction\":\"$transaction\"}" ;;
-	apply)
+	apply|route)
 		case "$transaction" in *[!a-f0-9]*|'') echo '{"error":"Invalid transaction"}'; exit 1;; esac
 		[ "${#transaction}" = 32 ] || { echo '{"error":"Invalid transaction"}'; exit 1; }
-		method=POST; route=profiles/apply
+		method=POST; route="profiles/$action"
 		# Mode-0600 file contains only permitted tuning values, never keys.
 		payload="$(cat /var/run/omr-profiles/request.json 2>/dev/null)"
 		[ -n "$payload" ] || { echo '{"error":"Missing profile payload"}'; exit 1; } ;;

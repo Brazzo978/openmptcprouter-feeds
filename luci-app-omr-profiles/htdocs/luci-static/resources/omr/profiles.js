@@ -21,6 +21,9 @@ var callRollback = rpc.declare({
 var callDelete = rpc.declare({
 	object: 'omr.profiles', method: 'delete', params: [ 'id' ], expect: { '': {} }
 });
+var callSetQuick = rpc.declare({
+	object: 'omr.profiles', method: 'set_quick', params: [ 'a', 'b' ], expect: { '': {} }
+});
 var callAccess = rpc.declare({
 	object: 'session', method: 'access', params: [ 'scope', 'object', 'function' ],
 	expect: { access: false }
@@ -29,6 +32,8 @@ var callAccess = rpc.declare({
 var fields = [
 	[ 'tcp_scheduler', _('MPTCP scheduler') ],
 	[ 'tcp_cc', _('TCP congestion control') ],
+	[ 'transport', _('VPN transport') ],
+	[ 'proxy', _('Proxy') ],
 	[ 'tcp_nanbbr_aggressiveness', _('NanBBR aggressiveness') ],
 	[ 'mq_scheduler', _('MQVPN scheduler') ],
 	[ 'mq_cc', _('MQVPN congestion control') ],
@@ -101,18 +106,23 @@ function createPreview() {
 	var select = E('select', { 'aria-label': _('Preview profile') });
 	function chart(label, protocol) {
 		var explanation = E('p', { 'class': 'omr-preview-explanation' });
+		var packets = [];
+		function track(wan) {
+			var dots = [0, 1, 2].map(function(i) {
+				var dot = E('span', { 'class': 'omr-preview-packet packet-' + String.fromCharCode(97 + i) });
+				packets.push(dot); return dot;
+			});
+			return E('div', { 'class': 'omr-preview-track wan' + wan }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN ') + wan) ].concat(dots));
+		}
 		var diagram = E('div', { 'class': 'omr-preview-diagram', 'aria-hidden': 'true', 'data-protocol': protocol }, [
 			E('span', { 'class': 'omr-preview-endpoint' }, _('Router')),
-			E('div', { 'class': 'omr-preview-wans' }, [
-				E('div', { 'class': 'omr-preview-track wan1' }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN 1')), E('i', { 'class': 'omr-preview-packet packet-a' }) ]),
-				E('div', { 'class': 'omr-preview-track wan2' }, [ E('span', { 'class': 'omr-preview-wan-label' }, _('WAN 2')), E('i', { 'class': 'omr-preview-packet packet-a' }) ])
-			]), E('span', { 'class': 'omr-preview-endpoint' }, _('VPS'))
+			E('div', { 'class': 'omr-preview-wans' }, [ track(1), track(2) ]), E('span', { 'class': 'omr-preview-endpoint' }, _('VPS'))
 		]);
-		return { diagram: diagram, explanation: explanation, root: E('section', { 'class': 'omr-preview-chart' }, [ E('h5', {}, label), diagram, explanation ]) };
+		return { diagram: diagram, explanation: explanation, packets: packets, root: E('section', { 'class': 'omr-preview-chart' }, [ E('h5', {}, label), diagram, explanation ]) };
 	}
-	var icmp = chart(_('ICMP / MQVPN'), 'icmp');
-	var tcp = chart(_('TCP / MPTCP proxy'), 'tcp');
-	var udp = chart(_('UDP / MQVPN'), 'udp');
+	var icmp = chart(_('ICMP'), 'icmp');
+	var tcp = chart(_('TCP'), 'tcp');
+	var udp = chart(_('UDP'), 'udp');
 	var pauseButton = button(_('Pause animation'), false, function() {
 		paused = !paused;
 		pauseButton.textContent = paused ? _('Resume animation') : _('Pause animation');
@@ -122,7 +132,7 @@ function createPreview() {
 		E('h4', {}, _('Packet path preview')),
 		E('p', { 'class': 'omr-profile-detail' }, _('Illustration only — not live traffic, measured performance or WAN health. Preview selection does not apply a profile.')),
 		E('div', { 'class': 'omr-preview-controls' }, [ select, pauseButton ]),
-		E('p', { 'class': 'omr-profile-detail' }, _('ICMP and UDP illustrate IP traffic inside MQVPN. WAN-bound diagnostic pings are not shown. TCP forced inside the VPN is outside this illustration.')),
+		E('p', { 'class': 'omr-profile-detail' }, _('Letters, colours and shapes distinguish packets; matching letters are copies. Packet density is illustrative, not measured speed. WAN-bound diagnostic pings and bypass traffic are not shown.')),
 		icmp.root, tcp.root, udp.root
 	]);
 	function render() {
@@ -131,16 +141,22 @@ function createPreview() {
 		var tcpPath = settings.tcp_scheduler === 'bpf_red' ? 'duplicate' : 'automatic';
 		var mqPath = settings.mq_scheduler === 'wlb' ? 'balanced' :
 			(settings.mq_scheduler === 'minrtt' ? 'minrtt' : 'automatic');
+		var oldTransport = settings.transport === 'glorytun_tcp';
+		var knownTransport = oldTransport || settings.transport === 'mqvpn';
+		var dense = p && (p.id === 'performance' || p.id === 'performance_old');
 		var descriptions = {
 			duplicate: _('Illustration: redundant MPTCP sends a copy of the same packet on both eligible paths.'),
 			balanced: _('Illustration: WLB distributes successive packets across two equally weighted paths.'),
-			minrtt: _('Illustration: minrtt chooses the lower-latency eligible path; WAN 1 is an example.'),
+			minrtt: _('Illustration: minrtt chooses the eligible path with the lowest available RTT; WAN 1 is an example.'),
 			automatic: _('Automatic scheduling can use available paths according to congestion, window and latency; this sequence is one illustration.')
 		};
-		[ [icmp, mqPath], [tcp, tcpPath], [udp, mqPath] ].forEach(function(item) {
-			item[0].diagram.setAttribute('class', 'omr-preview-diagram is-' + item[1] + (paused ? ' is-paused' : ''));
-			item[0].explanation.textContent = item[0] !== tcp && item[1] === 'automatic' ?
-				_('MQVPN path selection depends on its scheduler and eligible paths; this sequence is one illustration.') : descriptions[item[1]];
+		[ [icmp, oldTransport ? tcpPath : mqPath], [tcp, tcpPath], [udp, oldTransport ? tcpPath : mqPath] ].forEach(function(item) {
+			var chartItem = item[0], path = knownTransport ? item[1] : 'unknown', viaTcp = oldTransport || chartItem === tcp;
+			chartItem.diagram.setAttribute('class', 'omr-preview-diagram is-' + path + (dense && path === 'automatic' ? ' is-dense' : '') + (paused ? ' is-paused' : ''));
+			chartItem.packets.forEach(function(dot, index) { dot.textContent = String.fromCharCode(65 + (path === 'duplicate' ? index % 3 : index)); });
+			chartItem.explanation.textContent = !knownTransport ? _('Transport is not recorded in this profile; packet paths cannot be illustrated.') : (!viaTcp && path === 'automatic' ?
+				_('MQVPN path selection depends on its scheduler and eligible paths; this sequence is one illustration.') : descriptions[path]) + ' ' +
+				(oldTransport ? _('Illustration: IP traffic inside Glorytun TCP using MPTCP.') : (chartItem === tcp ? _('Illustration: TCP through the MPTCP proxy; TCP forced into the VPN is not shown.') : _('Illustration: IP traffic inside MQVPN.')));
 		});
 	}
 	select.addEventListener('change', function(ev) { selected = ev.target.value; render(); });
@@ -175,8 +191,8 @@ return baseclass.extend({
 		});
 		var state = null, access = {}, accessLoaded = false, busy = false, loading = null;
 		var lastSignature = '', message = '', messageIsError = false, statusFailure = '';
-		var methods = [ 'apply', 'save', 'delete', 'confirm', 'rollback' ];
-		var customSelection = '';
+		var methods = [ 'apply', 'save', 'delete', 'confirm', 'rollback', 'set_quick' ];
+		var quickA = '', quickB = '', quickInitialized = false;
 		var preview = full ? createPreview() : null;
 
 		if (preview) root.appendChild(preview.root);
@@ -224,12 +240,18 @@ return baseclass.extend({
 				else if (call === callSave) {
 					nameInput.value = '';
 					showMessage(_('Profile saved.'), false);
+				} else if (call === callSetQuick) {
+					quickInitialized = false;
+					message = _('Quick profiles saved.'); messageIsError = false; lastSignature = '';
 				} else {
 					lastSignature = '';
 				}
 				// An older poll may have started before the mutation. Wait for it
 				// and fetch again before re-enabling buttons.
-				return refresh().then(refresh).then(function() {
+				return refresh().then(function() {
+					if (call === callSetQuick && result && result.ok === true) quickInitialized = false;
+					return refresh();
+				}).then(function() {
 					busy = false; lastSignature = ''; draw();
 				});
 			}, function() {
@@ -282,6 +304,50 @@ return baseclass.extend({
 			if (unavailable) children.push(E('p', { 'class': 'omr-profile-detail' }, [ unavailableText ]));
 			children.push(E('div', { 'class': 'omr-profile-actions' }, actions));
 			return E('div', { 'class': 'omr-profile-card' + (current ? ' is-active' : '') }, children);
+		}
+
+		function quickControls(all, active, pending) {
+			var quick = state.quick || { a: 'default', b: 'gaming' };
+			if (!quickInitialized) { quickA = String(quick.a || 'default'); quickB = String(quick.b || 'gaming'); quickInitialized = true; }
+			var confirmed = active && !active.modified ? String(active.id || '') : '';
+			function preset(id) { return all.filter(function(p) { return String(p.id) === id; })[0]; }
+			function choose(side, id) {
+				var p = preset(id), isActive = confirmed === id;
+				var attrs = { type: 'button', 'class': 'omr-quick-choice' + (isActive ? ' is-active' : ''),
+					'aria-pressed': isActive ? 'true' : 'false', click: function() { applyProfile(p); } };
+				if (busy || pending || !access.apply || !p || p.available === false || isActive) attrs.disabled = 'disabled';
+				return E('button', attrs, [ side + ': ' + (p ? String(p.name || p.id) : _('Unavailable')) ]);
+			}
+			function selector(side, value) {
+				var opts = all.map(function(p) { return E('option', { value: String(p.id) }, [ String(p.name || p.id) ]); });
+				var el = E('select', { 'aria-label': _('Quick profile ') + side }, opts);
+				el.value = value; el.disabled = busy || !!pending || !access.set_quick;
+				el.addEventListener('change', function(ev) { if (side === 'A') quickA = ev.target.value; else quickB = ev.target.value; });
+				return el;
+			}
+			var activeA = String(quick.a || 'default'), activeB = String(quick.b || 'gaming');
+			var inPair = confirmed === activeA || confirmed === activeB;
+			var target = confirmed === activeA ? preset(activeB) : preset(activeA);
+			var toggleAttrs = { type: 'checkbox', role: 'switch', 'class': 'omr-quick-toggle',
+				'aria-label': _('Switch between quick profiles A and B'), 'aria-describedby': 'omr-quick-status' };
+			if (confirmed === activeB) toggleAttrs.checked = 'checked';
+			if (!inPair || busy || pending || !access.apply || !target || target.available === false) toggleAttrs.disabled = 'disabled';
+			var toggle = E('input', toggleAttrs);
+			toggle.addEventListener('change', function() { applyProfile(target); });
+			var text = confirmed === activeA || confirmed === activeB ? _('Confirmed profile is selected.') : _('Current configuration is outside this pair; choose A or B.');
+			if (pending) text = _('A profile change is pending. The last confirmed profile remains unchanged.');
+			var notes = [activeA, activeB].map(function(id) { return preset(id); }).filter(function(p) { return p && p.available === false; }).map(function(p) {
+				return E('p', { 'class': 'omr-profile-detail' }, [ String(p.name || p.id) + ': ' + reasonText(p) ]);
+			});
+			return E('div', { 'class': 'omr-quick' }, [
+				E('div', { 'class': 'omr-quick-switch' }, [ choose('A', activeA), toggle, choose('B', activeB) ]),
+				E('p', { 'class': 'omr-profile-detail', id: 'omr-quick-status' }, text),
+			].concat(notes, [ E('div', { 'class': 'omr-quick-config' }, [ E('span', {}, _('Configure A:')), selector('A', quickA), E('span', {}, _('B:')), selector('B', quickB),
+					button(_('Save quick profiles'), busy || !!pending || !access.set_quick, function() {
+						if (!quickA || !quickB || quickA === quickB) return showMessage(_('Choose two different profiles.'), true);
+						return run(callSetQuick, [quickA, quickB]);
+					}, 'cbi-button-neutral') ])
+			]));
 		}
 
 		function draw() {
@@ -350,28 +416,10 @@ return baseclass.extend({
 			var all = Array.isArray(state.presets) ? state.presets : [];
 			var builtin = all.filter(function(p) { return p && p.builtin; });
 			var custom = all.filter(function(p) { return p && !p.builtin; });
-			var visible = full ? all : builtin;
-			content.appendChild(E('div', { 'class': 'omr-profile-grid' }, visible.map(function(p) {
+			if (!full) content.appendChild(quickControls(all, active, pending));
+			else content.appendChild(E('div', { 'class': 'omr-profile-grid' }, all.map(function(p) {
 				return profileCard(p, active, pending);
 			})));
-			if (!full && custom.length) {
-				var choices = [ E('option', { value: '' }, _('Choose a saved profile')) ];
-				custom.forEach(function(p) {
-					var attrs = { value: String(p.id) };
-					if (p.available === false) attrs.disabled = 'disabled';
-					choices.push(E('option', attrs, [ String(p.name || p.id) ]));
-				});
-				var select = E('select', { 'aria-label': _('Saved profile') }, choices);
-				select.value = customSelection;
-				select.addEventListener('change', function(ev) { customSelection = ev.target.value; });
-				content.appendChild(E('div', { 'class': 'omr-profile-save' }, [
-					select,
-					button(_('Use saved profile'), busy || !!pending || !access.apply, function() {
-						var found = custom.filter(function(p) { return p.id === select.value; })[0];
-						if (found) applyProfile(found);
-					})
-				]));
-			}
 			if (full) {
 				content.appendChild(E('h4', {}, _('Current settings on router')));
 				content.appendChild(settingsSummary(state.current));

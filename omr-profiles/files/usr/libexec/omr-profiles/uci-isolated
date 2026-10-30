@@ -9,8 +9,14 @@ local fs=require 'nixio.fs'
 -- set_confdir/set_savedir. Use the native libuci Lua binding for isolation.
 local uci=require 'uci'
 local model=require 'omr.profiles'
+local transport=require 'omr.profile_transport'
 local package_name,mode=arg[1],arg[2]
-if (package_name~='network' and package_name~='mqvpn') or (mode~='read' and mode~='write') then os.exit(1) end
+local permitted=false
+for _,name in ipairs(transport.packages) do if package_name==name then permitted=true end end
+if not permitted or
+   (mode~='read' and mode~='write' and mode~='device' and mode~='transport-read' and mode~='transport-write') or
+   ((mode=='read' or mode=='write') and package_name~='network' and package_name~='mqvpn') or
+   (mode=='device' and package_name~='network') then os.exit(1) end
 local path='/etc/config/'..package_name
 local st=fs.stat(path)
 local lst=fs.lstat(path)
@@ -48,17 +54,43 @@ if mode=='read' then
   end
   print(json.stringify(out));cleanup();os.exit(0)
 end
+if mode=='transport-read' then
+  local out={}
+  for key,spec in pairs(transport.fields) do
+    if spec[1]==package_name and cur:get(tempname,spec[2]) then
+      local value=cur:get(tempname,spec[2],spec[3]);out[key]=type(value)=='string' and value or false
+    end
+  end
+  if package_name=='shadowsocks-rust' then
+    cur:foreach(tempname,'server',function(section)
+      local name=section['.name'];local key='ssserver:'..tostring(name)
+      if transport.spec(key) then
+        local value=section.disabled;out[key]=type(value)=='string' and value or false
+      end
+    end)
+  end
+  print(json.stringify(out));cleanup();os.exit(0)
+end
 
-local f=io.open('/var/run/omr-profiles/uci-request.json','rb')
-if not f then cleanup();os.exit(1) end
-local text=f:read(16385);f:close()
-if not text or #text>16384 then cleanup();os.exit(1) end
-local payload=json.parse(text)
-if type(payload)~='table' or type(payload.values)~='table' or type(payload.raw)~='boolean' then cleanup();os.exit(1) end
-for key,value in pairs(payload.values) do
-  local spec=model.fields[key]
-  if not spec or (value==false and not payload.raw) or
-     (value~=false and not model.allowed_values({[key]=value},false)) then cleanup();os.exit(1) end
+local payload
+if mode=='device' then
+  local dev=arg[3]
+  if type(dev)~='string' or #dev==0 or #dev>15 or not dev:match('^[A-Za-z0-9_.-]+$') or dev=='.' or dev=='..' then cleanup();os.exit(1) end
+  if not cur:get(tempname,'omrvpn') or not cur:set(tempname,'omrvpn','device',dev) then cleanup();os.exit(1) end
+else
+  local f=io.open('/var/run/omr-profiles/uci-request.json','rb')
+  if not f then cleanup();os.exit(1) end
+  local text=f:read(16385);f:close()
+  if not text or #text>16384 then cleanup();os.exit(1) end
+  payload=json.parse(text)
+  if type(payload)~='table' or type(payload.values)~='table' or type(payload.raw)~='boolean' then cleanup();os.exit(1) end
+end
+for key,value in pairs(payload and payload.values or {}) do
+  local spec=mode=='transport-write' and transport.spec(key) or model.fields[key]
+  local valid=mode=='transport-write' and transport.valid(key,value,payload.raw) or
+    (mode~='transport-write' and (value==false and payload.raw or
+      value~=false and model.allowed_values({[key]=value},false)))
+  if not spec or not valid then cleanup();os.exit(1) end
   if spec[1]==package_name then
     local ok
     if value==false then
