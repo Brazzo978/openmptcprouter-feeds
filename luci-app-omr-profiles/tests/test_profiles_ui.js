@@ -129,7 +129,7 @@ async function tests() {
 		assert.strictEqual(letters(),'AB');f.advance(2700);assert.strictEqual(letters(),'CD');
 		const icmp=nodes(preview).find(n=>n.attributes&&n.attributes['data-protocol']==='icmp');
 		const bestPath=nodes(icmp).filter(n=>n.attributes&&String(n.attributes.class||'').startsWith('omr-preview-packet ')&&n.attributes.display!=='none');
-		assert.strictEqual(bestPath.length,1);assert.strictEqual(bestPath[0].textContent,'C');
+		assert.strictEqual(bestPath.length,1);assert.strictEqual(bestPath[0].textContent,'B');
 		f.advance(2600);assert.strictEqual(letters(),'AB');
 		select.value='performance';select.listeners.change({target:select});
 		assert.strictEqual(preview.attributes['data-preview-time'],'0');
@@ -148,6 +148,16 @@ async function tests() {
 		find(preview,'button','Resume animation').click();f.advance(200);
 		assert(Number(preview.attributes['data-preview-time'])>Number(before));
 		select.value='gaming';select.listeners.change({target:select});assert.strictEqual(letters(),'AA');
+		f.state.presets.push({id:'no_tunnel',name:'No tunnel',builtin:true,available:true,settings:{transport:'none',proxy:'shadowsocks-rust',tcp_cc:'bbr',tcp_scheduler:'default'}});
+		await refresh(f);select.value='no_tunnel';select.listeners.change({target:select});
+		assert.strictEqual(letters(),'AB');
+		const direct=nodes(preview).filter(n=>n.attributes&&['icmp','udp'].includes(n.attributes['data-protocol']));
+		assert.strictEqual(direct.length,2);
+		const directLetters=chart=>nodes(chart).filter(n=>n.attributes&&String(n.attributes.class||'').startsWith('omr-preview-packet ')&&n.attributes.display!=='none').map(n=>n.textContent).join('');
+		assert(direct.every(chart=>chart.attributes.class.includes('is-direct')&&chart.textContent.includes('Internet')&&chart.textContent.includes('Master WAN')&&!chart.textContent.includes('VPS')));
+		assert(tcp.textContent.includes('VPS')&&!tcp.textContent.includes('Internet'));
+		assert(direct.every(chart=>directLetters(chart)==='A'));
+		for(const letter of ['B','C','D','A']){f.advance(2700);assert(direct.every(chart=>directLetters(chart)===letter),'single path must retain every packet ID');}
 		preview.isConnected=false;f.advance(16);assert.strictEqual(f.queuedFrames(),0,'detached preview must stop rendering');
 	}
 	{
@@ -168,7 +178,7 @@ async function tests() {
 		assert.strictEqual(diagrams.length,3);
 		assert(diagram('tcp').attributes.class.includes('is-automatic'));
 		assert(preview.textContent.includes('actual scheduling depends on congestion'));
-		assert(preview.textContent.includes('WAN-bound diagnostic pings and bypass traffic are not shown'));
+		assert(preview.textContent.includes('Diagnostic pings and explicit bypass policies are not shown'));
 		set(profile,'gaming');
 		assert(diagram('tcp').attributes.class.includes('is-duplicate'));
 		assert(preview.textContent.includes('Same packet'));

@@ -31,6 +31,7 @@ const state={
   {id:'gaming',name:'Stability / Gaming',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',transport:'mqvpn'}},
   {id:'performance_old',name:'Performance (old)',builtin:true,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',transport:'glorytun_tcp',proxy:'none'}},
   {id:'stability_old',name:'Stability (old)',builtin:true,available:true,settings:{tcp_scheduler:'bpf_red',tcp_cc:'bbr',transport:'glorytun_tcp',proxy:'none'}},
+  {id:'no_tunnel',name:'No tunnel',builtin:true,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',transport:'none',proxy:'shadowsocks-rust'}},
   {id:'p_123',name:'Evening',builtin:false,available:true,settings:{tcp_scheduler:'default',tcp_cc:'bbr',mq_scheduler:'minrtt',mq_cc:'bbr2',fec_enable:'1'},remote_settings:{mq_scheduler:'minrtt',mq_cc:'bbr2',reorder_enabled:'0'}}
  ]
 };

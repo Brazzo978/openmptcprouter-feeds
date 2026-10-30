@@ -241,14 +241,22 @@ function R:set_active(id,journal_state)
   if not value or value.version~=1 or type(value.profiles)~='table' then return false end
   value.active_id=id
   if journal_state and journal_state.before_transport and journal_state.target_transport and
-     journal_state.before_transport.vpn=='mqvpn' and journal_state.target_transport.vpn=='glorytun_tcp' then
+     journal_state.before_transport.vpn=='mqvpn' and journal_state.target_transport.vpn~='mqvpn' then
     value.mq_baseline=journal_state.before_transport
+  end
+  if journal_state and journal_state.before_transport and journal_state.target_transport and
+     journal_state.before_transport.vpn~='none' and journal_state.target_transport.vpn=='none' then
+    value.pre_none=journal_state.before_transport
   end
   return write_atomic(store,value)
 end
 function R:get_mq_baseline()
   local value=parse(read(store))
   return value and transport.snapshot_valid(value.mq_baseline) and value.mq_baseline or nil
+end
+function R:get_pre_none()
+  local value=parse(read(store))
+  return value and transport.snapshot_valid(value.pre_none) and value.pre_none or nil
 end
 function R:get_quick()
   local value=parse(read(store))
@@ -305,7 +313,8 @@ function R:local_ready(state)
   state=state or self:read_transport()
   if not transport.snapshot_valid(state) or
      (state.vpn=='mqvpn' and state.mq_enable~='1') or
-     (state.vpn=='glorytun_tcp' and state.glory_enable~='1') then
+     (state.vpn=='glorytun_tcp' and state.glory_enable~='1') or
+     (state.vpn=='none' and (state.glory_enable=='1' or state.mq_enable=='1' or state.proxy~='shadowsocks-rust')) then
     return false,'The active VPN/proxy configuration is unsupported or inconsistent.'
   end
   if not self:selected_server() then return false,'A single configured active VPS is required.' end
@@ -354,6 +363,18 @@ function R:local_available(settings)
   elseif settings.transport=='mqvpn' and not file_present('/usr/sbin/mqvpn') then
     return false,'MQVPN is not installed.'
   end
+  if settings.transport=='none' then
+    local master,why=self:master_wan()
+    if not master then return false,why end
+    local c=cursor()
+    local host=c:get('shadowsocks-rust','sss0','server')
+    local port=tonumber(c:get('shadowsocks-rust','sss0','server_port'))
+    local password=c:get('shadowsocks-rust','sss0','password')
+    if settings.proxy~='shadowsocks-rust' or not host or host=='' or host=='127.0.0.1' or
+       host=='::1' or host=='192.168.1.3' or not port or port<1 or port>65535 or not password or password=='' then
+      return false,'Configure the Shadowsocks Rust TCP proxy before using No tunnel.'
+    end
+  end
   local proxy=settings.proxy
   local proxy_service
   if proxy=='shadowsocks' then proxy_service='shadowsocks-libev'
@@ -385,7 +406,8 @@ function R:remote(server, action, tx, payload, short_timeout)
   if action=='apply' or action=='route' then
     if type(payload)~='table' then return nil end
     local body=action=='apply' and {transaction=tx,mptcp=payload.mptcp,mqvpn=payload.mqvpn,
-      transport=payload.transport,proxy=payload.proxy} or {transaction=tx,vpnremoteip=payload.vpnremoteip}
+      transport=payload.transport,proxy=payload.proxy} or
+      {transaction=tx,vpnremoteip=payload.vpnremoteip,no_tunnel=payload.no_tunnel}
     if not write_atomic(request,body) then return nil end
   end
   self:heartbeat()
@@ -410,10 +432,10 @@ function R:refresh_capabilities()
     fs.unlink(cache); return
   end
   local a=data.availability; local lists={}
-  for _,name in ipairs({'tcp_schedulers','tcp_cc','mq_schedulers','mq_cc','fec_schemes','transports','proxies'}) do
-    if type(a[name])~='table' then fs.unlink(cache); return end
+  for _,name in ipairs({'tcp_schedulers','tcp_cc','mq_schedulers','mq_cc','fec_schemes','transports','proxies','tcp_proxies'}) do
+    if type(a[name])~='table' and name~='tcp_proxies' then fs.unlink(cache); return end
     local items={}
-    for _,v in ipairs(a[name]) do
+    for _,v in ipairs(a[name] or {}) do
       if type(v)=='string' and #v<=32 and v:match('^[A-Za-z0-9_-]+$') then items[#items+1]=v end
     end
     lists[name]=items
@@ -454,6 +476,137 @@ function R:route_ip(expected)
   return ip
 end
 
+local function valid_ifname(value)
+  return transport.valid('net_device',value,false)
+end
+local function interface_status(name)
+  if type(name)~='string' or #name>64 or not name:match('^[A-Za-z0-9_]+$') then return nil end
+  return parse(sys.exec("/usr/bin/timeout 4 /sbin/ubus call 'network.interface."..name.."' status 2>/dev/null"))
+end
+
+function R:master_wan()
+  local c=cursor()
+  local candidates={}
+  c:foreach('network','interface',function(s)
+    local name=s['.name']
+    local mode=s.multipath or c:get('openmptcprouter',name,'multipath')
+    candidates[#candidates+1]={name=name,disabled=s.disabled,mode=mode}
+  end)
+  local chosen,why=transport.unique_master({master=c:get('openmptcprouter','settings','master'),
+    defaultgw=c:get('openmptcprouter','settings','defaultgw')},candidates)
+  if not chosen then return nil,why end
+  local status=interface_status(chosen)
+  if not status or status.up~=true or not valid_ifname(status.l3_device) then
+    return nil,'The master WAN is not available.'
+  end
+  return status.l3_device
+end
+
+local function sample_lan()
+  local status=interface_status('lan')
+  if not status or status.up~=true or not valid_ifname(status.l3_device) then return nil end
+  local info=type(status['ipv4-address'])=='table' and status['ipv4-address'][1]
+  local ip=info and info.address;local prefix=info and tonumber(info.mask)
+  if not transport.valid_ipv4(ip) or not prefix or prefix<1 or prefix>30 or prefix%1~=0 then return nil end
+  local a,b,c,d=ip:match('^(%d+)%.(%d+)%.(%d+)%.(%d+)$')
+  local n=tonumber(a)*16777216+tonumber(b)*65536+tonumber(c)*256+tonumber(d)
+  local block=2^(32-prefix);local first=math.floor(n/block)*block+1
+  if first==n then first=first+1 end
+  if first>=math.floor(n/block)*block+block-1 then return nil end
+  local parts={math.floor(first/16777216)%256,math.floor(first/65536)%256,math.floor(first/256)%256,first%256}
+  return status.l3_device,table.concat(parts,'.')
+end
+
+function R:master_route_ready()
+  local master,why=self:master_wan()
+  if not master then return false,why end
+  local lan,source=sample_lan()
+  if not lan then return false,'No tunnel cannot verify the LAN source route.' end
+  local defaults=parse(sys.exec('/usr/bin/timeout 4 /sbin/ip -j -4 route show default 2>/dev/null'))
+  if not transport.master_default(defaults,master) then return false,'Default route is not exclusively on the master WAN.' end
+  for _,protocol in ipairs({'udp','icmp'}) do
+    for _,destination in ipairs({'1.1.1.1','8.8.8.8'}) do
+      self:heartbeat()
+      local cmd="/usr/bin/timeout 4 /sbin/ip -j -4 route get '"..destination.."' from '"..source.."' iif '"..lan.."' ipproto "..protocol.." 2>/dev/null"
+      local route=parse(sys.exec(cmd))
+      if type(route)~='table' or not route[1] or route[1].dev~=master then
+        return false,'UDP/ICMP route does not resolve to the master WAN.'
+      end
+    end
+  end
+  return true
+end
+
+function R:tcp_proxy_ready()
+  local c=cursor()
+  if c:get('shadowsocks-rust','ss_rules','disabled')~='0' or
+     c:get('shadowsocks-rust','ss_rules','redir_tcp')~='all' or
+     c:get('shadowsocks-rust','ss_rules','redir_udp')~=nil or
+     c:get('shadowsocks-rust','ss_rules','src_default')~='forward' or
+     c:get('shadowsocks-rust','ss_rules','dst_default')~='forward' then return false end
+  self:heartbeat()
+  local info=parse(sys.exec('/usr/bin/timeout 4 /sbin/ubus call service list \'{"name":"shadowsocks-rust"}\' 2>/dev/null'))
+  local instances=info and info['shadowsocks-rust'] and info['shadowsocks-rust'].instances
+  if type(instances)~='table' then return false end
+  local total=0;local invalid=false;local active_servers={}
+  c:foreach('shadowsocks-rust','ss_redir',function(section)
+    local name=section['.name'];local server=section.server
+    if type(name)~='string' or not name:match('^[A-Za-z0-9_]+$') or #name>64 or
+       type(server)~='string' or not server:match('^[A-Za-z0-9_]+$') then invalid=true;return end
+    local host=c:get('shadowsocks-rust',server,'server')
+    local password=c:get('shadowsocks-rust',server,'password')
+    local disabled=section.disabled=='1' or c:get('shadowsocks-rust',server,'disabled')=='1'
+    local usable=not disabled and host and host~='' and host~='127.0.0.1' and host~='::1' and
+      host~='192.168.1.3' and password and password~='' and section.mode~='udp_only'
+    if usable then
+      total=total+1
+      active_servers[server]=true
+      local instance=instances['ss_redir.'..name]
+      local generated=parse(read('/var/etc/shadowsocks-rust/ss_redir.'..name..'.json'))
+      if section.mptcp~='1' or type(instance)~='table' or not instance.running or
+         not generated or generated.mptcp~=true then invalid=true end
+    end
+  end)
+  if invalid or total==0 then return false end
+  self:heartbeat()
+  if os.execute('/usr/bin/timeout 4 /usr/sbin/nft list table inet fw4 >/dev/null 2>&1')~=0 then return false end
+  self:heartbeat()
+  local tcp=sys.exec('/usr/bin/timeout 4 /usr/sbin/nft list chain inet fw4 ss_rules_forward_tcp 2>/dev/null')
+  if not tcp or not (tcp:match('redirect to') or tcp:match('tproxy to')) then return false end
+  self:heartbeat()
+  if os.execute('/usr/bin/timeout 4 /usr/sbin/nft list chain inet fw4 ss_rules_forward_udp >/dev/null 2>&1')==0 then return false end
+  -- Every active redirect backend must pass a TCP exchange through its own
+  -- SOCKS tracker; neither keys nor generated config are logged or persisted.
+  for server in pairs(active_servers) do
+    local name='tracker_'..server
+    local tracker=instances['ss_local.'..name]
+    local port=tonumber(c:get('shadowsocks-rust',name,'local_port'))
+    local address=c:get('shadowsocks-rust',name,'local_address')
+    local generated=parse(read('/var/etc/shadowsocks-rust/ss_local.'..name..'.json'))
+    if c:get('shadowsocks-rust',name,'server')~=server or
+       c:get('shadowsocks-rust',name,'mptcp')~='1' or address~='127.0.0.1' or
+       not port or port%1~=0 or port<1 or port>65535 or type(tracker)~='table' or not tracker.running or
+       not generated or generated.mptcp~=true then return false end
+    self:heartbeat()
+    local cmd="/usr/bin/timeout 8 /usr/bin/curl --silent --noproxy '' --socks5 127.0.0.1:"..port..
+      " --head --max-time 6 --output /dev/null http://1.1.1.1/ >/dev/null 2>&1"
+    if os.execute(cmd)~=0 then return false end
+  end
+  return true
+end
+
+local function tunnel_services_stopped()
+  for _,name in ipairs({'mqvpn','glorytun'}) do
+    local info=parse(sys.exec('/usr/bin/timeout 4 /sbin/ubus call service list \'{"name":"'..name..'"}\' 2>/dev/null'))
+    if type(info)~='table' then return false end
+    local service=info[name]
+    if service and type(service.instances)=='table' then
+      for _,instance in pairs(service.instances) do if instance.running then return false end end
+    end
+  end
+  return true
+end
+
 function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_state, repair)
   if has_pending_changes() then return false end
   -- If an original TCP UCI option was absent, re-apply its previous *live*
@@ -470,7 +623,7 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
   local tcp_ok=os.execute('/usr/bin/timeout 35 /etc/init.d/mptcp restart >/dev/null 2>&1')==0
   if next(temporary) and not self:restore_raw(raw_after_restore) then return false end
   if not tcp_ok then return false end
-  local selected=expected.transport=='glorytun_tcp' and 'glorytun' or 'mqvpn'
+  local selected=expected.transport=='glorytun_tcp' and 'glorytun' or expected.transport=='none' and 'none' or 'mqvpn'
   local affected={}
   local function mark_proxy(proxy)
     if proxy=='shadowsocks' then affected['shadowsocks-libev']=true
@@ -484,7 +637,8 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
   for key,value in pairs(expected_flags or {}) do
     if from_state and from_state[key]~=value then
       if key=='ss_libev_disabled' then affected['shadowsocks-libev']=true
-      elseif key=='ss_rules_disabled' or key:match('^ssserver:') then affected['shadowsocks-rust']=true
+      elseif key:match('^ss_rules_') or key=='ss_src_default' or key=='ss_dst_default' or
+             key:match('^ssserver:') or key:match('^ssredir:') then affected['shadowsocks-rust']=true
       elseif key:match('^v2ray_') then affected.v2ray=true
       elseif key:match('^xray_') then affected.xray=true end
     end
@@ -508,6 +662,28 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
   local state=self:read_transport()
   if not state or state.vpn~=expected.transport or state.proxy~=expected.proxy then return false end
   for key,value in pairs(expected_flags or {}) do if state[key]~=value then return false end end
+  if expected.transport=='none' then
+    local reason='The TCP proxy or master WAN route is not ready.'
+    local deadline=self:monotonic()+45
+    repeat
+      self:heartbeat()
+      local route_ok,route_reason=self:master_route_ready()
+      if route_ok then
+        if tunnel_services_stopped() and self:tcp_proxy_ready() then
+          self:heartbeat()
+          if os.execute('/usr/bin/timeout 6 /usr/bin/nslookup example.com 127.0.0.1 >/dev/null 2>&1')~=0 then
+            return false,'Local DNS did not resolve without the VPN; reverting.'
+          end
+          return true
+        end
+        reason='The Shadowsocks TCP proxy could not be verified.'
+      else
+        reason=route_reason or reason
+      end
+      nixio.nanosleep(1)
+    until self:monotonic()>=deadline
+    return false,reason
+  end
   if expected.transport=='glorytun_tcp' then
     for _=1,30 do
       self:heartbeat()

@@ -14,7 +14,7 @@ local function fixture()
         reorder={enabled='auto',max_wait_ms=30,cap_packets=1024}}},
       availability={tcp_schedulers={'default','bpf_red'},tcp_cc={'bbr','nanbbr3_light'},
         mq_schedulers={'minrtt','wlb'},mq_cc={'bbr2'},fec_schemes={'xor','reed_solomon'},
-        transports={'mqvpn','glorytun_tcp'},proxies={'none','shadowsocks-rust','xray'}}}}
+        transports={'mqvpn','glorytun_tcp','none'},proxies={'none','shadowsocks-rust','xray'},tcp_proxies={'shadowsocks-rust'}}}}
   a.raw={tcp_scheduler='default',tcp_cc='bbr',tcp_nanbbr_aggressiveness='50',
     mq_scheduler='minrtt',mq_cc='bbr2',fec_enable='0',fec_scheme='reed_solomon',
     reinjection_control='0',reinjection_mode='default',reorder_enabled='1',
@@ -23,7 +23,8 @@ local function fixture()
   a.transport={vpn='mqvpn',proxy='shadowsocks-rust',mq_enable='1',glory_enable='0',
     glory_mptcp='1',glory_proto='tcp',glory_localip='10.255.255.2',glory_remoteip='10.255.255.1',
     glory_device='tun0',mq_device='tun0',net_device='tun0',net_proto='none',ss_rules_disabled='0',
-    ['ssserver:sss0']='0',xray_enabled='0',six_localip='10.255.220.2',six_remoteip='10.255.220.1'}
+    ss_rules_udp='hi1',ss_rules_tcp='all',ss_src_default='forward',ss_dst_default='forward',
+    ['ssredir:hi1']='0',['ssserver:sss0']='0',xray_enabled='0',six_localip='10.255.220.2',six_remoteip='10.255.220.1'}
   function a:locked(f) return f() end
   function a:read_raw() return clone(self.raw) end
   function a:current_effective(r) return lib.effective(r) end
@@ -39,8 +40,14 @@ local function fixture()
   function a:get_quick() return clone(self.quick) end
   function a:set_quick(q) self.quick=clone(q);return true end
   function a:get_active() return self.active end
-  function a:set_active(id,j) self.active=id;if j and j.before_transport.vpn=='mqvpn' and j.target_transport.vpn=='glorytun_tcp' then self.baseline=clone(j.before_transport) end;return true end
+  function a:set_active(id,j)
+    self.active=id
+    if j and j.before_transport.vpn=='mqvpn' and j.target_transport.vpn~='mqvpn' then self.baseline=clone(j.before_transport) end
+    if j and j.before_transport.vpn~='none' and j.target_transport.vpn=='none' then self.pre_none=clone(j.before_transport) end
+    return true
+  end
   function a:get_mq_baseline() return clone(self.baseline) end
+  function a:get_pre_none() return clone(self.pre_none) end
   function a:read_transport() return clone(self.transport) end
   function a:write_transport(values) for k,v in pairs(values) do self.transport[k]=v end return true end
   function a:restore_transport(values) self.transport=clone(values);return true end
@@ -57,7 +64,10 @@ local function fixture()
   function a:heartbeat() end
   function a:write_effective(v) if self.fail_write then self.raw.tcp_cc='bbr';return false end for k,x in pairs(v) do if lib.fields[k] then self.raw[k]=x end end return true end
   function a:restore_raw(v) self.raw=clone(v);return true end
-  function a:restart_and_verify() return not self.fail_restart end
+  function a:restart_and_verify()
+    if self.fail_dns then return false,'Local DNS did not resolve without the VPN; reverting.' end
+    return not self.fail_restart
+  end
   function a:remote(server,action,tx,payload)
     assert(server==self.server)
     if action=='capabilities' then if self.fail_cap then return nil end return clone(self.cap) end
@@ -73,7 +83,8 @@ local function fixture()
     end
     if action=='route' then
       if self.route_fail then return nil end
-      self.route_ready=true;return {result='done',transaction=tx,state='pending',route_ready=true}
+      self.route_ready=true;self.route_no_tunnel=payload.no_tunnel==true
+      return {result='done',transaction=tx,state='pending',route_ready=true,no_tunnel=self.route_no_tunnel}
     end
     if action=='rollback' then
       if self.remote_offline then return nil end
@@ -87,7 +98,7 @@ local function fixture()
     end
     if action=='status' then
       if self.remote_offline then return nil end
-      return {result='done',state=self.remote_state,seconds_remaining=self.remaining or 200,route_ready=self.route_ready}
+      return {result='done',state=self.remote_state,seconds_remaining=self.remaining or 200,route_ready=self.route_ready,route_no_tunnel=self.route_no_tunnel}
     end
   end
   return a,lib.new(a)
@@ -186,7 +197,7 @@ do
   a.profiles[1].remote_settings.mqvpn.fec_enable=true
   local status=m:status()
   assert(status.presets[1].available,'Default with FEC off must remain usable without known schemes')
-  assert(not status.presets[6].available,'FEC on must require a proven scheme')
+  assert(not status.presets[7].available,'FEC on must require a proven scheme')
   assert(not m:apply(saved.id).ok)
   local tx=go(a,m,'default');assert(a.journal.phase=='awaiting_confirm');assert(m:confirm(tx).ok);m:tick()
 end
@@ -217,5 +228,36 @@ do
   local saved=m:save('Capture VPN and proxy');assert(saved.ok)
   assert(a.profiles[1].settings.transport=='mqvpn' and a.profiles[1].settings.proxy=='shadowsocks-rust')
   assert(a.profiles[1].transport_state.mq_enable=='1')
+end
+do
+  local a,m=fixture();local original=clone(a.transport)
+  local tx=go(a,m,'no_tunnel');assert(a.journal.phase=='awaiting_confirm')
+  assert(a.transport.vpn=='none' and a.transport.mq_enable=='0' and a.transport.glory_enable=='0')
+  assert(a.transport.proxy=='shadowsocks-rust' and a.transport.ss_rules_udp==false and a.transport['ssredir:hi1']=='1')
+  assert(a.route_no_tunnel and m:confirm(tx).ok);m:tick()
+  assert(a.pre_none.ss_rules_udp=='hi1' and a.pre_none['ssredir:hi1']=='0')
+  local saved=m:save('No tunnel custom');assert(saved.ok)
+  assert(a.profiles[1].settings.transport=='none')
+  tx=go(a,m,'gaming');assert(a.journal.phase=='awaiting_confirm')
+  assert(a.transport.vpn=='mqvpn' and a.transport.ss_rules_udp=='hi1' and a.transport['ssredir:hi1']=='0')
+  assert(m:rollback(tx).ok);m:tick()
+  assert(a.transport.vpn=='none' and a.transport.ss_rules_udp==false)
+  tx=go(a,m,'default');assert(m:confirm(tx).ok);m:tick()
+  assert(a.transport.vpn==original.vpn and a.transport.ss_rules_udp==original.ss_rules_udp)
+end
+do
+  local a,m=fixture();a.cap.availability.tcp_proxies={}
+  assert(not m:apply('no_tunnel').ok)
+  a.cap.availability.tcp_proxies={'shadowsocks-rust'};a.route_fail=true
+  go(a,m,'no_tunnel');assert(a.journal.phase=='rolling_back')
+  a.route_fail=false;m:tick();assert(not a.journal and a.transport.vpn=='mqvpn' and a.transport.ss_rules_udp=='hi1')
+end
+do
+  local a,m=fixture();assert(m:set_quick('no_tunnel','gaming').ok)
+  assert(m:status().quick.a=='no_tunnel')
+  a.fail_dns=true;go(a,m,'no_tunnel')
+  assert(a.journal.phase=='rolling_back' and a.journal.error:match('DNS'))
+  a.fail_dns=false;m:tick()
+  assert(not a.journal and a.transport.vpn=='mqvpn' and a.transport.ss_rules_udp=='hi1' and a.last.message:match('DNS'))
 end
 print('PASS: profiles defaults, asymmetric custom, timeout, partial failure, rollback, confirmation recovery, availability')

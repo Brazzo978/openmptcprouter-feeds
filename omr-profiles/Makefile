@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=omr-profiles
 PKG_VERSION:=1
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -11,7 +11,7 @@ define Package/omr-profiles
   CATEGORY:=Network
   TITLE:=OpenMPTCProuter safe connection profiles
   PKGARCH:=all
-  DEPENDS:=+lua +luci-base +luci-compat +luci-lib-jsonc +luci-lib-nixio +libuci-lua +rpcd +coreutils-timeout +flock +mptcp +mqvpn +glorytun +openmptcprouter +omr-api-paths
+  DEPENDS:=+lua +luci-base +luci-compat +luci-lib-jsonc +luci-lib-nixio +libuci-lua +rpcd +coreutils-timeout +flock +mptcp +mqvpn +glorytun +openmptcprouter +omr-api-paths +curl +ip-full +nftables-json +shadowsocks-rust-sslocal +shadowsocks-rust-ssservice +shadowsocks-rust-config-nft
 endef
 
 define Package/omr-profiles/conffiles

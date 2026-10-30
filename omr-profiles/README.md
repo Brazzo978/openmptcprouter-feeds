@@ -1,7 +1,7 @@
 # OMR 3K connection profiles
 
-Source candidate for 3K routers using MQVPN or provisioned Glorytun TCP. Requires
-the negotiated v2 profile API in admin candidate `0.18+20261030-3k6`; an older VPS leaves profiles unavailable
+Source candidate for 3K routers using MQVPN, provisioned Glorytun TCP or TCP-only
+proxy mode. Requires the negotiated v2 profile API in admin candidate `0.18+20261030-3k7`; an older VPS leaves profiles unavailable
 rather than applying only one side. The existing published installer/frozen lock
 has not been changed to install this candidate automatically.
 
@@ -24,6 +24,26 @@ availability checks fail.
 | Stability / Gaming | MQVPN | bpf_red | bbr (BBRv3) | minrtt / bbr2 |
 | Performance (old) | Glorytun TCP, main proxy none | default | bbr (BBRv3) | inactive |
 | Stability (old) | Glorytun TCP, main proxy none | bpf_red | bbr (BBRv3) | inactive |
+| No tunnel | none, Shadowsocks Rust TCP proxy | default | bbr (BBRv3) | inactive |
+
+No tunnel stops MQVPN and Glorytun, enables the existing provisioned Shadowsocks
+Rust TCP/MPTCP proxy, disables its UDP interception and sends ordinary UDP/ICMP
+directly through the unique active master WAN. This initial adapter requires
+the matching active Go SS2022 TCP/MPTCP backend on the VPS. It neither creates
+proxy keys nor silently falls back to another proxy. Balancing mode, an ambiguous
+master or routes pointing elsewhere reject the switch. Readiness checks include
+generated MPTCP configuration, live procd instances, TCP exchanges through each
+active tracker SOCKS, absence of the UDP capture chain, LAN-source IPv4 route
+samples and local DNS resolution. These checks are not a packet capture or
+proof of every policy mark, IPv6 path or actual MPTCP aggregation.
+
+No tunnel clears the VPS VPN target and suspends VPN-based remote GUI/LAN access
+and ordinary VPN port forwarding. Definitions, WireGuard LAN permissions and
+independent Xray forwarding remain stored; returning to a VPN or rolling back
+restores the target and original proxy flags. Confirm **from the LAN or an
+independent management path**: access through the VPN stops before Keep is shown.
+An unconfirmed switch rolls back. This preset is available in both A/B slots
+and custom snapshots.
 
 These are selectable tuning goals, not measured performance guarantees. Default
 resets the managed MQVPN tuning; Performance and Stability / Gaming preserve
@@ -85,10 +105,14 @@ curl. Set `PROFILE_LUA`, `LUA_CPATH` and `OMR_PROFILES_VPS_SOURCE` if the defaul
 review layout is not used. It runs the real Lua transaction model against the
 real Python VPS manager over loopback HTTP, with simulated kernel/service/UCI
 adapters. It checks Default asymmetry, Performance with a lost confirmation
-reply, all five profiles, MQVPN/Glorytun transitions, Xray flag restoration,
+reply, all six profiles, MQVPN/Glorytun/No tunnel transitions, Xray flag restoration,
 quick-pair persistence, route failure, timeout rollback and custom save/revert. This is contract
 integration, not a full deployment or authentication test; the VPS FastAPI tests
 separately cover authorization and request validation.
+
+`tests/test_no_tunnel_runtime.py` exercises the actual Lua readiness adapter
+with simulated UCI/ubus/nft/command responses. It rejects the wrong WAN, ECMP,
+UDP interception, missing MPTCP configuration and a broken TCP exchange.
 
 Frontend fixtures and browser-preview instructions are in
 `luci-app-omr-profiles/tests`. OpenWrt package build/install, actual rpcd/procd,

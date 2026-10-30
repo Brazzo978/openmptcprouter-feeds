@@ -47,6 +47,7 @@ var fields = [
 ];
 
 function textValue(key, value) {
+	if (key === 'transport' && value === 'none') return _('No tunnel');
 	if (value == null || value === '') return _('Automatic');
 	if (key === 'tcp_cc' && value === 'bbr') return 'BBRv3 (bbr)';
 	if (key === 'fec_enable' || key === 'reinjection_control' || key === 'reorder_enabled') {
@@ -155,15 +156,16 @@ function createPreview() {
 		E('h4', {}, _('Packet path preview')),
 		E('p', { 'class': 'omr-profile-detail' }, _('Illustration only — not live traffic, measured performance or WAN health. Preview selection does not apply a profile.')),
 		E('div', { 'class': 'omr-preview-controls' }, [ select, pauseButton ]),
-		E('p', { 'class': 'omr-profile-detail' }, _('Distributed sequence: A on WAN 1, B on WAN 2, C on WAN 1, D on WAN 2, then repeat. Matching letters on both WANs are redundant copies. Density is illustrative. WAN-bound diagnostic pings and bypass traffic are not shown.')),
+		E('p', { 'class': 'omr-profile-detail' }, _('Packet IDs cycle A, B, C, D. A single path carries every ID; distributed paths share the sequence, while matching IDs on both WANs are redundant copies. Density is illustrative. Diagnostic pings and explicit bypass policies are not shown.')),
 		icmp.root, tcp.root, udp.root
 	]);
 	function layout(item) {
 		var width = item.diagram.clientWidth || 320;
+		item.serverLabel.setAttribute('x', String(width - (item.direct ? 4 : 24)));
+		item.serverLabel.setAttribute('text-anchor', item.direct ? 'end' : 'middle');
 		if (width === item.width) return;
 		item.width = width; item.start = 64; item.end = Math.max(96, width - 64);
 		item.canvas.setAttribute('viewBox', '0 0 ' + width + ' 160');
-		item.serverLabel.setAttribute('x', String(width - 24));
 		item.tracks.forEach(function(track, index) {
 			var y = index ? 112 : 48;
 			track.line.setAttribute('d', 'M42 80 H50 L64 ' + y + ' H' + (width - 64) + ' L' + (width - 50) + ' 80 H' + (width - 42));
@@ -182,9 +184,9 @@ function createPreview() {
 			var current = Math.floor(elapsed / period);
 			item.packets.forEach(function(packet) {
 				var progress = (elapsed % period) / period, visible = item.mode !== 'unknown', letter;
-				if (item.mode === 'duplicate' || item.mode === 'minrtt') {
+				if (item.mode === 'duplicate' || item.mode === 'minrtt' || item.mode === 'direct') {
 					visible = visible && packet.slot === 0 && (item.mode === 'duplicate' || packet.wan === 1);
-					letter = item.mode === 'minrtt' ? 'AC'.charAt(still ? 0 : current % 2) : 'ABCD'.charAt(still ? 0 : current % 4);
+					letter = 'ABCD'.charAt(still ? 0 : current % 4);
 					if (still) progress = .5;
 				} else {
 					letter = 'ABCD'.charAt(packet.slot * 2 + packet.wan - 1);
@@ -233,24 +235,33 @@ function createPreview() {
 	function render() {
 		var p = presets.filter(function(item) { return String(item.id) === selected; })[0];
 		var settings = p && p.settings || {}, oldTransport = settings.transport === 'glorytun_tcp';
-		var known = oldTransport || settings.transport === 'mqvpn';
+		var noTunnel = settings.transport === 'none';
+		var known = oldTransport || noTunnel || settings.transport === 'mqvpn';
 		var tcpPath = settings.tcp_scheduler === 'bpf_red' ? 'duplicate' : 'automatic';
 		var mqPath = settings.mq_scheduler === 'wlb' ? 'balanced' : settings.mq_scheduler === 'minrtt' ? 'minrtt' : 'automatic';
 		var dense = p && (p.id === 'performance' || p.id === 'performance_old');
-		var next = JSON.stringify([selected, oldTransport, known, tcpPath, mqPath, !!dense]);
+		var next = JSON.stringify([selected, oldTransport, noTunnel, known, tcpPath, mqPath, !!dense]);
 		if (next !== signature) { signature = next; elapsed = 0; lastTick = null; }
 		var descriptions = {
+			direct: _('Direct Internet through the master WAN; this traffic does not pass through the VPS.'),
 			duplicate: _('Same packet copied on both eligible WANs.'),
 			balanced: _('WLB: successive packets distributed across equally weighted WANs.'),
 			minrtt: _('minrtt: the eligible path with the lowest RTT; WAN 1 is the example.'),
 			automatic: _('Different data on both eligible WANs; actual scheduling depends on congestion and RTT.')
 		};
 		charts.forEach(function(item) {
-			item.mode = known ? (oldTransport || item === tcp ? tcpPath : mqPath) : 'unknown';
+			item.direct = noTunnel && item !== tcp;
+			item.mode = known ? (item.direct ? 'direct' : oldTransport || item === tcp ? tcpPath : mqPath) : 'unknown';
+			var destination = item.direct ? _('Internet') : _('VPS');
+			if (item.destination !== destination) { item.serverLabel.textContent = destination; item.destination = destination; }
+			item.tracks.forEach(function(track, index) {
+				var name = item.direct ? (index ? _('Other WAN') : _('Master WAN')) : _('WAN ') + (index + 1);
+				if (track.name !== name) { track.title.textContent = name; track.name = name; }
+			});
 			item.dense = !!dense && (item.mode === 'automatic' || item.mode === 'balanced');
 			item.diagram.setAttribute('class', 'omr-preview-diagram is-' + item.mode + (item.dense ? ' is-dense' : ''));
 			item.explanation.textContent = !known ? _('Transport is not recorded in this profile; packet paths cannot be illustrated.') :
-				(oldTransport ? 'Glorytun TCP / MPTCP. ' : item === tcp ? 'MPTCP proxy. ' : 'MQVPN. ') + descriptions[item.mode];
+				(item.direct ? '' : oldTransport ? 'Glorytun TCP / MPTCP. ' : item === tcp ? 'MPTCP proxy. ' : 'MQVPN. ') + descriptions[item.mode];
 		});
 		paint(); schedule();
 	}
@@ -369,7 +380,8 @@ return baseclass.extend({
 			var descriptions = {
 				'default': _('Restore the 3K baseline tuning.'),
 				'performance': _('Throughput-oriented tuning.'),
-				'gaming': _('Latency-oriented tuning.')
+				'gaming': _('Latency-oriented tuning.'),
+				'no_tunnel': _('TCP uses the VPS MPTCP proxy with BBRv3. UDP and ICMP go directly through the master WAN. VPN-based remote router access and ordinary VPN forwarding are suspended until a VPN profile is restored.')
 			};
 			var unavailable = preset.available === false;
 			var unavailableText = unavailable ? reasonText(preset) : '';
@@ -389,6 +401,8 @@ return baseclass.extend({
 				E('div', { 'class': 'omr-profile-detail' }, preset.builtin ? _('Built-in') : _('Custom')) ];
 			if (preset.builtin && descriptions[preset.id])
 				children.push(E('div', { 'class': 'omr-profile-detail' }, [ descriptions[preset.id] ]));
+			if ((preset.settings || {}).transport === 'none')
+				children.push(E('p', { 'class': 'omr-profile-help' }, _('Confirm this profile from the LAN or an independent management path. Router access through the VPN stops before confirmation.')));
 			if (full) {
 				children.push(E('strong', {}, _('Router settings')));
 				children.push(settingsSummary(preset.settings));
@@ -435,6 +449,8 @@ return baseclass.extend({
 			var notes = [activeA, activeB].map(function(id) { return preset(id); }).filter(function(p) { return p && p.available === false; }).map(function(p) {
 				return E('p', { 'class': 'omr-profile-detail' }, [ String(p.name || p.id) + ': ' + reasonText(p) ]);
 			});
+			if ([activeA, activeB].some(function(id) { var p = preset(id); return p && p.settings && p.settings.transport === 'none'; }))
+				notes.push(E('p', { 'class': 'omr-profile-help' }, _('Confirm No tunnel from the LAN or an independent management path. Router access through the VPN stops before confirmation.')));
 			return E('div', { 'class': 'omr-quick' }, [
 				E('div', { 'class': 'omr-quick-switch' }, [ choose('A', activeA), toggle, choose('B', activeB) ]),
 				E('p', { 'class': 'omr-profile-detail', id: 'omr-quick-status' }, text),

@@ -42,6 +42,7 @@
 .omr-profile-panel .omr-preview-diagram { position: relative; height: 160px; width: 100%; max-width: 760px; }
 .omr-profile-panel .omr-preview-canvas { display: block; width: 100%; height: 160px; color: inherit; }
 .omr-profile-panel .omr-preview-line { stroke: currentColor; stroke-width: 1.5px; opacity: .45; }
+.omr-profile-panel .omr-preview-diagram.is-direct .wan2 { opacity: .2; }
 .omr-profile-panel .omr-preview-wan-label, .omr-profile-panel .omr-preview-node-label { fill: currentColor; font-size: 12px; }
 .omr-profile-panel .omr-preview-packet rect { fill: #246d94; }
 .omr-profile-panel .omr-preview-packet text { fill: white; font-size: 12px; font-weight: 600; }

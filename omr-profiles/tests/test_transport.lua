@@ -39,4 +39,13 @@ state.glory_remoteip='1.2.3.999'
 assert(not t.glory_probe(proc,state,read,ping),'invalid IPv4 must reject')
 state.glory_remoteip='10.255.255.1';state.net_device='tun0;false'
 assert(not t.glory_probe(proc,state,read,ping),'invalid interface must reject')
-print('PASS: tracker failure recovery, MPTCP command line and interface-bound peer probe')
+local wan={{name='wan1',mode='master'},{name='wan2',mode='on'},{name='lan',mode='master'}}
+assert(t.unique_master({},wan)=='wan1')
+assert(not t.unique_master({master='balancing'},wan))
+assert(not t.unique_master({defaultgw='0'},wan))
+assert(not t.unique_master({},{{name='wan1',mode='master'},{name='wan2',mode='master'}}))
+assert(t.master_default({{dev='other',metric=20},{dev='eth0',metric=1}},'eth0'))
+assert(not t.master_default({{dev='eth0',metric=1,nexthops={{dev='eth1'}}}},'eth0'))
+assert(not t.master_default({{dev='eth0',metric=1},{dev='eth1',metric=1}},'eth0'))
+assert(not t.master_default({{dev='eth1',metric=1}},'eth0'))
+print('PASS: tracker failure recovery, Glorytun peer probe, unique master and ECMP rejection')

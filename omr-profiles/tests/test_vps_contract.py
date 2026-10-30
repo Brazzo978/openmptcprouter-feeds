@@ -17,6 +17,11 @@ from test_profiles_transactions import FakeRuntime
 DRIVER=r'''
 local json=require 'cjson'
 local base=os.getenv('PROFILE_CONTRACT_URL')
+local function luci_null(value)
+  if value==json.null then return nil end
+  if type(value)=='table' then for key,item in pairs(value) do value[key]=luci_null(item) end end
+  return value
+end
 local function quote(s) return "'"..s:gsub("'", "'\\''").."'" end
 local serial=1000
 local function paired()
@@ -37,7 +42,7 @@ local function paired()
     end
     local proc=assert(io.popen(cmd..' '..quote(base..'/profiles/'..route)))
     local text=proc:read('*a');proc:close();if filename then os.remove(filename) end
-    local ok,value=pcall(json.decode,text);return ok and value or nil
+    local ok,value=pcall(json.decode,text);return ok and luci_null(value) or nil
   end
   function a:cached_capabilities() return self:remote('vps1','capabilities',string.rep('0',32)),nil,0 end
   return a,m
@@ -99,7 +104,21 @@ fixture_action('fail_route')
 tx=apply(a,m,'performance_old');check(a.journal.phase=='rolling_back')
 m:tick();check(not a.journal and a.transport.vpn=='mqvpn' and a.transport.proxy=='xray')
 check(a:cached_capabilities().current.selection.vpn=='mqvpn')
-print('PASS: five profiles, asymmetric custom, quick pair, route failure, timeout, lost confirm and transport rollback across Lua/Python')
+
+-- No tunnel clears the route without a sentinel and restores it on return.
+tx=apply(a,m,'no_tunnel');check(a.journal.phase=='awaiting_confirm')
+check(a.transport.vpn=='none' and a.transport.ss_rules_udp==false)
+check(a:cached_capabilities().current.selection.vpnremoteip==nil)
+check(m:confirm(tx).ok);m:tick()
+tx=apply(a,m,'gaming');check(a.journal.phase=='awaiting_confirm')
+check(a.transport.vpn=='mqvpn' and a.transport.proxy=='xray')
+check(a.transport.ss_rules_udp=='hi1' and a.transport['ssredir:hi1']=='0')
+check(m:confirm(tx).ok);m:tick()
+check(a:cached_capabilities().current.selection.vpnremoteip=='10.255.220.2')
+tx=apply(a,m,'no_tunnel');check(a.journal.phase=='awaiting_confirm')
+check(m:rollback(tx).ok);m:tick()
+check(a.transport.vpn=='mqvpn' and a:cached_capabilities().current.selection.vpnremoteip=='10.255.220.2')
+print('PASS: six profiles, No tunnel clear/restore, asymmetric custom, quick pair, route failure, timeout, lost confirm and transport rollback')
 '''
 
 
@@ -112,8 +131,11 @@ class TransportRuntime(FakeRuntime):
         self.remote_ip='10.255.220.2'
         self.fail_route=False
     def availability(self):
-        return {**super().availability(),'transports':['mqvpn','glorytun_tcp'],
-                'proxies':['none','shadowsocks-rust','xray']}
+        return {**super().availability(),'transports':['mqvpn','glorytun_tcp','none'],
+                'proxies':['none','shadowsocks-rust','xray'],'tcp_proxies':['shadowsocks-rust']}
+    def current(self):
+        result=copy.deepcopy(self.value);result['selection']['vpnremoteip']=self.remote_ip
+        return result
     def snapshot(self,target):
         return {'value':copy.deepcopy(self.value),'remote_ip':self.remote_ip}
     def apply(self,target):
@@ -166,7 +188,7 @@ class PairedContract(unittest.TestCase):
                     tx=data.pop('transaction');events.append((self.path,copy.deepcopy(data)))
                     try:
                         if self.path=='/profiles/apply':value=manager.apply(tx,data)
-                        elif self.path=='/profiles/route':value=manager.route(tx,data['vpnremoteip'])
+                        elif self.path=='/profiles/route':value=manager.route(tx,data.get('vpnremoteip'),data.get('no_tunnel',False))
                         elif self.path=='/profiles/confirm':
                             value=manager.finish(tx,True)
                             if not dropped_confirm[0] and runtime.current()['mptcp']['congestion_control']=='nanbbr3_light':
@@ -189,8 +211,8 @@ class PairedContract(unittest.TestCase):
                 self.assertIn('PASS:',result.stdout)
                 self.assertTrue(dropped_confirm[0])
                 self.assertEqual(runtime.secrets,initial_secrets)
-                self.assertEqual(runtime.applies,8)
-                self.assertEqual(runtime.restores,4)
+                self.assertEqual(runtime.applies,11)
+                self.assertEqual(runtime.restores,5)
                 for path,body in events:
                     self.assertNotIn('auth_key',json.dumps(body))
                 print(result.stdout.strip())

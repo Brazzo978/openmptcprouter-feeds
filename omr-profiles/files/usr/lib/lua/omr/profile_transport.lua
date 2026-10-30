@@ -17,6 +17,10 @@ M.fields={
   softether_enable={'softethervpn','openmptcprouter','enable'},
   ss_libev_disabled={'shadowsocks-libev','sss0','disabled'},
   ss_rules_disabled={'shadowsocks-rust','ss_rules','disabled'},
+  ss_rules_udp={'shadowsocks-rust','ss_rules','redir_udp'},
+  ss_rules_tcp={'shadowsocks-rust','ss_rules','redir_tcp'},
+  ss_src_default={'shadowsocks-rust','ss_rules','src_default'},
+  ss_dst_default={'shadowsocks-rust','ss_rules','dst_default'},
   v2ray_enabled={'v2ray','main','enabled'},
   xray_enabled={'xray','main','enabled'},
   v2ray_protocol={'v2ray','omrout','protocol'},
@@ -32,11 +36,13 @@ local proxies={none=true,shadowsocks=true,['shadowsocks-rust']=true,['shadowsock
   xray=true,['xray-vless-reality']=true,['xray-vmess']=true,['xray-trojan']=true,
   ['xray-socks']=true,['xray-shadowsocks']=true}
 function M.proxy(value) return proxies[value]==true end
-function M.vpn(value) return value=='mqvpn' or value=='glorytun_tcp' end
+function M.vpn(value) return value=='mqvpn' or value=='glorytun_tcp' or value=='none' end
 function M.spec(key)
   if M.fields[key] then return M.fields[key] end
   local section=type(key)=='string' and key:match('^ssserver:([A-Za-z0-9_]+)$')
   if section and #section<=64 then return {'shadowsocks-rust',section,'disabled'} end
+  local redir=type(key)=='string' and key:match('^ssredir:([A-Za-z0-9_]+)$')
+  if redir and #redir<=64 then return {'shadowsocks-rust',redir,'mptcp'} end
 end
 function M.valid(key,value,raw)
   if not M.spec(key) then return false end
@@ -46,6 +52,8 @@ function M.valid(key,value,raw)
   if key=='vpn' then return M.vpn(value) end
   if key=='proxy' then return M.proxy(value) end
   if key=='glory_proto' then return value=='tcp' end
+  if key=='ss_rules_udp' or key=='ss_rules_tcp' then return value:match('^[A-Za-z0-9_]+$')~=nil end
+  if key=='ss_src_default' or key=='ss_dst_default' then return value=='forward' or value=='bypass' or value=='checkdst' end
   if key=='v2ray_protocol' or key=='xray_protocol' then return value:match('^[A-Za-z0-9_-]+$')~=nil end
   if key=='net_proto' then return value=='none' end
   if key=='glory_device' or key=='mq_device' or key=='net_device' then
@@ -69,7 +77,7 @@ end
 
 -- Compute only safe-to-write flags. Credentials, firewall rules, WireGuard
 -- policy, forwarding configuration and physical WAN settings are absent.
-function M.plan(before, vpn, proxy, baseline, custom)
+function M.plan(before, vpn, proxy, baseline, custom, before_none)
   if not M.snapshot_valid(before) or not M.vpn(vpn) or not M.proxy(proxy) then return nil end
   if before.mq_enable==nil or before.glory_enable==nil or before.net_proto==nil or before.net_device==nil then return nil end
   if vpn=='mqvpn' and before.vpn=='glorytun_tcp' and not M.snapshot_valid(baseline) and
@@ -81,6 +89,7 @@ function M.plan(before, vpn, proxy, baseline, custom)
      (not M.valid('glory_device',before.glory_device,false) or
       not M.valid_ipv4(before.glory_localip) or
       not M.valid_ipv4(before.glory_remoteip)) then return nil end
+  if vpn=='none' and proxy~='shadowsocks-rust' then return nil end
   local target={vpn=vpn,proxy=proxy,mq_enable=vpn=='mqvpn' and '1' or '0',
     glory_enable=vpn=='glorytun_tcp' and '1' or '0',net_proto='none'}
   if vpn=='glorytun_tcp' then
@@ -100,9 +109,22 @@ function M.plan(before, vpn, proxy, baseline, custom)
     if not M.valid('mq_device',device,false) then return nil end
     target.net_device=device
   end
+  if vpn=='none' then
+    if before.ss_rules_udp==nil or before.ss_rules_tcp==nil or before.ss_src_default==nil or before.ss_dst_default==nil then return nil end
+    target.ss_rules_udp=false;target.ss_rules_tcp='all'
+    target.ss_src_default='forward';target.ss_dst_default='forward'
+    for key in pairs(before) do if key:match('^ssredir:') then target[key]='1' end end
+  elseif before.vpn=='none' and (M.snapshot_valid(before_none) or M.snapshot_valid(custom)) then
+    local prior=(M.snapshot_valid(custom) and custom.vpn==vpn) and custom or before_none
+    for key,value in pairs(prior or {}) do
+      if key=='ss_rules_udp' or key=='ss_rules_tcp' or key=='ss_src_default' or key=='ss_dst_default' or key:match('^ssredir:') then
+        if before[key]~=nil then target[key]=value end
+      end
+    end
+  end
   local use_custom=custom and M.snapshot_valid(custom) and custom.proxy==proxy and custom or nil
   local use_baseline=not use_custom and baseline and M.snapshot_valid(baseline) and baseline.proxy==proxy and baseline or nil
-  local saved=use_custom or use_baseline
+  local saved=use_custom or use_baseline or (before.proxy==proxy and before)
   local protocols={v2ray='vless',['v2ray-vmess']='vmess',['v2ray-trojan']='trojan',['v2ray-socks']='socks',
     xray='vless',['xray-vless-reality']='vless-reality',['xray-vmess']='vmess',['xray-trojan']='trojan',
     ['xray-socks']='socks',['xray-shadowsocks']='shadowsocks'}
@@ -134,6 +156,34 @@ function M.valid_ipv4(value)
   if not a then return false end
   for _,n in ipairs({a,b,c,d}) do if #n>3 or tonumber(n)>255 then return false end end
   return true
+end
+
+function M.unique_master(settings,interfaces)
+  if settings.master=='balancing' then return nil,'No tunnel requires one master WAN; balancing is enabled.' end
+  if settings.defaultgw=='0' then return nil,'No tunnel requires an enabled default gateway.' end
+  local found={}
+  for _,s in ipairs(interfaces or {}) do
+    if s.name~='lan' and s.name~='loopback' and s.name~='omrvpn' and s.name~='omr6in4' and
+       s.disabled~='1' and s.mode=='master' then found[#found+1]=s.name end
+  end
+  if #found~=1 then return nil,'No tunnel requires exactly one configured master WAN.' end
+  return found[1]
+end
+
+function M.master_default(defaults,master)
+  if type(defaults)~='table' or #defaults==0 then return false end
+  local minimum,count=nil,0
+  for _,route in ipairs(defaults) do
+    local metric=tonumber(route.metric) or 0
+    if not minimum or metric<minimum then minimum=metric end
+  end
+  for _,route in ipairs(defaults) do
+    if (tonumber(route.metric) or 0)==minimum then
+      count=count+1
+      if route.dev~=master or route.nexthops then return false end
+    end
+  end
+  return count==1
 end
 
 function M.glory_process_mptcp(cmdline)
@@ -169,7 +219,7 @@ function M.transition_services(run, heartbeat, pending, present, vpn, affected)
     for _,service in ipairs({'mqvpn','glorytun'}) do
       if present(service) and not invoke(service,'stop') then return false end
     end
-    if not invoke(vpn,'start') then return false end
+    if vpn~='none' and not invoke(vpn,'start') then return false end
     for _,service in ipairs({'shadowsocks-libev','shadowsocks-rust','v2ray','xray'}) do
       if affected[service] and present(service) then
         if pending() or not invoke(service,'restart') then return false end

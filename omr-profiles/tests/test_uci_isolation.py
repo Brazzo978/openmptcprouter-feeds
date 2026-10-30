@@ -49,14 +49,20 @@ end
     assert "option device 'tun2'" in network.read_text()
     assert '192.0.2.10' in network.read_text()
     proxy = config / 'shadowsocks-rust'
-    proxy.write_text("config server 'sss0'\n option disabled '0'\n option password 'private-fixture'\n\nconfig ss_rules 'ss_rules'\n option disabled '0'\n")
+    proxy.write_text("config server 'sss0'\n option disabled '0'\n option password 'private-fixture'\n\nconfig ss_rules 'ss_rules'\n option disabled '0'\n option redir_udp 'hi1'\n\nconfig ss_redir 'hi1'\n option mptcp '0'\n")
     snapshot = json.loads(invoke('transport-read', package_name='shadowsocks-rust').stdout)
-    assert snapshot == {'ssserver:sss0':'0', 'ss_rules_disabled':'0'}
+    assert snapshot['ssserver:sss0']=='0' and snapshot['ss_rules_disabled']=='0'
+    assert snapshot['ss_rules_udp']=='hi1' and snapshot['ssredir:hi1']=='0'
     assert 'private-fixture' not in json.dumps(snapshot)
-    (run / 'uci-request.json').write_text(json.dumps({'values': {'ssserver:sss0':'1', 'ss_rules_disabled':'1'}, 'raw':True}))
+    (run / 'uci-request.json').write_text(json.dumps({'values': {'ssserver:sss0':'1', 'ss_rules_disabled':'1',
+        'ss_rules_udp':False,'ssredir:hi1':'1'}, 'raw':True}))
     invoke('transport-write', package_name='shadowsocks-rust')
     assert "option password 'private-fixture'" in proxy.read_text()
-    assert json.loads(invoke('transport-read', package_name='shadowsocks-rust').stdout)['ssserver:sss0']=='1'
+    changed=json.loads(invoke('transport-read', package_name='shadowsocks-rust').stdout)
+    assert changed['ssserver:sss0']=='1' and changed['ss_rules_udp'] is False and changed['ssredir:hi1']=='1'
+    (run / 'uci-request.json').write_text(json.dumps({'values':snapshot, 'raw':True}))
+    invoke('transport-write', package_name='shadowsocks-rust')
+    assert json.loads(invoke('transport-read', package_name='shadowsocks-rust').stdout)==snapshot
     if os.environ.get('PROFILE_ISOLATED_GLOBAL_UCI') == '1':
         # Only enable this flag inside a private mount namespace with a fresh
         # tmpfs at /tmp; never replace an existing global UCI staging area.

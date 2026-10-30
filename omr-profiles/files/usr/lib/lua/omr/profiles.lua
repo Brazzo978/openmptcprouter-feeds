@@ -33,7 +33,9 @@ local builtins = {
   {id="performance_old", name="Performance (old)", builtin=true, settings={
     transport="glorytun_tcp", proxy="none", tcp_scheduler="default", tcp_cc="bbr"}},
   {id="stability_old", name="Stability (old)", builtin=true, settings={
-    transport="glorytun_tcp", proxy="none", tcp_scheduler="bpf_red", tcp_cc="bbr"}}
+    transport="glorytun_tcp", proxy="none", tcp_scheduler="bpf_red", tcp_cc="bbr"}},
+  {id="no_tunnel", name="No tunnel", builtin=true, settings={
+    transport="none", proxy="shadowsocks-rust", tcp_scheduler="default", tcp_cc="bbr"}}
 }
 local lookup = {}
 for _, p in ipairs(builtins) do lookup[p.id] = p end
@@ -164,7 +166,7 @@ local function to_remote(settings)
     if settings.reorder_max_wait_ms then p.mqvpn.reorder.max_wait_ms = tonumber(settings.reorder_max_wait_ms) end
     if settings.reorder_cap_packets then p.mqvpn.reorder.cap_packets = tonumber(settings.reorder_cap_packets) end
   end
-  if settings.transport=='glorytun_tcp' then p.mqvpn=nil end
+  if settings.transport=='glorytun_tcp' or settings.transport=='none' then p.mqvpn=nil end
   return p
 end
 M.to_remote = to_remote
@@ -177,13 +179,14 @@ local function sanitize_remote(current)
   local selection=current.selection
   if selection~=nil and (type(selection)~='table' or not transport.vpn(selection.vpn) or not transport.proxy(selection.proxy)) then return nil end
   if selection and ((selection.global_vpn~=nil and not transport.vpn(selection.global_vpn)) or
-     (selection.global_proxy~=nil and not transport.proxy(selection.global_proxy))) then return nil end
-  if not q and selection and selection.vpn=='glorytun_tcp' then
+     (selection.global_proxy~=nil and not transport.proxy(selection.global_proxy)) or
+     (selection.vpnremoteip~=nil and not transport.valid_ipv4(selection.vpnremoteip))) then return nil end
+  if not q and selection and (selection.vpn=='glorytun_tcp' or selection.vpn=='none') then
     local flat={tcp_scheduler=m.scheduler,tcp_cc=m.congestion_control}
     if m.nanbbr_aggressiveness~=nil then flat.tcp_nanbbr_aggressiveness=tostring(m.nanbbr_aggressiveness) end
     if not allowed_values(flat,false) then return nil end
     return {mptcp=to_remote(flat).mptcp,selection={vpn=selection.vpn,proxy=selection.proxy,
-      global_vpn=selection.global_vpn,global_proxy=selection.global_proxy}}
+      global_vpn=selection.global_vpn,global_proxy=selection.global_proxy,vpnremoteip=selection.vpnremoteip}}
   end
   if type(q)~='table' then return nil end
   if type(m.scheduler)~='string' or type(m.congestion_control)~='string' or
@@ -203,7 +206,7 @@ local function sanitize_remote(current)
   local clean=to_remote(flat)
   clean.mqvpn.reorder.enabled=r.enabled -- preserve server-only "auto"
   if selection then clean.selection={vpn=selection.vpn,proxy=selection.proxy,
-    global_vpn=selection.global_vpn,global_proxy=selection.global_proxy} end
+    global_vpn=selection.global_vpn,global_proxy=selection.global_proxy,vpnremoteip=selection.vpnremoteip} end
   return clean
 end
 M.sanitize_remote = sanitize_remote
@@ -213,7 +216,7 @@ local function remote_for_profile(p)
     local result=sanitize_remote(p.remote_settings)
     if not result or not result.selection then return nil end
     result.transport=result.selection.vpn;result.proxy=result.selection.proxy;result.selection=nil
-    if result.transport=='glorytun_tcp' then result.mqvpn=nil end
+    if result.transport=='glorytun_tcp' or result.transport=='none' then result.mqvpn=nil end
     return result
   end
   local settings=to_remote(p.settings)
@@ -233,6 +236,7 @@ local function remote_matches(current, desired)
   if desired.proxy and (type(current.selection)~='table' or current.selection.proxy~=desired.proxy) then return false end
   if desired.transport and current.selection.global_vpn~=desired.transport then return false end
   if desired.proxy and current.selection.global_proxy~=desired.proxy then return false end
+  if desired.transport=='none' and current.selection.vpnremoteip~=nil then return false end
   local function deep(actual, wanted)
     if type(actual) ~= 'table' or type(wanted) ~= 'table' then return false end
     for k, v in pairs(wanted) do
@@ -255,6 +259,7 @@ local function remote_available(cap, settings)
   local a = cap.availability
   if settings.transport and not contains(a.transports,settings.transport) then return false,'Selected VPN transport is unavailable on the VPS.' end
   if settings.proxy and not contains(a.proxies,settings.proxy) then return false,'Selected proxy is unavailable on the VPS.' end
+  if settings.transport=='none' and not contains(a.tcp_proxies,settings.proxy) then return false,'The VPS TCP proxy is unavailable.' end
   for _, pair in ipairs({{'tcp_scheduler','tcp_schedulers'},{'tcp_cc','tcp_cc'},
       {'mq_scheduler','mq_schedulers'},{'mq_cc','mq_cc'},{'fec_scheme','fec_schemes'}}) do
     if settings[pair[1]] and not (pair[1]=='fec_scheme' and settings.fec_enable=='0') and
@@ -500,7 +505,7 @@ function Model:apply(id)
       return {ok=false,error='This older custom profile lacks transport settings; save it again.'}
     end
     local target_transport=transport.plan(before_transport,profile.settings.transport,profile.settings.proxy,
-      self.a:get_mq_baseline(),profile.transport_state)
+      self.a:get_mq_baseline(),profile.transport_state,self.a:get_pre_none())
     if not target_transport then return {ok=false,error='Transport settings are unavailable or conflict with another VPN.'} end
     local target = target_from(before_effective, profile.settings)
     if not allowed_values(target, true) then return {ok=false,error='Profile settings are invalid.'} end
@@ -592,13 +597,19 @@ function Model:run_apply(j)
     cur.local_started=true; cur.step='local_apply'; return a:write_journal(cur)
   end)
   if not marked_local then return end
-  local ok = a:write_effective(j.changes) and a:write_transport(j.target_transport) and
-    a:restart_and_verify(j.target,nil,j.target_transport,j.before_transport,j.id=='default')
+  local ok = a:write_effective(j.changes) and a:write_transport(j.target_transport)
+  local failure
+  if ok then ok,failure=a:restart_and_verify(j.target,nil,j.target_transport,j.before_transport,j.id=='default') end
   if ok then
-    local address=a:route_ip(j.target)
-    local route=address and a:remote(j.server,'route',j.transaction,{vpnremoteip=address})
+    local route
+    if j.target.transport=='none' then route=a:remote(j.server,'route',j.transaction,{no_tunnel=true})
+    else
+      local address=a:route_ip(j.target)
+      route=address and a:remote(j.server,'route',j.transaction,{vpnremoteip=address})
+    end
     ok=route and route.result=='done' and route.transaction==j.transaction and
-      route.state=='pending' and route.route_ready==true
+      route.state=='pending' and route.route_ready==true and
+      (j.target.transport~='none' or route.no_tunnel==true)
   end
   if ok then
     local verify = a:remote(j.server, 'capabilities', j.transaction)
@@ -606,6 +617,7 @@ function Model:run_apply(j)
   end
   local server_status = ok and a:remote(j.server,'status',j.transaction) or nil
   ok = ok and server_status and server_status.result=='done' and server_status.state=='pending' and server_status.route_ready==true and
+       (j.target.transport~='none' or server_status.route_no_tunnel==true) and
        type(server_status.seconds_remaining)=='number' and server_status.seconds_remaining>=70
   a:locked(function()
     local cur=a:read_journal()
@@ -614,7 +626,7 @@ function Model:run_apply(j)
       cur.phase='awaiting_confirm'; cur.step=nil; cur.deadline_mono=a:monotonic()+60
       cur.deadline_wall=a:wall_time()+60; cur.error=nil
     else
-      cur.phase='rolling_back'; cur.error='Profile verification failed; reverting.'
+      cur.phase='rolling_back'; cur.error=failure or 'Profile verification failed; reverting.'
     end
     a:write_journal(cur)
   end)
@@ -638,7 +650,7 @@ function Model:run_rollback(j)
     local cur=a:read_journal()
     if not cur or cur.transaction~=j.transaction or cur.phase~='rolling_back' then return end
     if local_ok and remote_ok then
-      a:write_last({ok=false,message='Profile reverted.',profile_id=j.id})
+      a:write_last({ok=false,message=cur.error or 'Profile reverted.',profile_id=j.id})
       a:clear_journal()
     else
       cur.phase='rollback_failed'; cur.error='Rollback is not fully verified. Retry when the VPS is reachable.'

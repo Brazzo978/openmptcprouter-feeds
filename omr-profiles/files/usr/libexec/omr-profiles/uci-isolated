@@ -68,6 +68,12 @@ if mode=='transport-read' then
         local value=section.disabled;out[key]=type(value)=='string' and value or false
       end
     end)
+    cur:foreach(tempname,'ss_redir',function(section)
+      local key='ssredir:'..tostring(section['.name'])
+      if transport.spec(key) then
+        local value=section.mptcp;out[key]=type(value)=='string' and value or false
+      end
+    end)
   end
   print(json.stringify(out));cleanup();os.exit(0)
 end

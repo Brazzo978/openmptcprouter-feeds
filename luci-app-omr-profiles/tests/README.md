@@ -7,6 +7,7 @@ rollback-failure recovery, visible API errors, separate router/VPS settings,
 remote divergence, a polling race and saving current settings.
 The deterministic animation fixture advances a shared frame clock, checks
 AB → CD → AB, lane identities AC/BD, identical redundant copies, spacing,
+single-path A → B → C → D, No tunnel TCP via VPS and UDP/ICMP via master to Internet,
 preset reset, polling continuity, pause and removal cleanup. Browser acceptance
 also samples real frames at desktop and 320px widths, including icon alignment,
 collision bounds, reduced motion and no profile mutation from preview controls.
