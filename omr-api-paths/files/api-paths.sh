@@ -70,7 +70,10 @@ omr_api_select_path() (
 			[ ! -s "$dir/winner/interface" ] || { cat "$dir/winner/interface"; exit 0; }
 			exit 1
 		fi
-		sleep 0.05
+		# coreutils-sleep is a package dependency: the stock BusyBox build
+		# accepts integer delays only. Never spin and kill live TLS probes
+		# early if the required fractional delay is unavailable.
+		sleep 0.05 || exit 1
 		polls=$((polls+1))
 	done
 	exit 1

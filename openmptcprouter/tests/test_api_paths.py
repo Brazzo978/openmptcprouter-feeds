@@ -85,6 +85,15 @@ class ApiPathTests(unittest.TestCase):
         sc={'health':{'@default':{'body':'<html>proxy</html>'},'ethA':{'code':503},'ethB':{'delay':.1}}}
         for p,_,_ in self.run_case('omr_api_select_path https://192.0.2.1:65500',sc):self.assertEqual(p.stdout.strip(),'ethB')
 
+    def test_missing_fractional_sleep_fails_closed_without_spinning(self):
+        sc={'health':{'ethB':{'delay':.3}},'request':{'ethB':{}}}
+        extra='sleep() { printf "fractional delay unsupported\\n" >&2; return 1; }'
+        for p,events,elapsed in self.run_case('omr_api_request POST https://192.0.2.1:65500 mqvpn token "{}"',sc,extra=extra):
+            self.assertNotEqual(p.returncode,0)
+            self.assertEqual(p.stderr.count('fractional delay unsupported'),1)
+            self.assertFalse(any(x['phase']=='request' for x in events))
+            self.assertLess(elapsed,.9)
+
     def test_no_healthy_path_means_no_write(self):
         for p,events,_ in self.run_case('omr_api_request POST https://192.0.2.1:65500 mqvpn token "{}"',{}):
             self.assertNotEqual(p.returncode,0);self.assertFalse(any(x['phase']=='request' for x in events))
@@ -214,6 +223,7 @@ wireguard_remote_result='';wireguard_remote_action=allow
         self.assertIn('omr-api-paths',(FEED/'omr-tracker/Makefile').read_text())
         self.assertIn('omr-api-paths',(FEED/'openmptcprouter/Makefile').read_text())
         package=(FEED/'omr-api-paths/Makefile').read_text()
+        self.assertIn('+coreutils-sleep',package)
         self.assertIn('$(INSTALL_DATA) ./files/api-paths.sh $(1)/usr/share/omr/api-paths.sh',package)
         self.assertTrue(HELPER.exists())
 

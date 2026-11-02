@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=omr-api-paths
 PKG_VERSION:=1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -11,7 +11,7 @@ define Package/omr-api-paths
   CATEGORY:=Network
   TITLE:=Shared resilient OMR VPS API transport
   PKGARCH:=all
-  DEPENDS:=+curl +jsonfilter
+  DEPENDS:=+curl +jsonfilter +coreutils-sleep
 endef
 
 define Package/omr-api-paths/description
