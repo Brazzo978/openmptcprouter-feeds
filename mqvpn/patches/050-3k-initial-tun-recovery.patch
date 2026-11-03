@@ -1,0 +1,388 @@
+diff --git a/src/platform/posix/platform_internal.h b/src/platform/posix/platform_internal.h
+--- a/src/platform/posix/platform_internal.h
++++ b/src/platform/posix/platform_internal.h
+@@ -34,6 +34,11 @@
+     struct event *ev_sigterm;
+     struct event *ev_status;  /* periodic status log timer */
+     struct event *ev_recover; /* periodic dropped-path re-add timer (3s) */
++#if defined(__linux__)
++    struct event *ev_tun_retry; /* deferred platform setup; never from xquic callback */
++    int tun_retry_delay_sec;
++    int reconnect_enabled;
++#endif
+ 
+     /* Path manager (UDP sockets) */
+     mqvpn_path_mgr_t path_mgr;
+diff --git a/src/mqvpn_client.c b/src/mqvpn_client.c
+--- a/src/mqvpn_client.c
++++ b/src/mqvpn_client.c
+@@ -4095,6 +4095,14 @@
+     return reactivate_slot_eligible(p);
+ }
+ 
++/* Internal platform guard: TUNNEL_READY/ESTABLISHED alone does not prove
++ * that the CONNECT-IP stream has not closed without closing the connection. */
++MQVPN_INTERNAL int
++mqvpn_client_platform_tunnel_live(const mqvpn_client_t *c)
++{
++    return c && !c->shutting_down && c->conn && c->conn->tunnel_ok;
++}
++
+ int
+ mqvpn_client_set_tun_active(mqvpn_client_t *c, int active, int tun_fd)
+ {
+diff --git a/src/mqvpn_internal.h b/src/mqvpn_internal.h
+--- a/src/mqvpn_internal.h
++++ b/src/mqvpn_internal.h
+@@ -408,4 +408,7 @@
+ MQVPN_INTERNAL int mqvpn_client_get_reinject(const mqvpn_client_t *c,
+                                              mqvpn_internal_client_reinject_t *out);
+ 
++/* Internal client guard for platform TUN setup retries. */
++MQVPN_INTERNAL int mqvpn_client_platform_tunnel_live(const mqvpn_client_t *c);
++
+ #endif /* MQVPN_INTERNAL_H */
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -76,6 +76,28 @@
+     if (p->tun_up && p->tun.fd >= 0) mqvpn_tun_write(&p->tun, pkt, len);
+ }
+ 
++static void cb_tunnel_config_ready(const mqvpn_tunnel_info_t *info, void *user_ctx);
++
++static void
++retry_tun_setup(evutil_socket_t fd, short what, void *arg)
++{
++    (void)fd;
++    (void)what;
++    platform_ctx_t *p = (platform_ctx_t *)arg;
++    mqvpn_client_state_t state = mqvpn_client_get_state(p->client);
++    if (p->shutting_down || !p->have_tunnel_info ||
++        (state != MQVPN_STATE_TUNNEL_READY && state != MQVPN_STATE_ESTABLISHED))
++        return;
++    /* A stream can close without a state change: never revive its old IP. */
++    if (!mqvpn_client_platform_tunnel_live(p->client)) return;
++    if (!p->reconnect_enabled) {
++        mqvpn_client_disconnect(p->client);
++        return;
++    }
++    LOG_INF("retrying deferred TUN setup");
++    cb_tunnel_config_ready(&p->last_tunnel_info, p);
++}
++
+ static void
+ cb_tunnel_config_ready(const mqvpn_tunnel_info_t *info, void *user_ctx)
+ {
+@@ -167,7 +189,13 @@
+         LOG_ERR("failed to create TUN event");
+         goto fail;
+     }
+-    event_add(p->ev_tun, NULL);
++    if (event_add(p->ev_tun, NULL) < 0) {
++        LOG_ERR("failed to register TUN event");
++        goto fail;
++    }
++    /* Backoff resets only after setup, including event registration. */
++    if (p->ev_tun_retry) event_del(p->ev_tun_retry);
++    p->tun_retry_delay_sec = 0;
+     p->tun_up = 1;
+ 
+     /* Tell library the TUN is active */
+@@ -197,19 +225,42 @@
+     return;
+ 
+ fail:
++    if (p->ev_tun) {
++        event_del(p->ev_tun);
++        event_free(p->ev_tun);
++        p->ev_tun = NULL;
++    }
+     cleanup_killswitch(p);
+     if (p->manage_routes) cleanup_routes(p);
+     mqvpn_dns_restore(&p->dns);
+     if (p->tun.fd >= 0) mqvpn_tun_destroy(&p->tun);
+     p->tun.fd = -1;
+     p->tun_up = 0;
+-    mqvpn_client_disconnect(p->client);
++    mqvpn_client_set_tun_active(p->client, 0, -1);
++    /* Never disconnect/re-enter the engine in xquic's callback. Retry only
++     * while this same CONNECT-IP stream is live; the timer is canceled on
++     * connection teardown. No-reconnect schedules a deferred final close. */
++    if (p->ev_tun_retry && !p->shutting_down && p->have_tunnel_info) {
++        int delay = 0;
++        if (p->reconnect_enabled) {
++            delay = p->tun_retry_delay_sec ? p->tun_retry_delay_sec : 2;
++            p->tun_retry_delay_sec = delay < 30 ? delay * 2 : 30;
++            if (p->tun_retry_delay_sec > 30) p->tun_retry_delay_sec = 30;
++            LOG_WRN("TUN setup failed; retrying in %d seconds", delay);
++        }
++        struct timeval tv = {.tv_sec = delay};
++        if (event_add(p->ev_tun_retry, &tv) < 0)
++            LOG_ERR("could not schedule deferred TUN recovery");
++    }
+ }
+ 
+ static void
+ cb_tunnel_closed(mqvpn_error_t reason, void *user_ctx)
+ {
+-    (void)user_ctx;
++    platform_ctx_t *p = (platform_ctx_t *)user_ctx;
++    if (p->ev_tun_retry) event_del(p->ev_tun_retry);
++    p->have_tunnel_info = 0;
++    p->tun_retry_delay_sec = 0;
+     LOG_INF("tunnel closed: %s", mqvpn_error_string(reason));
+ }
+ 
+@@ -249,6 +300,9 @@
+      * that stale fd events don't fire ("tun read: Bad file descriptor").
+      * The TUN will be recreated in cb_tunnel_config_ready on reconnect. */
+     if (new_state == MQVPN_STATE_RECONNECTING || new_state == MQVPN_STATE_CLOSED) {
++        if (p->ev_tun_retry) event_del(p->ev_tun_retry);
++        p->have_tunnel_info = 0;
++        p->tun_retry_delay_sec = 0;
+         /* PR5: path lifecycle state is owned by libmqvpn — no state mirror
+          * to reset here. Library handles slot recycling across reconnects.
+          * path_recover_failures IS reset — Level-2 reconnect creates a
+@@ -631,7 +685,8 @@
+     LOG_INF("received signal, shutting down...");
+     p->shutting_down = 1;
+     mqvpn_client_disconnect(p->client);
+-    /* state_changed callback will call event_base_loopbreak on CLOSED */
++    /* disconnect is a no-op if already CLOSED; still stop on the signal. */
++    event_base_loopbreak(p->eb);
+ }
+ 
+ /* ================================================================
+@@ -798,6 +853,7 @@
+      * always 1 — no config surface of its own yet, see mqvpn_config_defaults). */
+     ctx.manage_routes = cfg->manage_routes && !cfg->no_routes;
+     ctx.udp_gro = cfg->udp_gro;
++    ctx.reconnect_enabled = cfg->reconnect;
+ 
+     /* Pre-set TUN name (save to tun_name_cfg too — survives TUN destroy/recreate) */
+     if (cfg->tun_name) {
+@@ -1046,6 +1102,12 @@
+ 
+     /* Tick timer */
+     ctx.ev_tick = event_new(ctx.eb, -1, 0, on_tick_timer, &ctx);
++    ctx.ev_tun_retry = evtimer_new(ctx.eb, retry_tun_setup, &ctx);
++    ctx.ev_recover = evtimer_new(ctx.eb, recover_dropped_paths_cb, &ctx);
++    if (!ctx.ev_tick || !ctx.ev_tun_retry || !ctx.ev_recover) {
++        LOG_ERR("failed to allocate client recovery events");
++        goto cleanup;
++    }
+ 
+     /* Control API (optional) */
+     if (cfg->control_port > 0) {
+@@ -1059,6 +1121,10 @@
+         LOG_ERR("client connect failed");
+         goto cleanup;
+     }
++
++    /* Path re-add must run before the first successful TUN too. */
++    struct timeval recover_tv = {.tv_sec = RECOVER_INTERVAL_SEC};
++    event_add(ctx.ev_recover, &recover_tv);
+ 
+     /* Schedule initial tick */
+     schedule_next_tick(&ctx);
+@@ -1136,6 +1202,10 @@
+     if (ctx.ev_status) {
+         event_del(ctx.ev_status);
+         event_free(ctx.ev_status);
++    }
++    if (ctx.ev_tun_retry) {
++        event_del(ctx.ev_tun_retry);
++        event_free(ctx.ev_tun_retry);
+     }
+     if (ctx.ev_recover) {
+         event_del(ctx.ev_recover);
+diff --git a/scripts/ci_e2e/run_3k_initial_tun_recovery.py b/scripts/ci_e2e/run_3k_initial_tun_recovery.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/ci_e2e/run_3k_initial_tun_recovery.py
+@@ -0,0 +1,184 @@
++#!/usr/bin/env python3
++"""Root/netns E2E: transient server-pin failure during first CONNECT-IP.
++
++The ip wrapper fails only the server host-route installation, until the test
++removes a marker. This injects the kernel error without disrupting the host.
++No runtime add_path call or daemon restart is used. Requires iproute2, ping,
++openssl and a built mqvpn binary. Before entering a disposable mount namespace,
++export MQVPN_TEST_PARENT_MNT=$(stat -Lc %i /proc/self/ns/mnt); then invoke the
++test inside that private user/mount/net namespace with a writable /run/netns.
++"""
++import argparse
++import json
++import os
++import secrets
++import shutil
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++from pathlib import Path
++
++parser = argparse.ArgumentParser()
++parser.add_argument('binary', type=lambda x: str(Path(x).resolve()))
++parser.add_argument('--case', choices=('recover', 'disabled', 'stop', 'pre-tun-path'), default='recover')
++parser.add_argument('--keep-logs', action='store_true')
++args = parser.parse_args()
++tag = secrets.token_hex(3)
++ns_c, ns_s = 'irc'+tag, 'irs'+tag
++c, s = 'ic'+tag, 'is'+tag
++children = []
++namespaces = []
++tmp = tempfile.TemporaryDirectory(prefix='mqvpn-initial-')
++work = Path(tmp.name)
++real_ip = work/'real-ip'
++shutil.copyfile('/usr/sbin/ip', real_ip)
++real_ip.chmod(0o755)
++marker = work/'fail-pin'
++marker.touch()
++wrapperdir = work/'bin'
++wrapperdir.mkdir()
++wrapper = wrapperdir/'ip'
++wrapper.write_text('''#!/bin/sh
++if [ "$1" = -4 ] && [ "$2" = route ] && [ "$3" = replace ] &&
++   [ "$4" = 10.123.123.1/32 ] && [ -f "$MQVPN_FAIL_PIN" ]; then
++    echo "RTNETLINK answers: Network is unreachable (injected)" >&2
++    exit 2
++fi
++exec "$MQVPN_REAL_IP" "$@"
++''')
++wrapper.chmod(0o755)
++env = dict(os.environ, PATH=str(wrapperdir)+':'+os.environ['PATH'], MQVPN_FAIL_PIN=str(marker),
++           MQVPN_REAL_IP=str(real_ip))
++mounted = False
++
++def run(*args, check=True, timeout=15):
++    return subprocess.run(args, check=check, timeout=timeout, text=True,
++                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
++def ip(*args, **kw): return run('/usr/sbin/ip', *args, **kw)
++def inside(ns, *args, **kw): return ip('netns','exec',ns,*args,**kw)
++def start(ns, name, *cmd):
++    log = (work/(name+'.log')).open('w')
++    p = subprocess.Popen(['/usr/sbin/ip','netns','exec',ns,*cmd], env=env,
++                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
++    children.append((p,log))
++    return p
++def log(): return (work/'client.log').read_text(errors='replace')
++def wait(pred, timeout, label):
++    end=time.monotonic()+timeout
++    while time.monotonic() < end:
++        value=pred()
++        if value: return value
++        time.sleep(.1)
++    raise RuntimeError('timeout waiting for '+label)
++def tun():
++    r=inside(ns_c,'ip','-j','link','show','mqvpn0',check=False)
++    try: return json.loads(r.stdout)[0]['ifindex']
++    except (ValueError,IndexError,KeyError): return None
++
++try:
++    if os.geteuid() != 0: raise RuntimeError('run as root in a disposable namespace')
++    parent_mount = os.environ.get('MQVPN_TEST_PARENT_MNT')
++    if not parent_mount or str(os.stat('/proc/self/ns/mnt').st_ino) == parent_mount:
++        raise RuntimeError('a separate private mount namespace is required')
++    run('mount','--make-rprivate','/')
++    # MQVPN deliberately execs /usr/sbin/ip before searching PATH. Bind only
++    # inside this test's private mount namespace; never replace the host file.
++    run('mount','--bind',str(wrapper),'/usr/sbin/ip')
++    mounted = True
++    for n in (ns_c,ns_s):
++        ip('netns','add',n); namespaces.append(n); inside(n,'ip','link','set','lo','up')
++    ip('link','add',c,'type','veth','peer','name',s)
++    ip('link','set',c,'netns',ns_c); ip('link','set',s,'netns',ns_s)
++    inside(ns_c,'ip','addr','add','10.114.0.2/24','dev',c)
++    inside(ns_s,'ip','addr','add','10.114.0.1/24','dev',s)
++    inside(ns_s,'ip','addr','add','10.123.123.1/32','dev','lo')
++    inside(ns_c,'ip','link','set',c,'up'); inside(ns_s,'ip','link','set',s,'up')
++    # Route lookup reports this gateway; only the host pin is fault-injected.
++    inside(ns_c,'ip','route','add','default','via','10.114.0.1','dev',c)
++    psk=run(args.binary,'--genkey').stdout.strip()
++    run('openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:prime256v1',
++        '-keyout',str(work/'key.pem'),'-out',str(work/'cert.pem'),'-days','1',
++        '-nodes','-subj','/CN=isolated-test')
++    server=start(ns_s,'server',args.binary,'--mode','server','--listen','0.0.0.0:4433',
++                 '--subnet','10.0.0.0/24','--cert',str(work/'cert.pem'),'--key',str(work/'key.pem'),
++                 '--auth-key',psk,'--log-level','debug')
++    time.sleep(.5)
++    opts=('--no-reconnect',) if args.case == 'disabled' else ()
++    client=start(ns_c,'client',args.binary,'--mode','client','--server','10.123.123.1:4433',
++                 '--path',c,'--auth-key',psk,'--insecure','--control-port','9091',
++                 '--route-via-server','--log-level','debug',*opts)
++    wait(lambda: 'route setup failed, aborting tunnel' in log(),30,'injected first route failure')
++    wait(lambda: tun() is None,5,'failed TUN cleanup')
++    if client.poll() is not None: raise RuntimeError('client unexpectedly exited on initial failure')
++    if args.case == 'stop':
++        os.killpg(client.pid,signal.SIGTERM)
++        wait(lambda: client.poll() is not None,10,'client shutdown')
++        marker.unlink()
++        time.sleep(4)
++        if tun() is not None: raise RuntimeError('TUN resurrected after shutdown')
++        print('PASS: stopped client did not resurrect TUN',flush=True)
++    elif args.case == 'disabled':
++        wait(lambda: '→ CLOSED' in log(),10,'CLOSED with reconnect disabled')
++        marker.unlink()
++        time.sleep(7)
++        if tun() is not None or 'retrying deferred TUN setup' in log():
++            raise RuntimeError('TUN retry occurred despite reconnect disabled')
++        os.killpg(client.pid,signal.SIGTERM)
++        wait(lambda: client.poll() is not None,5,'SIGTERM exit from CLOSED')
++        print('PASS: reconnect-disabled client stayed CLOSED',flush=True)
++    elif args.case == 'pre-tun-path':
++        # Drop the only link before the first TUN ever succeeds. Bringing it
++        # up restores its IP but not the manual default route. After its sole
++        # NEWLINK event, wait through a poll, then restore only the route.
++        inside(ns_c,'ip','link','set',c,'down')
++        wait(lambda: '→ RECONNECTING' in log(),15,'reconnect after initial path drop')
++        slice_start=len(log())
++        inside(ns_c,'ip','link','set',c,'up')
++        time.sleep(5)
++        if tun() is not None or 'retrying deferred TUN setup' in log()[slice_start:]:
++            raise RuntimeError('stale connection attempted TUN setup while reconnecting')
++        marker.unlink()
++        inside(ns_c,'ip','route','add','default','via','10.114.0.1','dev',c)
++        wait(lambda: 'netlink: path '+c+' re-added' in log()[slice_start:],15,
++             'pre-TUN periodic path re-add')
++        wait(lambda: tun() is not None,75,'new-connection tunnel after pre-TUN path recovery')
++        wait(lambda: inside(ns_c,'ping','-c','1','-W','1','10.0.0.1',check=False).returncode==0,
++             15,'traffic after path recovery')
++        if log().count('tunnel 200 OK') < 2:
++            raise RuntimeError('expected fresh CONNECT-IP after prior connection closed')
++        if client.poll() is not None: raise RuntimeError('client exited during path recovery')
++        print('PASS: pre-TUN path re-added after route returned; fresh tunnel works',flush=True)
++    else:
++        time.sleep(3)
++        marker.unlink()
++        wait(lambda: tun() is not None,30,'automatic initial TUN recovery')
++        wait(lambda: inside(ns_c,'ping','-c','1','-W','1','10.0.0.1',check=False).returncode==0,
++             15,'tunnel traffic')
++        if client.poll() is not None: raise RuntimeError('client exited during recovery')
++        if 'retrying deferred TUN setup' not in log(): raise RuntimeError('missing recovery evidence')
++        print('PASS: initial TUN and traffic recovered with same client PID',client.pid,flush=True)
++except BaseException as exc:
++    print('FAIL:',exc,file=sys.stderr)
++    if (work/'client.log').exists():
++        for line in log().splitlines():
++            if any(s in line for s in ('route setup', 'pin server', 'retrying', 'state:', 'TUN ', 'reconnect')):
++                print(line, file=sys.stderr)
++    raise
++finally:
++    for p,logfile in reversed(children):
++        if p.poll() is None:
++            try: os.killpg(p.pid,signal.SIGTERM)
++            except ProcessLookupError: pass
++    for p,logfile in reversed(children):
++        try: p.wait(timeout=3)
++        except subprocess.TimeoutExpired:
++            os.killpg(p.pid,signal.SIGKILL); p.wait()
++        logfile.close()
++    for n in reversed(namespaces): ip('netns','del',n,check=False)
++    if mounted: run('umount','/usr/sbin/ip',check=False)
++    if args.keep_logs:
++        tmp._finalizer.detach()
++        print('logs:',work,flush=True)
++    else: tmp.cleanup()

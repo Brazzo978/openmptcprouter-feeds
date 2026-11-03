@@ -28,20 +28,20 @@ class WorldHold(unittest.TestCase):
             self.assertEqual(target.read_text(),result,'repeat must be idempotent')
             return result
 
-    def test_r6_replaces_stale_pin_and_retains_other_packages(self):
-        self.assertEqual(self.run_hold('base-files\nmqvpn=0.16.2-r5\nbtop\n','0.16.2-r6'),
-                         'base-files\nmqvpn=0.16.2-r6\nbtop\n')
+    def test_r7_replaces_stale_pin_and_retains_other_packages(self):
+        self.assertEqual(self.run_hold('base-files\nmqvpn=0.16.2-r6\nbtop\n','0.16.2-r7'),
+                         'base-files\nmqvpn=0.16.2-r7\nbtop\n')
 
-    def test_r6_adds_missing_pin(self):
-        self.assertEqual(self.run_hold('base-files\n','0.16.2-r6'),
-                         'base-files\nmqvpn=0.16.2-r6\n')
+    def test_r7_adds_missing_pin(self):
+        self.assertEqual(self.run_hold('base-files\n','0.16.2-r7'),
+                         'base-files\nmqvpn=0.16.2-r7\n')
 
     def test_wrong_installed_version_does_not_change_world(self):
         world='base-files\nmqvpn=0.16.2-r4\n'
         self.assertEqual(self.run_hold(world,'0.16.2-r4'),world)
 
     def test_duplicate_constraints_collapse_to_one(self):
-        self.assertEqual(self.run_hold('mqvpn\nmqvpn>=0.16\nbtop\n','0.16.2-r6'),
-                         'mqvpn=0.16.2-r6\nbtop\n')
+        self.assertEqual(self.run_hold('mqvpn\nmqvpn>=0.16\nbtop\n','0.16.2-r7'),
+                         'mqvpn=0.16.2-r7\nbtop\n')
 
 if __name__ == '__main__': unittest.main(verbosity=2)
