@@ -9,8 +9,11 @@ local next_refresh=0
 local next_retry=0
 while true do
   a:heartbeat()
-  local ok=pcall(function() m:tick() end)
+  local ok,err=pcall(function() m:tick() end)
   if not ok then
+    -- Log only the source location: exception text can contain private data.
+    local location=type(err)=='string' and err:match('([^%s]+%.lua:%d+):') or nil
+    require('nixio').syslog('err','OMR profiles worker exception at '..(location or 'unknown location'))
     -- Journal phases are durable before every side effect. A worker exception
     -- must transition the interrupted transaction to recovery, not strand it.
     pcall(function() m:recover() end)

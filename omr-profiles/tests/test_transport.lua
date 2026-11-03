@@ -1,5 +1,22 @@
 -- Fault and tunnel-readiness tests with deterministic process/service fixtures.
 local t=require 'omr.profile_transport'
+local function is_server(name) return name=='vps' or name=='vps2' end
+local token='openmptcprouter.vps.token=eyJhbGci.eyJzdWI.signature'
+assert(t.token_only_delta('openmptcprouter',token,is_server))
+assert(t.token_only_delta('openmptcprouter',token.."\nopenmptcprouter.vps2.token='abc.def.ghi'\n",is_server))
+for _,delta in ipairs({
+  token..'\nopenmptcprouter.settings.vpn=mqvpn',
+  token..'\nopenmptcprouter.settings.proxy=xray',
+  token..'\n-openmptcprouter.vps.token',
+  'openmptcprouter.settings.token=abc.def.ghi',
+  'openmptcprouter.missing.token=abc.def.ghi',
+  'openmptcprouter.vps.token=',
+  'openmptcprouter.vps.token=not-a-jwt',
+  'openmptcprouter.vps.token=abc.def.ghi\ncorrupt',
+  'openmptcprouter.vps.token=abc.def.ghi\0bad',
+}) do assert(not t.token_only_delta('openmptcprouter',delta,is_server)) end
+assert(not t.token_only_delta('network',token,is_server))
+assert(not t.token_only_delta('openmptcprouter',token,function() error('uci failure') end))
 local services={'omr-tracker:stop','mqvpn:stop','glorytun:stop','glorytun:start','xray:restart','omr-tracker:start'}
 local function exercise(fail,throws,pending_failure)
   local calls={};local beats=0
@@ -20,6 +37,17 @@ for _,fail in ipairs({'omr-tracker:stop','mqvpn:stop','glorytun:stop','glorytun:
 end
 assert(not exercise(nil,'glorytun:start'))
 assert(not exercise(nil,nil,true))
+
+for _,failure in ipairs({'return_false','throw'}) do
+  local last
+  local ok=t.transition_services(function(service,action) last=service..':'..action;return true end,
+    function() end,function() return false end,function() return true end,'none',{},function(vpn)
+      assert(vpn=='none')
+      if failure=='throw' then error('network fixture failure') end
+      return false
+    end)
+  assert(not ok and last=='omr-tracker:start','Network handover failures must restore the tracker and reject the profile')
+end
 
 local state={net_device='tun7',glory_remoteip='10.255.255.1',glory_mptcp='1'}
 local proc={first={running=true,pid=42}}

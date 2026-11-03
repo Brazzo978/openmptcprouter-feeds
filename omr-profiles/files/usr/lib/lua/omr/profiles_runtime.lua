@@ -58,7 +58,13 @@ local function has_pending_changes()
   for _,pkg in ipairs(transport.packages) do packages[#packages+1]=pkg end
   for _,pkg in ipairs(packages) do
     local staged=read('/tmp/.uci/'..pkg)
-    if staged and staged:match('%S') then return true end
+    if staged and staged:match('%S') then
+      local function server(section)
+        return cursor():get('openmptcprouter',section)=='server'
+      end
+      if not transport.token_only_delta(pkg,staged,server) or
+         read('/tmp/.uci/'..pkg)~=staged then return true end
+    end
   end
   return false
 end
@@ -447,7 +453,7 @@ end
 local function glorytun_connected(state)
   if not state or not transport.valid('net_device',state.net_device,false) or
      not transport.valid_ipv4(state.glory_remoteip) or state.glory_mptcp~='1' then return false end
-  local info=parse(sys.exec('/usr/bin/timeout 4 /sbin/ubus call service list \'{"name":"glorytun"}\' 2>/dev/null'))
+  local info=parse(sys.exec('/usr/bin/timeout 4 /bin/ubus call service list \'{"name":"glorytun"}\' 2>/dev/null'))
   local instances=info and info.glorytun and info.glorytun.instances
   return transport.glory_probe(instances,state,
     function(pid) return read('/proc/'..pid..'/cmdline') end,
@@ -481,7 +487,7 @@ local function valid_ifname(value)
 end
 local function interface_status(name)
   if type(name)~='string' or #name>64 or not name:match('^[A-Za-z0-9_]+$') then return nil end
-  return parse(sys.exec("/usr/bin/timeout 4 /sbin/ubus call 'network.interface."..name.."' status 2>/dev/null"))
+  return parse(sys.exec("/usr/bin/timeout 4 /bin/ubus call 'network.interface."..name.."' status 2>/dev/null"))
 end
 
 function R:master_wan()
@@ -537,6 +543,34 @@ function R:master_route_ready()
   return true
 end
 
+function R:prepare_direct_route()
+  local master,why=self:master_wan()
+  if not master then return false,why end
+  self:heartbeat()
+  -- A stopped daemon can leave its persistent TUN and netifd's metric-zero
+  -- default behind. Quiesce only the logical VPN interface, never a LAN/WAN.
+  if os.execute("/usr/bin/timeout 4 /bin/ubus call network.interface.omrvpn down '{}' >/dev/null 2>&1")~=0 then
+    return false,'The old logical VPN interface could not be stopped.'
+  end
+  local routes=parse(sys.exec("/usr/bin/timeout 4 /sbin/ip -j -4 route show default dev '"..master.."' 2>/dev/null"))
+  local chosen
+  for _,route in ipairs(routes or {}) do
+    -- iproute2 omits "dev" when the command already filters by that device.
+    if (route.dev==nil or route.dev==master) and not route.nexthops and
+       (route.gateway==nil or transport.valid_ipv4(route.gateway)) and
+       (not chosen or (tonumber(route.metric) or 0)<(tonumber(chosen.metric) or 0)) then chosen=route end
+  end
+  if not chosen then return false,'No active IPv4 default route exists on the master WAN.' end
+  local via=chosen.gateway and (" via '"..chosen.gateway.."'") or ''
+  self:heartbeat()
+  -- Replace only the OMR metric-one WAN default. The tracker is intentionally
+  -- guarded during this transaction and cannot perform this handover for us.
+  if os.execute("/usr/bin/timeout 4 /sbin/ip -4 route replace default"..via.." dev '"..master.."' metric 1 >/dev/null 2>&1")~=0 then
+    return false,'The master WAN default route could not be installed.'
+  end
+  return true
+end
+
 function R:tcp_proxy_ready()
   local c=cursor()
   if c:get('shadowsocks-rust','ss_rules','disabled')~='0' or
@@ -545,7 +579,7 @@ function R:tcp_proxy_ready()
      c:get('shadowsocks-rust','ss_rules','src_default')~='forward' or
      c:get('shadowsocks-rust','ss_rules','dst_default')~='forward' then return false end
   self:heartbeat()
-  local info=parse(sys.exec('/usr/bin/timeout 4 /sbin/ubus call service list \'{"name":"shadowsocks-rust"}\' 2>/dev/null'))
+  local info=parse(sys.exec('/usr/bin/timeout 4 /bin/ubus call service list \'{"name":"shadowsocks-rust"}\' 2>/dev/null'))
   local instances=info and info['shadowsocks-rust'] and info['shadowsocks-rust'].instances
   if type(instances)~='table' then return false end
   local total=0;local invalid=false;local active_servers={}
@@ -597,7 +631,7 @@ end
 
 local function tunnel_services_stopped()
   for _,name in ipairs({'mqvpn','glorytun'}) do
-    local info=parse(sys.exec('/usr/bin/timeout 4 /sbin/ubus call service list \'{"name":"'..name..'"}\' 2>/dev/null'))
+    local info=parse(sys.exec('/usr/bin/timeout 4 /bin/ubus call service list \'{"name":"'..name..'"}\' 2>/dev/null'))
     if type(info)~='table' then return false end
     local service=info[name]
     if service and type(service.instances)=='table' then
@@ -622,7 +656,7 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
   self:heartbeat()
   local tcp_ok=os.execute('/usr/bin/timeout 35 /etc/init.d/mptcp restart >/dev/null 2>&1')==0
   if next(temporary) and not self:restore_raw(raw_after_restore) then return false end
-  if not tcp_ok then return false end
+  if not tcp_ok then return false,'MPTCP settings could not be applied.' end
   local selected=expected.transport=='glorytun_tcp' and 'glorytun' or expected.transport=='none' and 'none' or 'mqvpn'
   local affected={}
   local function mark_proxy(proxy)
@@ -644,12 +678,28 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
     end
   end
   -- Restarting xray with main disabled preserves its independent RPF instance.
+  local service_failure
   local function service_run(service,action)
     local limit=action=='start' and service~='omr-tracker' and 35 or 25
-    return os.execute('/usr/bin/timeout '..limit..' /etc/init.d/'..service..' '..action..' >/dev/null 2>&1')==0
+    nixio.syslog('info','OMR profiles service '..service..' '..action..' started')
+    local rc=os.execute('/usr/bin/timeout '..limit..' /etc/init.d/'..service..' '..action..' >/dev/null 2>&1')
+    nixio.syslog('info','OMR profiles service '..service..' '..action..' finished with status '..tostring(rc))
+    if rc~=0 then service_failure='Service '..service..' '..action..' failed (status '..tostring(rc)..').' end
+    return rc==0
   end
   if not transport.transition_services(service_run,function() self:heartbeat() end,has_pending_changes,
-      function(name) return file_present('/etc/init.d/'..name) end,selected,affected) then return false end
+      function(name) return file_present('/etc/init.d/'..name) end,selected,affected,function(vpn)
+        if vpn=='none' then
+          local ok,why=self:prepare_direct_route();if not ok then service_failure=why end;return ok
+        end
+        -- No tunnel explicitly brings omrvpn down; enable it again when
+        -- returning to a tunnel so netifd restores its addresses and routes.
+        local ok=os.execute("/usr/bin/timeout 4 /bin/ubus call network.interface.omrvpn up '{}' >/dev/null 2>&1")==0
+        if not ok then service_failure='The logical VPN interface could not be enabled.' end
+        return ok
+      end) then
+    return false,service_failure or 'The tunnel/proxy service transition was interrupted.'
+  end
   if strip(read('/proc/sys/net/mptcp/scheduler'))~=expected.tcp_scheduler then return false end
   if strip(read('/proc/sys/net/ipv4/tcp_congestion_control'))~=expected.tcp_cc then return false end
   if expected.tcp_cc:match('^nanbbr[123]_var$') and
@@ -658,10 +708,10 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
   if not raw then return false end
   local now=self:current_effective(raw)
   if not now then return false end
-  for key,value in pairs(expected) do if model.fields[key] and now[key]~=value then return false end end
+  for key,value in pairs(expected) do if model.fields[key] and now[key]~=value then return false,'Active tuning does not match the profile ('..key..').' end end
   local state=self:read_transport()
   if not state or state.vpn~=expected.transport or state.proxy~=expected.proxy then return false end
-  for key,value in pairs(expected_flags or {}) do if state[key]~=value then return false end end
+  for key,value in pairs(expected_flags or {}) do if state[key]~=value then return false,'Active transport does not match the profile ('..key..').' end end
   if expected.transport=='none' then
     local reason='The TCP proxy or master WAN route is not ready.'
     local deadline=self:monotonic()+45
@@ -690,7 +740,7 @@ function R:restart_and_verify(expected, raw_after_restore, expected_flags, from_
       if glorytun_connected(state) and self:route_ip(expected) then return true end
       nixio.nanosleep(1)
     end
-    return false
+    return false,'Glorytun TCP peer or local tunnel address could not be verified.'
   end
   local generated=generated_tuning()
   if not generated then return false end

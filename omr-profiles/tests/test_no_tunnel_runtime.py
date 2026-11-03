@@ -40,10 +40,15 @@ function cursor:get(pkg,section,option) return cfg[pkg..'.'..section..'.'..optio
 function cursor:foreach(pkg,kind,fn) for _,s in ipairs(sections[pkg] or {}) do fn(s) end end
 package.preload['luci.model.uci']=function() return {cursor=function() return cursor end} end
 local route_dev='eth0';local seen={};local tcp_chain=true;local udp_chain=false;local proxy_exchange=true
+local master_defaults={{gateway='198.51.100.1',metric=5}};local netifd_down=true
 package.preload['luci.sys']=function() return {exec=function(command)
   seen[#seen+1]=command
+  -- Model the deployed OpenWrt layout: the ubus package provides /bin/ubus.
+  -- Previously a substring-only fixture accepted nonexistent /sbin/ubus.
+  if command:find('ubus ',1,true) and not command:find('/bin/ubus ',1,true) then return '' end
   if command:find('network.interface.wan',1,true) then return json.encode({up=true,l3_device='eth0'}) end
   if command:find('network.interface.lan',1,true) then return json.encode({up=true,l3_device='br-lan',['ipv4-address']={{address='192.168.4.1',mask=24}}}) end
+  if command:find('route show default dev',1,true) then return json.encode(master_defaults) end
   if command:find('route show default',1,true) then return json.encode({{dev=route_dev,metric=1}}) end
   if command:find('route get',1,true) then return json.encode({{dev=route_dev}}) end
   if command:find('shadowsocks-rust',1,true) then
@@ -54,12 +59,24 @@ package.preload['luci.sys']=function() return {exec=function(command)
 end} end
 os.execute=function(command)
   seen[#seen+1]=command
+  if command:find('network.interface.omrvpn down',1,true) then return netifd_down and 0 or 1 end
   if command:find('ss_rules_forward_udp',1,true) then return udp_chain and 0 or 1 end
   if command:find('/usr/bin/curl',1,true) then return proxy_exchange and 0 or 1 end
   return 0
 end
 local R=dofile(arg[1]);local r=R.new();function r:heartbeat() end
 assert(r:master_route_ready());assert(r:tcp_proxy_ready())
+assert(r:prepare_direct_route())
+local down,replace=false,false
+for _,command in ipairs(seen) do
+ if command:find('network.interface.omrvpn down',1,true) then down=true end
+ if command:find("route replace default via '198.51.100.1' dev 'eth0' metric 1",1,true) then replace=true end
+end
+assert(down and replace,'Direct mode must retire netifd VPN routes and select the known master gateway')
+master_defaults={};assert(not r:prepare_direct_route())
+master_defaults={{dev='eth1',gateway='198.51.100.1'}};assert(not r:prepare_direct_route())
+master_defaults={{gateway='198.51.100.1;touch /tmp/should-not-run'}};assert(not r:prepare_direct_route())
+master_defaults={{gateway='198.51.100.1',metric=5}};netifd_down=false;assert(not r:prepare_direct_route());netifd_down=true
 local udp,icmp=false,false
 for _,command in ipairs(seen) do
   if command:find('ipproto udp',1,true) then udp=true end

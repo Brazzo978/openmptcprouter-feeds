@@ -31,6 +31,23 @@ M.fields={
   six_remoteip={'network','omr6in4','peeraddr'},
 }
 M.packages={'openmptcprouter','glorytun','glorytun-udp','dsvpn','openvpn','softethervpn','mqvpn','shadowsocks-libev','shadowsocks-rust','v2ray','xray','network'}
+-- Ignore only normal authentication refreshes, never arbitrary staged edits.
+function M.token_only_delta(pkg,delta,is_server)
+  if pkg~='openmptcprouter' or type(delta)~='string' or type(is_server)~='function' then return false end
+  local seen=false
+  for line in (delta..'\n'):gmatch('(.-)\n') do
+    if line:match('%S') then
+      local section,value=line:match('^openmptcprouter%.([A-Za-z0-9_%-]+)%.token=(.+)$')
+      if not section then return false end
+      if value:sub(1,1)=="'" and value:sub(-1)=="'" then value=value:sub(2,-2) end
+      if not value:match('^[A-Za-z0-9_%-]+%.[A-Za-z0-9_%-]+%.[A-Za-z0-9_%-]+$') then return false end
+      local ok,server=pcall(is_server,section)
+      if not ok or server~=true then return false end
+      seen=true
+    end
+  end
+  return seen
+end
 local proxies={none=true,shadowsocks=true,['shadowsocks-rust']=true,['shadowsocks-go']=true,
   v2ray=true,['v2ray-vmess']=true,['v2ray-trojan']=true,['v2ray-socks']=true,
   xray=true,['xray-vless-reality']=true,['xray-vmess']=true,['xray-trojan']=true,
@@ -210,7 +227,7 @@ end
 
 -- Always bring the tracker back after attempting to stop it, even if any
 -- VPN/proxy command fails or raises an exception. Heartbeat before each call.
-function M.transition_services(run, heartbeat, pending, present, vpn, affected)
+function M.transition_services(run, heartbeat, pending, present, vpn, affected, network)
   local function invoke(service,action)
     heartbeat();return run(service,action)
   end
@@ -220,6 +237,7 @@ function M.transition_services(run, heartbeat, pending, present, vpn, affected)
       if present(service) and not invoke(service,'stop') then return false end
     end
     if vpn~='none' and not invoke(vpn,'start') then return false end
+    if network then heartbeat();if not network(vpn) then return false end end
     for _,service in ipairs({'shadowsocks-libev','shadowsocks-rust','v2ray','xray'}) do
       if affected[service] and present(service) then
         if pending() or not invoke(service,'restart') then return false end
