@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "scope": "Native isolated Linux engine regression plus actual installed OpenWrt wrapper experiment",
+  "engine_inputs": {
+    "baseline_route_gate": {
+      "status": "FAIL",
+      "event": "remove",
+      "failed_path": "initial",
+      "readd": false,
+      "backup": false,
+      "no_alternate": false,
+      "wan_latency": false,
+      "fec_requested": false,
+      "all_down": false,
+      "observe_seconds": 8,
+      "survivor_drop_seconds": 0,
+      "started_utc": "2026-11-03T11:02:46.584850+00:00",
+      "binary_sha256": "af4967b5318075c8bc9aef8320c7feede10dcd117b8821fb2a1d875a42ba965e",
+      "server_binary_sha256": "af4967b5318075c8bc9aef8320c7feede10dcd117b8821fb2a1d875a42ba965e",
+      "scope": "isolated Linux netns, real MQVPN client/server and xquic; synthetic TCP/UDP",
+      "failure": "timeout waiting for periodic re-add after route appeared",
+      "finished_utc": "2026-11-03T11:03:04.786009+00:00"
+    },
+    "fixed_route_gate": {
+      "status": "PASS",
+      "event": "remove",
+      "failed_path": "initial",
+      "readd": false,
+      "backup": false,
+      "no_alternate": false,
+      "wan_latency": false,
+      "fec_requested": false,
+      "all_down": false,
+      "observe_seconds": 8,
+      "survivor_drop_seconds": 0,
+      "started_utc": "2026-11-03T11:03:04.841844+00:00",
+      "binary_sha256": "3d39f4c33541054c83703c992ab7096cab22fd4d08f706ad3d593b90bf0e3eb3",
+      "server_binary_sha256": "3d39f4c33541054c83703c992ab7096cab22fd4d08f706ad3d593b90bf0e3eb3",
+      "scope": "isolated Linux netns, real MQVPN client/server and xquic; synthetic TCP/UDP",
+      "failure": null,
+      "reconnect_route_gate": "PASS",
+      "finished_utc": "2026-11-03T11:03:21.156358+00:00"
+    },
+    "explicit_remove_readd": {
+      "status": "PASS",
+      "event": "remove",
+      "failed_path": "initial",
+      "readd": true,
+      "backup": false,
+      "no_alternate": false,
+      "wan_latency": false,
+      "fec_requested": false,
+      "all_down": false,
+      "observe_seconds": 8,
+      "survivor_drop_seconds": 0,
+      "started_utc": "2026-11-03T10:56:49.788461+00:00",
+      "binary_sha256": "3d39f4c33541054c83703c992ab7096cab22fd4d08f706ad3d593b90bf0e3eb3",
+      "server_binary_sha256": "3d39f4c33541054c83703c992ab7096cab22fd4d08f706ad3d593b90bf0e3eb3",
+      "scope": "isolated Linux netns, real MQVPN client/server and xquic; synthetic TCP/UDP",
+      "failure": null,
+      "client_pid": 133,
+      "server_pid": 132,
+      "tun_ifindex_before": 2,
+      "mqvpn_connection_id_before": "1",
+      "event_monotonic": 328.991079667,
+      "tun_samples": 40,
+      "tun_ifindex_after": 2,
+      "tcp_round_trips_after": 41,
+      "udp_replies_after": 41,
+      "udp_timeouts_total": 0,
+      "max_tcp_echo_gap_ms": 203.69,
+      "mqvpn_connection_ids_seen": [
+        "1"
+      ],
+      "switch_back": "PASS",
+      "finished_utc": "2026-11-03T10:57:05.571143+00:00"
+    }
+  },
+  "openwrt_before": {
+    "checks": {
+      "baseline_tcp_and_udp": true,
+      "completed_without_error": false,
+      "router_job_cleaned": true,
+      "vps_job_cleaned": true,
+      "wan1_capabilities": true,
+      "wan1_down_during_capabilities": true,
+      "wan1_down_observed": true,
+      "wan1_down_through_hold": true,
+      "wan1_mqvpn_identity_unchanged": true,
+      "wan1_restored": true,
+      "wan1_tcp_continuity": true,
+      "wan1_udp_progress": true,
+      "wan2_capabilities": true,
+      "wan2_down_during_capabilities": true,
+      "wan2_down_observed": true,
+      "wan2_down_through_hold": true,
+      "wan2_restored": true,
+      "wan2_tcp_continuity": true,
+      "wan2_udp_progress": false
+    },
+    "observations": {
+      "mptcp_vps_socket_baseline": true,
+      "wan1_mptcp_vps_socket": true,
+      "wan2_mptcp_vps_socket": true
+    },
+    "phases": {
+      "wan1": {
+        "tcp": {
+          "after": 29,
+          "before": 25,
+          "during": 43,
+          "first_sequence": 8,
+          "last_sequence": 104,
+          "max_gap_seconds": 8.68
+        },
+        "udp": {
+          "after": 29,
+          "before": 25,
+          "during": 43,
+          "first_sequence": 8,
+          "last_sequence": 104,
+          "max_gap_seconds": 0.21
+        }
+      },
+      "wan2": {
+        "tcp": {
+          "after": 29,
+          "before": 25,
+          "during": 39,
+          "first_sequence": 82,
+          "last_sequence": 174,
+          "max_gap_seconds": 0.22
+        },
+        "udp": {
+          "after": 0,
+          "before": 25,
+          "during": 0,
+          "first_sequence": 82,
+          "last_sequence": 106,
+          "max_gap_seconds": 14.09
+        }
+      }
+    }
+  },
+  "openwrt_after_wrapper_fix": {
+    "checks": {
+      "baseline_tcp_and_udp": true,
+      "completed_without_error": true,
+      "router_job_cleaned": true,
+      "vps_job_cleaned": true,
+      "wan1_capabilities": true,
+      "wan1_down_during_capabilities": true,
+      "wan1_down_observed": true,
+      "wan1_down_through_hold": true,
+      "wan1_mqvpn_identity_unchanged": true,
+      "wan1_restored": true,
+      "wan1_tcp_continuity": true,
+      "wan1_udp_progress": true,
+      "wan2_capabilities": true,
+      "wan2_down_during_capabilities": true,
+      "wan2_down_observed": true,
+      "wan2_down_through_hold": true,
+      "wan2_mqvpn_identity_unchanged": true,
+      "wan2_restored": true,
+      "wan2_tcp_continuity": true,
+      "wan2_udp_progress": true
+    },
+    "observations": {
+      "mptcp_vps_socket_baseline": true,
+      "wan1_mptcp_vps_socket": true,
+      "wan2_mptcp_vps_socket": true
+    },
+    "phases": {
+      "wan1": {
+        "tcp": {
+          "after": 29,
+          "before": 25,
+          "during": 38,
+          "first_sequence": 8,
+          "last_sequence": 99,
+          "max_gap_seconds": 7.64
+        },
+        "udp": {
+          "after": 29,
+          "before": 25,
+          "during": 38,
+          "first_sequence": 8,
+          "last_sequence": 99,
+          "max_gap_seconds": 0.22
+        }
+      },
+      "wan2": {
+        "tcp": {
+          "after": 29,
+          "before": 25,
+          "during": 38,
+          "first_sequence": 77,
+          "last_sequence": 168,
+          "max_gap_seconds": 0.23
+        },
+        "udp": {
+          "after": 29,
+          "before": 25,
+          "during": 38,
+          "first_sequence": 77,
+          "last_sequence": 168,
+          "max_gap_seconds": 0.21
+        }
+      }
+    }
+  },
+  "openwrt_component_versions": {
+    "engine": "0.16.2-r5",
+    "wrapper": "r6 candidate scripts hotpatched without restarting engine"
+  },
+  "limits": [
+    "The native engine test uses synthetic veth WANs and a rebuilt server; it is not the frozen deployed server binary.",
+    "The OpenWrt test uses two virtual WANs, one persistent Shadowsocks TCP socket and one MQVPN UDP socket; TCP is not inside MQVPN.",
+    "Engine PID and TUN ifindex are compared on OpenWrt; QUIC connection identity is asserted only by the native namespace lab.",
+    "No zero-loss or throughput claim; TCP showed a 7.64 second gap on master loss in the fixed wrapper run.",
+    "A complete r6 OpenWrt APK/image still requires compilation, installed-byte checks and live acceptance."
+  ],
+  "source_sha256": {
+    "mqvpn\\patches\\040-3k-reconnect-path-recovery.patch": "79b8c431336ceb9da569d8e54f70cb4d3b50a7f4361c6e22f83313ba0b606164",
+    "mqvpn\\files\\usr\\bin\\mqvpn-path": "b636877137c5091ccc1f495f66734035f183b906b06e6a3d736e0c753a74027a",
+    "mqvpn\\files\\etc\\hotplug.d\\iface\\40-mqvpn-path-rejoin": "d14a6a69d58f5bb19d6156697d694dad64be9108703eda7c60c71818cbe69de3",
+    "omr-tracker\\files\\usr\\share\\omr\\post-tracking.d\\005-mqvpn-path": "48fe306b8403af26a9aee80e39bf6693f5d33593afc905bd3d1c34d6f2db1e02"
+  }
+}

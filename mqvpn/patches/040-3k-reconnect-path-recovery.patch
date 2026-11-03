@@ -1,0 +1,97 @@
+diff --git a/src/platform/linux/platform_linux.c b/src/platform/linux/platform_linux.c
+--- a/src/platform/linux/platform_linux.c
++++ b/src/platform/linux/platform_linux.c
+@@ -257,7 +257,10 @@
+          * against the new connection's retry budget. */
+         memset(p->path_recover_failures, 0, sizeof(p->path_recover_failures));
+         if (p->ev_status) event_del(p->ev_status); /* pause — reused on reconnect */
+-        if (p->ev_recover) event_del(p->ev_recover);
++        /* Keep retrying dropped sockets during reconnect: link/IP/route may
++         * become ready after the only netlink event, before a TUN exists. */
++        if (new_state == MQVPN_STATE_CLOSED && p->ev_recover)
++            event_del(p->ev_recover);
+         cleanup_killswitch(p);
+         if (p->manage_routes) cleanup_routes(p);
+         mqvpn_dns_restore(&p->dns);
+diff --git a/src/platform/linux/netlink_mon.c b/src/platform/linux/netlink_mon.c
+--- a/src/platform/linux/netlink_mon.c
++++ b/src/platform/linux/netlink_mon.c
+@@ -650,7 +650,11 @@
+     schedule_next_tick(p);
+ 
+ rearm:
+-    if (p->ev_recover) {
++    /* mqvpn_client_tick() above can synchronously transition to CLOSED or
++     * initiate shutdown while this callback is running. Do not undo its
++     * event_del by rearming after that transition. */
++    if (p->ev_recover && !p->shutting_down &&
++        mqvpn_client_get_state(p->client) != MQVPN_STATE_CLOSED) {
+         struct timeval tv = {.tv_sec = RECOVER_INTERVAL_SEC};
+         event_add(p->ev_recover, &tv);
+     }
+diff --git a/scripts/ci_e2e/run_3k_smooth_failover.py b/scripts/ci_e2e/run_3k_smooth_failover.py
+--- a/scripts/ci_e2e/run_3k_smooth_failover.py
++++ b/scripts/ci_e2e/run_3k_smooth_failover.py
+@@ -28,6 +28,8 @@
+ parser.add_argument('--event', choices=('remove', 'link', 'blackhole'), default='remove')
+ parser.add_argument('--failed-path', choices=('initial', 'secondary'), default='initial')
+ parser.add_argument('--readd', action='store_true', help='restore failed path, then remove the survivor')
++parser.add_argument('--reconnect-route-gate', action='store_true',
++                    help='reconnect after a route appears without another link event or API add')
+ parser.add_argument('--no-alternate', action='store_true', help='blackhole the secondary before handshake; expect reconnect')
+ parser.add_argument('--wan-latency', action='store_true', help='add unequal latency and 0.2%% loss on both WANs')
+ parser.add_argument('--backup', action='store_true', help='configure the second WAN as BackupPath under minrtt')
+@@ -207,6 +209,42 @@
+         paths = wait_for(lambda: control({'cmd':'list_paths'}), 10, 'control API')
+     else:
+         paths = wait_for(paths_ready, 30, 'both validated MQVPN paths')
++    if args.reconnect_route_gate:
++        # Both fd slots remain platform-owned: never call remove_path/add_path.
++        # Bringing b0 back up restores its address but not its manual route to
++        # the server. Add that route only after the client is RECONNECTING and
++        # the one-shot NEWLINK/NEWADDR events have already been processed.
++        initial_index = tun_index()
++        inside(ns_c, 'ip', 'link', 'set', a0, 'down')
++        wait_for(lambda: 'netlink: interface '+a0+' admin down, closing path' in
++                 (work/'client.log').read_text(errors='replace'), 10, 'initial path drop')
++        inside(ns_c, 'ip', 'link', 'set', b0, 'down')
++        wait_for(lambda: 'state: ESTABLISHED → RECONNECTING' in
++                 (work/'client.log').read_text(errors='replace') or
++                 ('RECONNECTING' in (work/'client.log').read_text(errors='replace') and
++                  tun_index() is None), 15, 'reconnecting after both paths drop')
++        inside(ns_c, 'ip', 'link', 'set', b0, 'up')
++        # Wait past both the NEWLINK delivery and a complete recovery poll.
++        # The comparison binary must reach the route-add step too; requiring
++        # a timer-specific log here would let the broken version fail early.
++        time.sleep(5)
++        log_before = (work/'client.log').read_text(errors='replace')
++        if 'path '+b0+' re-added' in log_before:
++            raise RuntimeError('re-added before the server route existed')
++        inside(ns_c, 'ip', 'route', 'add', '10.114.0.0/24', 'via', '10.214.0.1',
++               'dev', b0, 'metric', '200')
++        wait_for(lambda: 'netlink: path '+b0+' re-added' in
++                 (work/'client.log').read_text(errors='replace')[len(log_before):],
++                 12, 'periodic re-add after route appeared')
++        wait_for(lambda: tun_index() is not None and tun_index() != initial_index,
++                 75, 'TUN recreated after reconnect')
++        wait_for(lambda: inside(ns_c, 'ping', '-c', '1', '-W', '1', '10.0.0.1',
++                                check=False).returncode == 0, 15, 'traffic after reconnect')
++        if client.poll() is not None: raise RuntimeError('client exited')
++        result['status'] = 'PASS'
++        result['reconnect_route_gate'] = 'PASS'
++        print('PASS: route appeared after link events; periodic re-add restored tunnel and traffic', flush=True)
++        sys.exit(0)
+     initial_index = tun_index()
+     initial_log = (work/'client.log').read_text(errors='replace')
+     ids = re.findall(r'\[conn:(\d+)\] tunnel 200 OK', initial_log)
+@@ -310,6 +348,10 @@
+     if udp_after - udp_before < 10: raise RuntimeError('insufficient UDP echo progress after failure')
+     print('PASS: same TUN ifindex; existing TCP session progressed', after-before,
+           'round trips; UDP replies:', udp_after-udp_before, 'samples:', len(samples), flush=True)
++    if args.event in ('remove', 'blackhole'):
++        current = control({'cmd': 'list_paths'})
++        if not current or target in current.get('paths', []):
++            raise RuntimeError('explicitly removed path unexpectedly re-added')
+     if args.readd:
+         if args.failed_path != 'initial': raise RuntimeError('--readd requires initial target')
+         if args.event == 'link': inside(ns_c, 'ip', 'link', 'set', a0, 'up')

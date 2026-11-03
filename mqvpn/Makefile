@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mqvpn
 PKG_VERSION:=0.16.2
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 PKG_LICENSE:=Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 
@@ -151,6 +151,8 @@ define Package/mqvpn/install
 	$(CP) ./files/* $(1)/
 	$(INSTALL_BIN) ./files/etc/uci-defaults/4103-mqvpn-world-hold $(1)/etc/uci-defaults/4103-mqvpn-world-hold
 	$(INSTALL_BIN) ./files/etc/hotplug.d/ntp/30-mqvpn-time-step $(1)/etc/hotplug.d/ntp/30-mqvpn-time-step
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_BIN) ./files/etc/hotplug.d/iface/40-mqvpn-path-rejoin $(1)/etc/hotplug.d/iface/40-mqvpn-path-rejoin
 endef
 
 $(eval $(call BuildPackage,mqvpn))

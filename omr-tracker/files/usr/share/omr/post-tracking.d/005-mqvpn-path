@@ -10,6 +10,9 @@
 if [ "$(uci -q get mqvpn.settings.enable)" != "1" ]; then
 	exit 0
 fi
+if [ -x /usr/libexec/omr-profiles/guard ] && /usr/libexec/omr-profiles/guard; then
+	exit 0
+fi
 
 if [ -z "$OMR_TRACKER_DEVICE" ] || [ -z "$OMR_TRACKER_INTERFACE" ]; then
 	exit 0
@@ -45,8 +48,9 @@ if [ "$OMR_TRACKER_STATUS" = "ERROR" ]; then
 	exit 0
 fi
 
-# Only act on status transitions to avoid spamming the API on every poll
-[ "$OMR_TRACKER_PREV_STATUS" = "$OMR_TRACKER_STATUS" ] && exit 0
+# A missed netifd event, a guarded profile change or a delayed address can
+# leave a healthy WAN absent from the path manager. Reconcile missing paths
+# even when its health status has not changed; never restart a live MQVPN.
 
 multipath_config=$(uci -q get "openmptcprouter.$OMR_TRACKER_INTERFACE.multipath")
 [ -z "$multipath_config" ] && multipath_config=$(uci -q get "network.$OMR_TRACKER_INTERFACE.multipath" || echo "off")

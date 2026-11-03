@@ -1,0 +1,38 @@
+#!/bin/sh
+# Restore eligible WAN paths after netifd has acquired an address. The health
+# tracker can still be converging after DHCP; QUIC validates the added path.
+# Never restart the live tunnel or retire its surviving path here.
+case "$ACTION" in ifup|ifupdate|iflink|link-up) ;; *) exit 0;; esac
+case "$INTERFACE" in ''|*[!a-zA-Z0-9_.-]*) exit 0;; esac
+[ "$(uci -q get mqvpn.settings.enable)" = 1 ] || exit 0
+[ "$(uci -q get openmptcprouter.settings.vpn)" = mqvpn ] || exit 0
+if [ -x /usr/libexec/omr-profiles/guard ] && /usr/libexec/omr-profiles/guard; then exit 0; fi
+pidof mqvpn >/dev/null 2>&1 || exit 0
+logical="$INTERFACE"
+case "$logical" in
+ *_6) [ "$(uci -q get network.$logical.proto)" != dhcpv6 ] || logical="${logical%_6}" ;;
+esac
+case "$logical" in lan|loopback|omrvpn|omr6in4) exit 0;; esac
+[ "$(uci -q get openmptcprouter.$logical.vpn)" != 1 ] || exit 0
+mode="$(uci -q get network.$logical.multipath)"
+[ -n "$mode" ] || mode="$(uci -q get openmptcprouter.$logical.multipath)"
+case "$mode" in master|on|backup) ;; *) exit 0;; esac
+status="$(ubus call "network.interface.$logical" status 2>/dev/null)" || exit 0
+[ "$(printf '%s' "$status" | jsonfilter -e '@.up')" = true ] || exit 0
+device="$(printf '%s' "$status" | jsonfilter -e '@.l3_device')"
+case "$device" in ''|*[!a-zA-Z0-9_.:-]*) exit 0;; esac
+[ "${#device}" -le 15 ] || exit 0
+attempt=0
+while [ "$attempt" -lt 3 ]; do
+ paths="$(mqvpn-path list 2>/dev/null)" || exit 0
+ printf '%s' "$paths" | grep -Fq "\"$device\"" && exit 0
+ if [ "$mode" = backup ]; then
+  mqvpn-path add "$device" backup >/dev/null 2>&1 && exit 0
+ else
+  mqvpn-path add "$device" >/dev/null 2>&1 && exit 0
+ fi
+ attempt=$((attempt+1))
+ [ "$attempt" -ge 3 ] || sleep 1
+done
+logger -t mqvpn-rejoin "Unable to restore path $device after $ACTION of $logical"
+exit 1

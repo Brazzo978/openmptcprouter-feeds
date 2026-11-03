@@ -563,8 +563,8 @@ function R:prepare_direct_route()
   if not chosen then return false,'No active IPv4 default route exists on the master WAN.' end
   local via=chosen.gateway and (" via '"..chosen.gateway.."'") or ''
   self:heartbeat()
-  -- Replace only the OMR metric-one WAN default. The tracker is intentionally
-  -- guarded during this transaction and cannot perform this handover for us.
+  -- Replace only the OMR metric-one WAN default. The tracker has just been
+  -- stopped/restarted; do not depend on its later health polls for handover.
   if os.execute("/usr/bin/timeout 4 /sbin/ip -4 route replace default"..via.." dev '"..master.."' metric 1 >/dev/null 2>&1")~=0 then
     return false,'The master WAN default route could not be installed.'
   end

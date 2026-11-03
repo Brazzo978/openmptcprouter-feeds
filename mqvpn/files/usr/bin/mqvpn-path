@@ -37,7 +37,7 @@ dscp_mask="$3"
 case "$cmd" in
 	list)
 		result=$(_api '{"cmd":"list_paths"}')
-		if [ -z "$result" ]; then
+		if [ "$(printf '%s' "$result" | jsonfilter -e '@.ok' 2>/dev/null)" != true ]; then
 			echo "No response from mqvpn API (is mqvpn running?)" >&2
 			exit 1
 		fi
@@ -45,16 +45,20 @@ case "$cmd" in
 		;;
 	add)
 		[ -z "$iface" ] && _usage
+		case "$iface" in *[!a-zA-Z0-9_.:-]*) _usage;; esac
 		if [ "$3" = "backup" ]; then
-			_api "{\"cmd\":\"add_path\",\"iface\":\"$iface\",\"backup\":true}" >/dev/null
+			result=$(_api "{\"cmd\":\"add_path\",\"iface\":\"$iface\",\"backup\":true}")
 		else
-			_api "{\"cmd\":\"add_path\",\"iface\":\"$iface\"}" >/dev/null
+			result=$(_api "{\"cmd\":\"add_path\",\"iface\":\"$iface\"}")
 		fi
+		[ "$(printf '%s' "$result" | jsonfilter -e '@.ok' 2>/dev/null)" = true ] || { echo "Unable to add path: $iface" >&2; exit 1; }
 		echo "Added path: $iface${3:+ (backup)}"
 		;;
 	remove)
 		[ -z "$iface" ] && _usage
-		_api "{\"cmd\":\"remove_path\",\"iface\":\"$iface\"}" >/dev/null
+		case "$iface" in *[!a-zA-Z0-9_.:-]*) _usage;; esac
+		result=$(_api "{\"cmd\":\"remove_path\",\"iface\":\"$iface\"}")
+		[ "$(printf '%s' "$result" | jsonfilter -e '@.ok' 2>/dev/null)" = true ] || { echo "Unable to remove path: $iface" >&2; exit 1; }
 		echo "Removed path: $iface"
 		;;
 	weight)
