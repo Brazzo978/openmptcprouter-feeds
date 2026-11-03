@@ -10,7 +10,8 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI Dashboard Pages
-LUCI_DEPENDS:=+luci-base +libiwinfo
+LUCI_DEPENDS:=+luci-base +libiwinfo +luci-app-omr-profiles
+PKG_RELEASE:=2
 
 PKG_BUILD_DEPENDS:=iwinfo
 PKG_LICENSE:=Apache-2.0

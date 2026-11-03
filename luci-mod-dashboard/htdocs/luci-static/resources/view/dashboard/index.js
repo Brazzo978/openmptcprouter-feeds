@@ -4,6 +4,7 @@
 'require poll';
 'require fs';
 'require network';
+'require omr.profiles as profiles';
 
 document.querySelector('head').appendChild(E('link', {
 	'rel': 'stylesheet',
@@ -100,6 +101,9 @@ return view.extend({
 		}
 
 		return startPolling(includes, containers).then(function() {
+			// Create the quick panel after the dashboard's initial async load so
+			// its polling starts when LuCI is about to attach the completed view.
+			rv.insertBefore(profiles.create({ full: false }), rv.firstChild);
 			return rv;
 		});
 	},
